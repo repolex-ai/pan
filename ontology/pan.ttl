@@ -1,0 +1,44 @@
+@prefix pan:  <https://repolex.ai/ontology/pan/> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# Pan base ontology v0.1 — the vocabulary Pan itself authors about stored media.
+# App ontologies (copia etc.) are EXTERNAL: installed beside the store, read as
+# vocabulary, never vendored here. Pan's own predicate space is infrastructure.
+
+pan: a owl:Ontology ;
+    rdfs:label "Pan media store ontology" ;
+    rdfs:comment "Identity + location + provenance facts Pan authors for every stored media object." .
+
+pan:Media a owl:Class ;
+    rdfs:label "Media" ;
+    rdfs:comment "A stored media object, content-addressed by cid." .
+
+pan:Image a owl:Class ;
+    rdfs:subClassOf pan:Media ;
+    rdfs:label "Image" .
+
+pan:cid a owl:DatatypeProperty ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:string ;
+    rdfs:label "content id" ;
+    rdfs:comment "The bare content id, `sha256:<hex>`. For PNGs this is the PIXEL cid — stable across metadata edits. Subject IRI form is `urn:sha256:<hex>`." .
+
+pan:blobPath a owl:DatatypeProperty ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:string ;
+    rdfs:label "blob path" ;
+    rdfs:comment "On-disk location relative to the store's storage root." .
+
+pan:mediaType a owl:DatatypeProperty ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:string ;
+    rdfs:label "media type" ;
+    rdfs:comment "MIME type of the stored bytes, e.g. image/png." .
+
+pan:createdAt a owl:DatatypeProperty ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:dateTime ;
+    rdfs:label "created at" ;
+    rdfs:comment "RFC3339 timestamp of when the object entered this store." .

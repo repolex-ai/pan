@@ -1,0 +1,44 @@
+[package]
+name = "pan"
+version = "0.1.0"
+edition = "2021"
+description = "Pan — a standalone media store that speaks git-lex: stores media, describes it with a graph, searches by graph pattern AND vector similarity."
+license = "Apache-2.0"
+repository = "https://github.com/repolex-ai/pan"
+
+[lib]
+name = "pan"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pan"
+path = "src/bin/pan.rs"
+
+[dependencies]
+# The crown-jewel pair — exactly what Pool's proven vector core uses.
+oxigraph = { version = "0.5.6", features = ["rdf-12"] }
+usearch = "2.25"
+
+sha2 = "0.10"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+chrono = "0.4"
+png = "0.17"
+
+# HTTP surface: axum 0.8 + utoipa Swagger (the interface spec, shipped from commit one).
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
+# Detector calls (external configured endpoints; rustls so no OpenSSL on macOS).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+tempfile = "3"
+rand = "0.8"

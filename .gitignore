@@ -1,0 +1,4 @@
+/target
+# A Pan store is runtime data, never tracked — including a dev store in-repo.
+/.pan
+*.usearch
