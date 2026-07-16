@@ -23,7 +23,7 @@ use oxigraph::io::RdfFormat;
 use oxigraph::model::Term;
 use oxigraph::store::Store;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::config::PAN_NS;
 
@@ -51,16 +51,20 @@ pub struct AppBlock {
 }
 
 /// One sub-subject Description (`rdf:about="…"`) authored from structured data.
+/// A sub-subject's facts may span MULTIPLE namespaces (a region can carry
+/// copia: fields AND dc: fields); every namespace used is declared on the
+/// element and every field keeps its own prefix — none are dropped.
 #[derive(Debug, Clone)]
 pub struct SubSubjectBlock {
     /// The FULLY-SCOPED subject IRI for `rdf:about`.
     pub about: String,
-    /// The `<rdf:type rdf:resource="…"/>` IRI.
+    /// The `<rdf:type rdf:resource="…"/>` IRI (empty = omit the type element).
     pub rdf_type: String,
-    /// Namespace prefix these fields live in.
-    pub prefix: String,
-    pub ns_iri: String,
-    pub fields: Vec<(String, FieldValue)>,
+    /// Namespace declarations (prefix → IRI) for every namespace used below.
+    pub namespaces: Vec<(String, String)>,
+    /// Fields as `(prefix, local, value)` — prefix must be declared in
+    /// `namespaces`.
+    pub fields: Vec<(String, String, FieldValue)>,
 }
 
 fn xml_escape(s: &str) -> String {
@@ -115,7 +119,11 @@ pub fn build_packet(
     out.push_str("  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n");
 
     // Root Description: pan: block ALWAYS, then app blocks (passthrough).
-    out.push_str("    <rdf:Description");
+    // `rdf:about=""` is the standard Adobe form AND makes the root
+    // unambiguous on read (it resolves to the parser's base IRI, which
+    // parse_packet maps back to the media object) — an about-less Description
+    // would become an anonymous blank node instead.
+    out.push_str("    <rdf:Description rdf:about=\"\"");
     out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\""));
     for b in app_blocks {
         out.push_str(&format!(" xmlns:{}=\"{}\"", b.prefix, b.ns_iri));
@@ -133,18 +141,19 @@ pub fn build_packet(
     out.push_str("    </rdf:Description>\n");
 
     for r in sub_subjects {
-        out.push_str(&format!(
-            "    <rdf:Description rdf:about=\"{}\" xmlns:{}=\"{}\">\n",
-            xml_escape(&r.about),
-            r.prefix,
-            r.ns_iri
-        ));
-        out.push_str(&format!(
-            "      <rdf:type rdf:resource=\"{}\"/>\n",
-            xml_escape(&r.rdf_type)
-        ));
-        for (local, value) in &r.fields {
-            out.push_str(&serialize_field(&r.prefix, local, value, "      "));
+        out.push_str(&format!("    <rdf:Description rdf:about=\"{}\"", xml_escape(&r.about)));
+        for (prefix, ns_iri) in &r.namespaces {
+            out.push_str(&format!(" xmlns:{}=\"{}\"", prefix, ns_iri));
+        }
+        out.push_str(">\n");
+        if !r.rdf_type.is_empty() {
+            out.push_str(&format!(
+                "      <rdf:type rdf:resource=\"{}\"/>\n",
+                xml_escape(&r.rdf_type)
+            ));
+        }
+        for (prefix, local, value) in &r.fields {
+            out.push_str(&serialize_field(prefix, local, value, "      "));
         }
         out.push_str("    </rdf:Description>\n");
     }
@@ -231,14 +240,36 @@ pub fn read_xmp_packet_from_bytes(png_bytes: &[u8]) -> Result<Option<String>> {
 
 // ── Packet reading — the REAL RDF parser (the change from Pool) ─────────────
 
+/// One object of a fact, preserving whether it was an IRI or a literal — so
+/// `rdf:type` and other IRI-valued predicates survive ingest as IRIs rather
+/// than degrading to string literals (the round-trip corruption the review
+/// caught).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjTerm {
+    Iri(String),
+    Literal(String),
+}
+
+impl ObjTerm {
+    pub fn value(&self) -> &str {
+        match self {
+            ObjTerm::Iri(s) | ObjTerm::Literal(s) => s,
+        }
+    }
+    pub fn is_iri(&self) -> bool {
+        matches!(self, ObjTerm::Iri(_))
+    }
+}
+
 /// The facts read for one subject in a packet. `subject: None` is the root
-/// Description (no rdf:about — facts about the media object itself);
-/// `Some(iri)` is a sub-subject (region etc.).
+/// Description (no rdf:about, or rdf:about="" — facts about the media object
+/// itself); `Some(iri)` is a named sub-subject (region etc.).
 #[derive(Debug, Clone)]
 pub struct ParsedSubject {
     pub subject: Option<String>,
-    /// Full-IRI predicate → values (a Bag flattens to its members, in order).
-    pub facts: Vec<(String, Vec<String>)>,
+    /// Full-IRI predicate → object terms (a Bag/Seq flattens to its members,
+    /// in order; IRI objects keep their IRI-ness).
+    pub facts: Vec<(String, Vec<ObjTerm>)>,
 }
 
 /// Parse an XMP packet with oxigraph's real RDF/XML parser.
@@ -252,67 +283,97 @@ pub struct ParsedSubject {
 /// parser's job, not a prefix-map lookup).
 pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
     // The packet wraps <rdf:RDF> in <?xpacket?> + <x:xmpmeta>; oxigraph wants
-    // bare RDF/XML, so slice the rdf:RDF element out.
-    let start = packet
-        .find("<rdf:RDF")
+    // bare RDF/XML, so slice the rdf:RDF element out. Match on the FULL tag
+    // (with its `<` and a following space or `>`) so an rdf:RDF string sitting
+    // inside a literal value can't fool the slice.
+    let start = find_rdf_open(packet)
         .ok_or_else(|| anyhow!("XMP packet has no <rdf:RDF> element"))?;
     let end = packet
         .rfind("</rdf:RDF>")
         .ok_or_else(|| anyhow!("XMP packet has no </rdf:RDF> close"))?
         + "</rdf:RDF>".len();
+    if end <= start {
+        return Err(anyhow!("XMP packet <rdf:RDF> close precedes its open"));
+    }
     let rdf_xml = &packet[start..end];
 
     let store = Store::new().context("in-memory store for XMP parse")?;
+    // Give the RDF/XML parser a base IRI: an empty rdf:about="" resolves
+    // against it, so the standard Adobe root Description (rdf:about="") no
+    // longer errors and is recognizable as the root by matching this base.
     store
-        .load_from_reader(RdfFormat::RdfXml, rdf_xml.as_bytes())
+        .load_from_reader(
+            oxigraph::io::RdfParser::from_format(RdfFormat::RdfXml).with_base_iri(XMP_BASE).unwrap(),
+            rdf_xml.as_bytes(),
+        )
         .context("parse XMP RDF/XML")?;
 
-    // Container flattening: collect every rdf:_N membership triple first, so a
-    // predicate whose object is a container node expands to the member list.
-    let mut container_members: HashMap<String, Vec<(u32, String)>> = HashMap::new();
-    let mut container_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut plain: Vec<(String, Option<String>, String, Term)> = Vec::new(); // (skey, subject_iri, pred, obj)
-
+    // ── First pass: index container membership and container-typed nodes. ──
+    // A container node (rdf:Bag/Seq/Alt) carries rdf:_N members; we flatten
+    // those to an ordered value list keyed by the container's node id.
+    let mut container_members: HashMap<String, Vec<(u32, ObjTerm)>> = HashMap::new();
+    let mut container_nodes: HashSet<String> = HashSet::new();
+    let type_pred = format!("{RDF_NS}type");
     for quad in store.iter() {
-        let quad = quad.context("XMP quad")?;
-        let subj_key = quad.subject.to_string(); // includes <>/_: syntax — used only as a map key
-        let pred = quad.predicate.as_str().to_string();
-
+        let quad = quad.context("XMP quad (container pass)")?;
+        let subj_key = subject_key(&quad.subject);
+        let pred = quad.predicate.as_str();
         if let Some(n) = pred.strip_prefix(RDF_NS).and_then(|l| l.strip_prefix('_')) {
             if let Ok(n) = n.parse::<u32>() {
                 container_members
                     .entry(subj_key.clone())
                     .or_default()
-                    .push((n, term_value(&quad.object)));
+                    .push((n, obj_term(&quad.object)));
                 container_nodes.insert(subj_key);
                 continue;
             }
         }
-        // rdf:type rdf:Bag/Seq/Alt on a container node is bookkeeping, not a fact.
-        if pred == format!("{RDF_NS}type") {
+        if pred == type_pred {
             if let Term::NamedNode(t) = &quad.object {
-                if t.as_str().starts_with(RDF_NS) {
+                if matches!(
+                    t.as_str(),
+                    _ if t.as_str().starts_with(RDF_NS)
+                        && matches!(t.as_str().strip_prefix(RDF_NS), Some("Bag" | "Seq" | "Alt"))
+                ) {
                     container_nodes.insert(subj_key);
-                    continue;
                 }
             }
         }
-        let subject_iri = match &quad.subject {
-            oxigraph::model::NamedOrBlankNode::NamedNode(n) => Some(n.as_str().to_string()),
-            _ => None,
-        };
-        plain.push((subj_key, subject_iri, pred, quad.object.clone()));
     }
 
-    // Group facts by subject, resolving container objects to member lists.
-    let mut by_subject: HashMap<Option<String>, Vec<(String, Vec<String>)>> = HashMap::new();
-    for (skey, subject_iri, pred, obj) in plain {
-        // A fact ON a container node itself (rdf:type noise) was filtered above;
-        // skip anything else asserted on a container node — it has no home.
-        if container_nodes.contains(&skey) && subject_iri.is_none() {
+    // ── Second pass: gather facts per TOP-LEVEL subject. ──
+    // Top-level = a named subject (rdf:about IRI) OR the base IRI (the empty
+    // rdf:about="" root Description). Container nodes and other blank nodes are
+    // NOT subjects — a fact whose object is such a node is resolved inline:
+    //   - container node  → flatten to its ordered members
+    //   - other blank node → a nested struct; skip it rather than emit a
+    //     blank-node label as a garbage literal (the fabricated-fact bug).
+    let mut by_subject: HashMap<Option<String>, Vec<(String, Vec<ObjTerm>)>> = HashMap::new();
+    for quad in store.iter() {
+        let quad = quad.context("XMP quad (fact pass)")?;
+        let subj_key = subject_key(&quad.subject);
+        // Only real subjects surface. Blank/container nodes are inlined, never
+        // their own ParsedSubject.
+        let subject_out: Option<String> = match &quad.subject {
+            oxigraph::model::NamedOrBlankNode::NamedNode(n) => {
+                if n.as_str() == XMP_BASE {
+                    None // the empty-about root Description = the media object
+                } else {
+                    Some(n.as_str().to_string())
+                }
+            }
+            // Blank-node subject: skip unless it's a container we already
+            // flattened at its referencing predicate.
+            oxigraph::model::NamedOrBlankNode::BlankNode(_) => continue,
+        };
+
+        let pred = quad.predicate.as_str();
+        // rdf:_N and container rdf:type were consumed in pass one.
+        if pred.strip_prefix(RDF_NS).and_then(|l| l.strip_prefix('_')).and_then(|n| n.parse::<u32>().ok()).is_some() {
             continue;
         }
-        let values = match &obj {
+
+        let values: Vec<ObjTerm> = match &quad.object {
             Term::BlankNode(b) => {
                 let key = format!("_:{}", b.as_str());
                 match container_members.get(&key) {
@@ -321,21 +382,21 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
                         m.sort_by_key(|(n, _)| *n);
                         m.into_iter().map(|(_, v)| v).collect()
                     }
-                    None => vec![term_value(&obj)],
+                    // A non-container blank node = nested struct. Drop it: we
+                    // do NOT fabricate a fact whose value is a blank-node label.
+                    None => continue,
                 }
             }
-            _ => vec![term_value(&obj)],
+            other => vec![obj_term(other)],
         };
-        by_subject
-            .entry(subject_iri)
-            .or_default()
-            .push((pred, values));
+        let _ = subj_key; // (kept for parity with the container pass keys)
+        by_subject.entry(subject_out).or_default().push((pred.to_string(), values));
     }
 
     let mut out: Vec<ParsedSubject> = by_subject
         .into_iter()
         .map(|(subject, mut facts)| {
-            facts.sort();
+            facts.sort_by(|a, b| a.0.cmp(&b.0));
             ParsedSubject { subject, facts }
         })
         .collect();
@@ -344,12 +405,43 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
     Ok(out)
 }
 
-fn term_value(t: &Term) -> String {
+/// The synthetic base IRI the RDF/XML parser resolves rdf:about="" against.
+/// A root Description with an empty about becomes THIS subject; we map it back
+/// to `None` (= the media object itself).
+const XMP_BASE: &str = "urn:pan:xmp-root";
+
+/// Find the real `<rdf:RDF` element open (followed by whitespace or `>`), not
+/// a literal that merely contains the substring.
+fn find_rdf_open(s: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(rel) = s[from..].find("<rdf:RDF") {
+        let idx = from + rel;
+        let after = s[idx + "<rdf:RDF".len()..].chars().next();
+        if matches!(after, Some(c) if c.is_whitespace() || c == '>') {
+            return Some(idx);
+        }
+        from = idx + "<rdf:RDF".len();
+    }
+    None
+}
+
+fn subject_key(s: &oxigraph::model::NamedOrBlankNode) -> String {
+    match s {
+        oxigraph::model::NamedOrBlankNode::NamedNode(n) => n.as_str().to_string(),
+        oxigraph::model::NamedOrBlankNode::BlankNode(b) => format!("_:{}", b.as_str()),
+    }
+}
+
+fn obj_term(t: &Term) -> ObjTerm {
     match t {
-        Term::Literal(l) => l.value().to_string(),
-        Term::NamedNode(n) => n.as_str().to_string(),
-        Term::BlankNode(b) => b.as_str().to_string(),
-        _ => t.to_string(),
+        Term::Literal(l) => ObjTerm::Literal(l.value().to_string()),
+        Term::NamedNode(n) => {
+            // The base IRI leaking into an object position (rare) is treated as
+            // a plain reference to the root; keep it as an IRI verbatim.
+            ObjTerm::Iri(n.as_str().to_string())
+        }
+        Term::BlankNode(b) => ObjTerm::Literal(b.as_str().to_string()),
+        _ => ObjTerm::Literal(t.to_string()),
     }
 }
 
@@ -466,11 +558,24 @@ mod tests {
         assert_ne!(png, stamped, "file bytes should differ (packet embedded)");
     }
 
+    fn get<'a>(facts: &'a [(String, Vec<ObjTerm>)], iri: &str) -> Vec<&'a ObjTerm> {
+        facts
+            .iter()
+            .find(|(p, _)| p == iri)
+            .map(|(_, v)| v.iter().collect())
+            .unwrap_or_default()
+    }
+    fn vals(facts: &[(String, Vec<ObjTerm>)], iri: &str) -> Vec<String> {
+        get(facts, iri).into_iter().map(|t| t.value().to_string()).collect()
+    }
+
     #[test]
     fn packet_round_trips_through_real_parser() {
+        const COPIA: &str = "https://repolex.ai/ontology/kit/copia/";
+        const DC: &str = "http://purl.org/dc/elements/1.1/";
         let apps = vec![AppBlock {
             prefix: "copia".to_string(),
-            ns_iri: "https://repolex.ai/ontology/kit/copia/".to_string(),
+            ns_iri: COPIA.to_string(),
             fields: vec![
                 ("sceneMood".to_string(), FieldValue::Scalar("calm & <bright>".to_string())),
                 (
@@ -479,33 +584,29 @@ mod tests {
                 ),
             ],
         }];
+        // A sub-subject spanning TWO namespaces — copia: AND dc: — to prove the
+        // multi-namespace fix: neither is dropped from the travel copy.
         let subs = vec![SubSubjectBlock {
             about: "urn:sha256:abc/Region/wolf/01".to_string(),
-            rdf_type: "https://repolex.ai/ontology/kit/copia/Sam3Region".to_string(),
-            prefix: "copia".to_string(),
-            ns_iri: "https://repolex.ai/ontology/kit/copia/".to_string(),
-            fields: vec![("regionDescriptor".to_string(), FieldValue::Scalar("wolf".to_string()))],
+            rdf_type: format!("{COPIA}Sam3Region"),
+            namespaces: vec![("copia".to_string(), COPIA.to_string()), ("dc".to_string(), DC.to_string())],
+            fields: vec![
+                ("copia".to_string(), "regionDescriptor".to_string(), FieldValue::Scalar("wolf".to_string())),
+                ("dc".to_string(), "creator".to_string(), FieldValue::Scalar("w4r3z".to_string())),
+            ],
         }];
         let packet = build_packet("sha256:abc", "blob/image/x.png", "2026-07-15T00:00:00Z", &apps, &subs);
 
         let parsed = parse_packet(&packet).unwrap();
-        // Root block (no rdf:about) + one named sub-subject.
         let root = parsed.iter().find(|p| p.subject.is_none()).expect("root block");
-        let get = |facts: &[(String, Vec<String>)], iri: &str| -> Vec<String> {
-            facts
-                .iter()
-                .find(|(p, _)| p == iri)
-                .map(|(_, v)| v.clone())
-                .unwrap_or_default()
-        };
-        assert_eq!(get(&root.facts, "https://repolex.ai/ontology/pan/cid"), vec!["sha256:abc"]);
+        assert_eq!(vals(&root.facts, "https://repolex.ai/ontology/pan/cid"), vec!["sha256:abc"]);
         assert_eq!(
-            get(&root.facts, "https://repolex.ai/ontology/kit/copia/sceneMood"),
+            vals(&root.facts, &format!("{COPIA}sceneMood")),
             vec!["calm & <bright>"],
             "escaping must round-trip through the real parser"
         );
         assert_eq!(
-            get(&root.facts, "https://repolex.ai/ontology/kit/copia/sceneObjects"),
+            vals(&root.facts, &format!("{COPIA}sceneObjects")),
             vec!["wolf", "forest"],
             "Bag flattens to ordered members"
         );
@@ -514,10 +615,35 @@ mod tests {
             .iter()
             .find(|p| p.subject.as_deref() == Some("urn:sha256:abc/Region/wolf/01"))
             .expect("region sub-subject scoped separately, not clobbering root");
+        assert_eq!(vals(&region.facts, &format!("{COPIA}regionDescriptor")), vec!["wolf"]);
         assert_eq!(
-            get(&region.facts, "https://repolex.ai/ontology/kit/copia/regionDescriptor"),
-            vec!["wolf"]
+            vals(&region.facts, &format!("{DC}creator")),
+            vec!["w4r3z"],
+            "second-namespace field survives (multi-namespace sub-subject)"
         );
+        // rdf:type survives as an IRI object, not a string literal.
+        let types = get(&region.facts, &format!("{RDF_NS}type"));
+        assert_eq!(types.len(), 1);
+        assert!(types[0].is_iri(), "rdf:type must ingest as an IRI, not a string");
+        assert_eq!(types[0].value(), format!("{COPIA}Sam3Region"));
+    }
+
+    #[test]
+    fn parses_standard_adobe_root_description() {
+        // The real-world case the review caught: a packet whose root uses
+        // rdf:about="" (standard Adobe/XMP form) must parse, not error.
+        let packet = format!(
+            "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+             <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
+             <rdf:RDF xmlns:rdf=\"{RDF_NS}\">\n\
+             <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n\
+             <dc:title>Hello</dc:title>\n\
+             </rdf:Description>\n\
+             </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+        );
+        let parsed = parse_packet(&packet).unwrap();
+        let root = parsed.iter().find(|p| p.subject.is_none()).expect("empty-about = root");
+        assert_eq!(vals(&root.facts, "http://purl.org/dc/elements/1.1/title"), vec!["Hello"]);
     }
 
     #[test]

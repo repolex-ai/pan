@@ -159,11 +159,19 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("SPARQL error")
         || msg.contains("does not match index")
         || msg.contains("no such index")
+        || msg.contains("index name")
+        || msg.contains("empty vector")
         || msg.contains("search where-clause")
     {
+        // 4xx = the CALLER's mistake; the message is about their input, safe to
+        // return verbatim so they can fix it.
         ApiError(StatusCode::BAD_REQUEST, msg)
     } else {
-        ApiError(StatusCode::INTERNAL_SERVER_ERROR, msg)
+        // 5xx = OUR internals (fs paths, store internals). Log the detail
+        // server-side; hand the client a generic message so absolute paths and
+        // storage layout never leak over the wire.
+        tracing::error!("internal error: {msg}");
+        ApiError(StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
     }
 }
 

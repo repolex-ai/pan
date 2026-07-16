@@ -19,7 +19,12 @@ pub const DEFAULT_INDEX_ID: &str = "default";
 
 /// The parsed pan.yml. All fields optional on disk; `PanConfig::load` applies
 /// defaults so the rest of the code never sees an Option it doesn't want.
+///
+/// `deny_unknown_fields`: a mistyped key (`stroage_id:`) is a LOUD error, not a
+/// silently-ignored line that leaves you wondering why your config did nothing
+/// ("config you cannot get wrong" — you find out at load, not never).
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct PanYml {
     pub storage_id: Option<String>,
     pub storage_root: Option<PathBuf>,

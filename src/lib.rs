@@ -65,6 +65,35 @@ fn pan_iri(local: &str) -> NamedNode {
     NamedNode::new(format!("{PAN_NS}{local}")).expect("valid pan IRI")
 }
 
+/// Validate a vector index name before it ever reaches `Path::join`.
+///
+/// An index name becomes a single directory component under `hnsw_root` /
+/// `vectors_root`. A caller-supplied name that contains a path separator, a
+/// `..` component, an absolute-path root, or a NUL would let a write escape the
+/// store root (the traversal hole the review caught). We restrict to a safe
+/// filename charset — the index-id namespace is ours to define, and every
+/// legitimate index name (`qwen-vl-2b-2048`, `clip-768`) already fits.
+fn validate_index_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(anyhow!("index name must not be empty"));
+    }
+    if name.len() > 128 {
+        return Err(anyhow!("index name too long (max 128)"));
+    }
+    if name == "." || name == ".." {
+        return Err(anyhow!("invalid index name: {name:?}"));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(anyhow!(
+            "invalid index name {name:?}: only [A-Za-z0-9._-] allowed (no path separators)"
+        ));
+    }
+    Ok(())
+}
+
 fn term_str(t: &Term) -> String {
     match t {
         Term::Literal(l) => l.value().to_string(),
@@ -88,7 +117,14 @@ struct VectorIndex {
 }
 
 impl VectorIndex {
+    /// Open or create the named index. `dim` is a HINT — for a brand-new index
+    /// it fixes the dimensionality; for an EXISTING index on disk the on-disk
+    /// index's true dim WINS (usearch stores it in the file). This is the fix
+    /// for the dim-poisoning hole: a caller who lazy-loads with a wrong length
+    /// no longer overwrites the index's real dim, so a later correct query is
+    /// not spuriously rejected and the keymap is never corrupted.
     fn create(hnsw_root: &Path, name: &str, dim: usize) -> Result<Self> {
+        validate_index_name(name)?;
         let dir = hnsw_root.join(name);
         fs::create_dir_all(&dir).context("create hnsw index dir")?;
         let path = dir.join("index.usearch");
@@ -108,9 +144,18 @@ impl VectorIndex {
         let mut cid_to_key = HashMap::new();
         let mut key_to_cid = HashMap::new();
         let mut next_key = 0u64;
+        // The authoritative dim: the caller's hint until an on-disk index
+        // overrides it with its real, persisted dimensionality.
+        let mut true_dim = dim;
 
         if path.exists() {
             index.load(path.to_str().unwrap())?;
+            // The loaded index carries its own dimensionality; trust it over
+            // the caller's hint (which may be a stray query length).
+            let loaded = index.dimensions();
+            if loaded != 0 {
+                true_dim = loaded;
+            }
             let map_path = dir.join("keymap.json");
             if map_path.exists() {
                 let raw = fs::read_to_string(&map_path)?;
@@ -124,7 +169,7 @@ impl VectorIndex {
         }
 
         Ok(Self {
-            dim,
+            dim: true_dim,
             index,
             cid_to_key,
             key_to_cid,
@@ -221,18 +266,28 @@ impl Pan {
         };
         let subject = cid_iri(&cid)?;
 
-        // Re-put keeps the original createdAt; first put mints one.
+        // Re-put keeps the original createdAt AND the original mediaType/blob
+        // location — identity, once minted, is stable. A re-put refreshes bytes
+        // and merges caller facts; it must not fork a second blobPath by
+        // honoring a different Content-Type on the same pixels.
         let existing = self.facts_for(&cid)?;
         let created = existing.is_empty();
-        let created_at = existing
-            .iter()
-            .find(|(p, _)| p == &format!("{PAN_NS}createdAt"))
-            .and_then(|(_, v)| v.first().cloned())
-            .unwrap_or_else(|| Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-
-        let media_type = content_type
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| if png { "image/png".to_string() } else { "application/octet-stream".to_string() });
+        let find_one = |p: &str| -> Option<String> {
+            existing
+                .iter()
+                .find(|(pred, _)| pred == &format!("{PAN_NS}{p}"))
+                .and_then(|(_, v)| v.first().cloned())
+        };
+        let created_at =
+            find_one("createdAt").unwrap_or_else(|| Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        // mediaType: existing wins on re-put; otherwise the caller's, else a
+        // sensible default. This keeps the blob extension (and thus blobPath)
+        // constant across re-puts.
+        let media_type = find_one("mediaType").unwrap_or_else(|| {
+            content_type.map(|s| s.to_string()).unwrap_or_else(|| {
+                if png { "image/png".to_string() } else { "application/octet-stream".to_string() }
+            })
+        });
         let ext = match media_type.as_str() {
             "image/png" => "png",
             "image/jpeg" => "jpg",
@@ -242,11 +297,34 @@ impl Pan {
         };
 
         // blob/image/YYYY/MM/DD/<hex>.<ext> — date shard from createdAt,
-        // filename from the cid (identity IS the name).
+        // filename from the cid (identity IS the name). On re-put, prefer the
+        // stored blobPath verbatim so we never orphan a prior copy.
         let hex = cid.rsplit(':').next().unwrap_or(&cid);
         let shard = created_at.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
-        let rel_path = format!("{}/{shard}/{hex}.{ext}", PanLayout::BLOB_SUBPATH);
+        let rel_path =
+            find_one("blobPath").unwrap_or_else(|| format!("{}/{shard}/{hex}.{ext}", PanLayout::BLOB_SUBPATH));
         let abs_path = self.layout.storage_root.join(&rel_path);
+
+        // Clear the prior identity block before re-authoring it — a re-put must
+        // not accumulate stale cid/blobPath/createdAt/mediaType quads (the
+        // fork-on-different-Content-Type bug). Caller/app facts merge; identity
+        // is replaced.
+        if !created {
+            for local in ["cid", "blobPath", "createdAt", "mediaType"] {
+                for quad in self
+                    .store
+                    .quads_for_pattern(
+                        Some((&subject).into()),
+                        Some(pan_iri(local).as_ref()),
+                        None,
+                        Some(GraphName::DefaultGraph.as_ref()),
+                    )
+                    .collect::<Result<Vec<_>, _>>()?
+                {
+                    self.store.remove(quad.as_ref()).context("clear prior identity quad")?;
+                }
+            }
+        }
 
         // Identity facts — Pan's own block.
         let mut quads = vec![
@@ -259,30 +337,54 @@ impl Pan {
         // Ingest existing XMP app facts (the walker-lite: media traveling in
         // carries its descriptions with it). pan: identity fields are skipped —
         // Pan re-authors those; a foreign store's blobPath is meaningless here.
+        // A malformed foreign packet must NOT fail the store — media-in is the
+        // job; a broken travel copy is logged and the bytes still land.
         if png {
-            if let Some(packet) = xmp::read_xmp_packet_from_bytes(bytes)? {
-                for block in xmp::parse_packet(&packet)? {
-                    let subj = match &block.subject {
-                        None => subject.clone(),
-                        Some(iri) => NamedNode::new(iri.as_str())
-                            .map_err(|e| anyhow!("invalid sub-subject IRI {iri}: {e}"))?,
-                    };
-                    for (pred, values) in &block.facts {
-                        if pred.starts_with(PAN_NS) {
-                            continue;
-                        }
-                        let p = NamedNode::new(pred.as_str())
-                            .map_err(|e| anyhow!("invalid predicate IRI {pred}: {e}"))?;
-                        for v in values {
-                            quads.push(Quad::new(
-                                subj.clone(),
-                                p.clone(),
-                                Literal::new_simple_literal(v),
-                                GraphName::DefaultGraph,
-                            ));
+            match xmp::read_xmp_packet_from_bytes(bytes) {
+                Ok(Some(packet)) => match xmp::parse_packet(&packet) {
+                    Ok(blocks) => {
+                        for block in blocks {
+                            // A sub-subject scoped OUTSIDE this cid's subject is a
+                            // foreign region (its scope was the source store's cid);
+                            // it can never be found or deleted here, so drop it
+                            // rather than orphan it.
+                            let subj = match &block.subject {
+                                None => subject.clone(),
+                                Some(iri) if iri.starts_with(&format!("{}/", subject.as_str())) => {
+                                    NamedNode::new(iri.as_str())
+                                        .map_err(|e| anyhow!("invalid sub-subject IRI {iri}: {e}"))?
+                                }
+                                Some(_) => continue,
+                            };
+                            for (pred, values) in &block.facts {
+                                if pred.starts_with(PAN_NS) {
+                                    continue;
+                                }
+                                let p = match NamedNode::new(pred.as_str()) {
+                                    Ok(p) => p,
+                                    Err(_) => continue, // skip an unusable predicate IRI, don't fail
+                                };
+                                for v in values {
+                                    // Preserve IRI-ness: an IRI object (e.g. an
+                                    // rdf:type) stays an IRI, so type queries work
+                                    // on the traveled fact.
+                                    let obj: oxigraph::model::Term = if v.is_iri() {
+                                        match NamedNode::new(v.value()) {
+                                            Ok(n) => n.into(),
+                                            Err(_) => Literal::new_simple_literal(v.value()).into(),
+                                        }
+                                    } else {
+                                        Literal::new_simple_literal(v.value()).into()
+                                    };
+                                    quads.push(Quad::new(subj.clone(), p.clone(), obj, GraphName::DefaultGraph));
+                                }
+                            }
                         }
                     }
-                }
+                    Err(e) => tracing::warn!(cid = %cid, "skipping unparseable travel XMP: {e:#}"),
+                },
+                Ok(None) => {}
+                Err(e) => tracing::warn!(cid = %cid, "skipping unreadable travel XMP: {e:#}"),
             }
         }
 
@@ -313,6 +415,26 @@ impl Pan {
             created_at,
             created,
         })
+    }
+
+    /// Assert one triple on an arbitrary subject IRI. `object_is_iri` picks
+    /// whether the object is a NamedNode (an IRI, e.g. an `rdf:type`) or a
+    /// plain literal. Used to describe sub-subjects (regions etc.) that hang
+    /// off a media object's subject. Does NOT re-stamp — call `restamp(cid)`
+    /// when the sub-subject belongs to a PNG and you want the travel copy
+    /// refreshed.
+    pub fn describe_subject(&self, subject_iri: &str, predicate_iri: &str, object: &str, object_is_iri: bool) -> Result<()> {
+        let s = NamedNode::new(subject_iri).map_err(|e| anyhow!("invalid subject IRI {subject_iri}: {e}"))?;
+        let p = NamedNode::new(predicate_iri).map_err(|e| anyhow!("invalid predicate IRI {predicate_iri}: {e}"))?;
+        let o: oxigraph::model::Term = if object_is_iri {
+            NamedNode::new(object).map_err(|e| anyhow!("invalid object IRI {object}: {e}"))?.into()
+        } else {
+            Literal::new_simple_literal(object).into()
+        };
+        self.store
+            .insert(Quad::new(s, p, o, GraphName::DefaultGraph).as_ref())
+            .context("insert triple")?;
+        Ok(())
     }
 
     /// Read media bytes + facts by cid. Works for bare and urn: cid forms.
@@ -555,16 +677,17 @@ impl Pan {
     ///
     /// An empty `where_clause` means "no graph gate" — pure kNN over the index.
     pub fn search(&self, where_clause: &str, like: &[f32], k: usize, index_name: &str) -> Result<Vec<SearchHit>> {
-        let mut prefix_block = String::new();
-        for (short, ns) in &self.cfg.prefixes {
-            prefix_block.push_str(&format!("PREFIX {short}: <{ns}>\n"));
-        }
+        validate_index_name(index_name)?;
+        // Same prologue as query() so a gate can use rdf:/rdfs:/owl:/xsd: and
+        // every configured app prefix — no surprise "unknown prefix" between
+        // the two SPARQL paths.
         let q = format!(
-            "{prefix_block}
+            "{}
              SELECT DISTINCT ?cid WHERE {{
                ?s pan:cid ?cid .
                {where_clause}
-             }}"
+             }}",
+            self.prefix_prologue()
         );
         let mut candidate_cids: HashSet<String> = HashSet::new();
         if let QueryResults::Solutions(sols) = self.store.query(&q).map_err(|e| anyhow!("search where-clause: {e}"))? {
@@ -589,7 +712,9 @@ impl Pan {
         if !indexes.contains_key(index_name) {
             let index_path = self.layout.hnsw_root.join(index_name).join("index.usearch");
             if index_path.exists() {
-                let vi = VectorIndex::create(&self.layout.hnsw_root, index_name, like.len())?;
+                // dim hint 0: this index exists on disk, so create() reads its
+                // real dim from the file — never from the query length.
+                let vi = VectorIndex::create(&self.layout.hnsw_root, index_name, 0)?;
                 indexes.insert(index_name.to_string(), vi);
             }
         }
@@ -739,6 +864,9 @@ impl Pan {
         app_blocks.sort_by(|a, b| a.prefix.cmp(&b.prefix));
 
         // Sub-subjects: named subjects scoped under this cid's subject IRI.
+        // Keep object term-type so rdf:type (and other IRI objects) re-author
+        // as `rdf:resource` on the way out, not as string literals.
+        let rdf_type_iri = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
         let mut sub_facts: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
         for quad in self.store.iter() {
             let quad = quad.context("scan sub-subjects")?;
@@ -756,42 +884,37 @@ impl Pan {
                 .or_default()
                 .push(term_str(&quad.object));
         }
-        let rdf_type_iri = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
         let mut sub_blocks: Vec<xmp::SubSubjectBlock> = Vec::new();
         for (about, mut preds) in sub_facts {
+            // rdf:type → the sub-subject's rdf:resource type IRI.
             let rdf_type = preds
                 .remove(rdf_type_iri)
                 .and_then(|v| v.into_iter().next())
                 .unwrap_or_default();
-            // One namespace per sub-subject block (the packet shape); pick it
-            // from the first mappable predicate.
-            let mut prefix_ns: Option<(String, String)> = None;
-            let mut fields: Vec<(String, xmp::FieldValue)> = Vec::new();
+
+            // Every mappable predicate keeps its own namespace — a region with
+            // copia: AND dc: fields exports BOTH, none silently dropped.
+            let mut namespaces: Vec<(String, String)> = Vec::new();
+            let mut fields: Vec<(String, String, xmp::FieldValue)> = Vec::new();
             let mut sorted: Vec<_> = preds.into_iter().collect();
-            sorted.sort();
-            for (pred, values) in sorted {
+            sorted.sort_by(|a, b| a.0.cmp(&b.0));
+            for (pred, terms) in sorted {
                 if let Some((prefix, ns, local)) = split_pred(&pred) {
-                    if prefix_ns.is_none() {
-                        prefix_ns = Some((prefix.clone(), ns.clone()));
+                    if !namespaces.iter().any(|(p, _)| p == &prefix) {
+                        namespaces.push((prefix.clone(), ns));
                     }
-                    if prefix_ns.as_ref().map(|(p, _)| p == &prefix).unwrap_or(false) {
-                        let fv = if values.len() == 1 {
-                            xmp::FieldValue::Scalar(values[0].clone())
-                        } else {
-                            xmp::FieldValue::Bag(values)
-                        };
-                        fields.push((local, fv));
-                    }
+                    let values: Vec<String> = terms;
+                    let fv = if values.len() == 1 {
+                        xmp::FieldValue::Scalar(values[0].clone())
+                    } else {
+                        xmp::FieldValue::Bag(values)
+                    };
+                    fields.push((prefix, local, fv));
                 }
             }
-            if let Some((prefix, ns_iri)) = prefix_ns {
-                sub_blocks.push(xmp::SubSubjectBlock {
-                    about,
-                    rdf_type,
-                    prefix,
-                    ns_iri,
-                    fields,
-                });
+            if !fields.is_empty() || !rdf_type.is_empty() {
+                namespaces.sort();
+                sub_blocks.push(xmp::SubSubjectBlock { about, rdf_type, namespaces, fields });
             }
         }
         sub_blocks.sort_by(|a, b| a.about.cmp(&b.about));
