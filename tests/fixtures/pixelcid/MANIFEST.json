@@ -1,0 +1,44 @@
+{
+  "purpose": "Pixel-CID cross-check: prove Pool's png-crate path yields byte-identical hex to the eye's PIL path.",
+  "canonical_algorithm": "CID = 'sha256:' + sha256(decoded pixel buffer normalized to 8-bit RGB, no alpha, row-major top-to-bottom, 3 bytes/pixel in R,G,B order).hexdigest()",
+  "eye_source": "openiris/src/openiris/eye.py:280  sha256(Image.open(png).convert('RGB').tobytes())",
+  "pool_must_replicate": "png-crate decode -> normalize to RGB8 (strip alpha, expand palette, downsample 16->8) -> sha256",
+  "cross_check": "For each fixture, decode via png crate, normalize, sha256, assert == expected_cid.",
+  "load_bearing": "rgba8.expected_cid MUST equal rgb8.expected_cid \u2014 if they differ, alpha leaked into the hash.",
+  "pil_version": "12.2.0",
+  "fixtures": [
+    {
+      "fixture": "rgb8",
+      "file": "rgb8.png",
+      "dimensions": [
+        64,
+        48
+      ],
+      "on_disk_mode": "RGB",
+      "note": "native 8-bit RGB; the common case, must trivially align",
+      "expected_cid": "sha256:4570a542a91fe28e9a05cb49edf4123d2b71dea607085310cb38df196d018391"
+    },
+    {
+      "fixture": "rgba8",
+      "file": "rgba8.png",
+      "dimensions": [
+        64,
+        48
+      ],
+      "on_disk_mode": "RGBA",
+      "note": "8-bit RGBA, varied alpha; RGB matches rgb8 so its cid MUST equal rgb8's (proves alpha is stripped, not hashed)",
+      "expected_cid": "sha256:4570a542a91fe28e9a05cb49edf4123d2b71dea607085310cb38df196d018391"
+    },
+    {
+      "fixture": "rgb16",
+      "file": "rgb16.png",
+      "dimensions": [
+        64,
+        48
+      ],
+      "on_disk_mode": "RGB",
+      "note": "16-bit RGB; exercises the 16->8 downsample path. Bytes chosen so >>8 recovers the rgb8 values \u2192 cid MUST equal rgb8's.",
+      "expected_cid": "sha256:4570a542a91fe28e9a05cb49edf4123d2b71dea607085310cb38df196d018391"
+    }
+  ]
+}
