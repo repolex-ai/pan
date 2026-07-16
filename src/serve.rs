@@ -60,12 +60,14 @@ pub struct IndexInfo {
 
 #[derive(Serialize, ToSchema)]
 pub struct MediaCreated {
-    /// Content id, bare form `sha256:<hex>`. For PNGs this is the PIXEL cid.
-    pub cid: String,
+    /// The assigned identity — short, random, new on EVERY put (two puts of
+    /// the same bytes are two different media objects).
+    pub pan_id: String,
+    /// The full subject IRI minted for this object,
+    /// e.g. `https://repolex.ai/ontology/pan/image/<panId>`.
+    pub subject: String,
     pub blob_path: String,
     pub created_at: String,
-    /// False when the object was already in the store (idempotent re-put).
-    pub created: bool,
     /// True when the embed detector ran and the vector was indexed.
     pub embedded: bool,
     /// Present when an embed was attempted and failed (media is stored regardless).
@@ -83,7 +85,7 @@ pub struct FactsBody {
 
 #[derive(Serialize, ToSchema)]
 pub struct FactsResponse {
-    pub cid: String,
+    pub pan_id: String,
     /// Full-IRI predicate → values.
     pub facts: HashMap<String, Vec<String>>,
 }
@@ -111,7 +113,7 @@ pub struct QueryBody {
 #[derive(Deserialize, ToSchema)]
 pub struct SearchBody {
     /// SPARQL graph pattern gating the candidate set. `?s` is the media
-    /// subject and `?cid` is pre-bound via `?s pan:cid ?cid`. Empty/absent =
+    /// subject and `?id` is pre-bound via `?s pan:panId ?id`. Empty/absent =
     /// no graph gate (pure kNN).
     #[serde(default)]
     pub r#where: String,
@@ -130,7 +132,7 @@ pub struct SearchResponse {
 
 #[derive(Serialize, ToSchema)]
 pub struct Hit {
-    pub cid: String,
+    pub pan_id: String,
     /// Cosine similarity, 1.0 = identical direction.
     pub score: f32,
 }
@@ -242,7 +244,7 @@ async fn put_media(
     let mut embed_error = None;
     let media_type = content_type.unwrap_or_else(|| "image/png".to_string());
     match st.detectors.embed(&body, &media_type).await {
-        Ok(Some(vec)) => match st.pan.add_vector(&res.cid, &st.pan.cfg.index_id, &vec) {
+        Ok(Some(vec)) => match st.pan.add_vector(&res.pan_id, &st.pan.cfg.index_id, &vec) {
             Ok(_) => {
                 embedded = true;
                 st.pan.flush().map_err(map_err)?;
@@ -256,26 +258,26 @@ async fn put_media(
     Ok((
         StatusCode::CREATED,
         Json(MediaCreated {
-            cid: res.cid,
+            pan_id: res.pan_id,
+            subject: res.subject,
             blob_path: res.blob_path,
             created_at: res.created_at,
-            created: res.created,
             embedded,
             embed_error,
         }),
     ))
 }
 
-#[utoipa::path(get, path = "/media/{cid}", tag = "media",
-    params(("cid" = String, Path, description = "Content id, bare (sha256:…) or urn: form")),
+#[utoipa::path(get, path = "/media/{pan_id}", tag = "media",
+    params(("pan_id" = String, Path, description = "The assigned panId")),
     responses(
         (status = 200, description = "The media bytes", content_type = "application/octet-stream"),
         (status = 404, body = ErrorBody)))]
 async fn get_media(
     State(st): State<SharedState>,
-    AxPath(cid): AxPath<String>,
+    AxPath(pan_id): AxPath<String>,
 ) -> Result<Response, ApiError> {
-    let (bytes, facts) = st.pan.get(&cid).map_err(map_err)?;
+    let (bytes, facts) = st.pan.get(&pan_id).map_err(map_err)?;
     let media_type = facts
         .iter()
         .find(|(p, _)| p == &format!("{}mediaType", crate::PAN_NS))
@@ -284,37 +286,37 @@ async fn get_media(
     Ok(([(header::CONTENT_TYPE, media_type)], bytes).into_response())
 }
 
-#[utoipa::path(delete, path = "/media/{cid}", tag = "media",
-    params(("cid" = String, Path)),
+#[utoipa::path(delete, path = "/media/{pan_id}", tag = "media",
+    params(("pan_id" = String, Path)),
     responses((status = 204), (status = 404, body = ErrorBody)))]
 async fn delete_media(
     State(st): State<SharedState>,
-    AxPath(cid): AxPath<String>,
+    AxPath(pan_id): AxPath<String>,
 ) -> Result<StatusCode, ApiError> {
-    st.pan.delete(&cid).map_err(map_err)?;
+    st.pan.delete(&pan_id).map_err(map_err)?;
     st.pan.flush().map_err(map_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[utoipa::path(get, path = "/media/{cid}/facts", tag = "media",
-    params(("cid" = String, Path)),
+#[utoipa::path(get, path = "/media/{pan_id}/facts", tag = "media",
+    params(("pan_id" = String, Path)),
     responses((status = 200, body = FactsResponse), (status = 404, body = ErrorBody)))]
 async fn get_facts(
     State(st): State<SharedState>,
-    AxPath(cid): AxPath<String>,
+    AxPath(pan_id): AxPath<String>,
 ) -> Result<Json<FactsResponse>, ApiError> {
-    let facts = st.pan.facts_for(&cid).map_err(map_err)?;
+    let facts = st.pan.facts_for(&pan_id).map_err(map_err)?;
     if facts.is_empty() {
-        return Err(ApiError(StatusCode::NOT_FOUND, format!("cid not found: {cid}")));
+        return Err(ApiError(StatusCode::NOT_FOUND, format!("panId not found: {pan_id}")));
     }
     Ok(Json(FactsResponse {
-        cid,
+        pan_id,
         facts: facts.into_iter().collect(),
     }))
 }
 
-#[utoipa::path(put, path = "/media/{cid}/facts", tag = "media",
-    params(("cid" = String, Path)),
+#[utoipa::path(put, path = "/media/{pan_id}/facts", tag = "media",
+    params(("pan_id" = String, Path)),
     request_body = FactsBody,
     responses(
         (status = 200, body = FactsResponse),
@@ -322,7 +324,7 @@ async fn get_facts(
         (status = 404, body = ErrorBody)))]
 async fn put_facts(
     State(st): State<SharedState>,
-    AxPath(cid): AxPath<String>,
+    AxPath(pan_id): AxPath<String>,
     Json(body): Json<FactsBody>,
 ) -> Result<Json<FactsResponse>, ApiError> {
     let mut facts = Facts::new();
@@ -336,10 +338,10 @@ async fn put_facts(
             other => facts.insert(&pred, json_scalar(&other)?),
         }
     }
-    st.pan.describe(&cid, facts).map_err(map_err)?;
-    let out = st.pan.facts_for(&cid).map_err(map_err)?;
+    st.pan.describe(&pan_id, facts).map_err(map_err)?;
+    let out = st.pan.facts_for(&pan_id).map_err(map_err)?;
     Ok(Json(FactsResponse {
-        cid,
+        pan_id,
         facts: out.into_iter().collect(),
     }))
 }
@@ -356,22 +358,22 @@ fn json_scalar(v: &serde_json::Value) -> Result<String, ApiError> {
     }
 }
 
-#[utoipa::path(put, path = "/media/{cid}/vectors/{index}", tag = "vectors",
-    params(("cid" = String, Path), ("index" = String, Path, description = "Index name (one index per embedder)")),
+#[utoipa::path(put, path = "/media/{pan_id}/vectors/{index}", tag = "vectors",
+    params(("pan_id" = String, Path), ("index" = String, Path, description = "Index name (one index per embedder)")),
     request_body = VectorBody,
     responses((status = 200, body = VectorAdded), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
 async fn put_vector(
     State(st): State<SharedState>,
-    AxPath((cid, index)): AxPath<(String, String)>,
+    AxPath((pan_id, index)): AxPath<(String, String)>,
     Json(body): Json<VectorBody>,
 ) -> Result<Json<VectorAdded>, ApiError> {
-    if st.pan.facts_for(&cid).map_err(map_err)?.is_empty() {
-        return Err(ApiError(StatusCode::NOT_FOUND, format!("cid not found: {cid}")));
+    if st.pan.facts_for(&pan_id).map_err(map_err)?.is_empty() {
+        return Err(ApiError(StatusCode::NOT_FOUND, format!("panId not found: {pan_id}")));
     }
     if body.vector.is_empty() {
         return Err(ApiError(StatusCode::BAD_REQUEST, "empty vector".into()));
     }
-    let added = st.pan.add_vector(&cid, &index, &body.vector).map_err(map_err)?;
+    let added = st.pan.add_vector(&pan_id, &index, &body.vector).map_err(map_err)?;
     st.pan.flush().map_err(map_err)?;
     Ok(Json(VectorAdded { added, index }))
 }
@@ -448,7 +450,7 @@ async fn search(
     Ok(Json(SearchResponse {
         hits: hits
             .into_iter()
-            .map(|h| Hit { cid: h.cid, score: h.score })
+            .map(|h| Hit { pan_id: h.pan_id, score: h.score })
             .collect(),
     }))
 }
@@ -468,7 +470,7 @@ async fn search(
     )),
     tags(
         (name = "meta", description = "Store identity + status"),
-        (name = "media", description = "CRUD — content-addressed media + facts"),
+        (name = "media", description = "CRUD — media objects (assigned panId) + facts"),
         (name = "vectors", description = "Attach embeddings (the Iris two-call flow: put, then vector)"),
         (name = "query", description = "SPARQL and SPARQL+vector fusion")
     )
@@ -480,9 +482,9 @@ pub fn router(state: SharedState) -> Router {
         .route("/health", get(health))
         .route("/info", get(info))
         .route("/media", post(put_media))
-        .route("/media/{cid}", get(get_media).delete(delete_media))
-        .route("/media/{cid}/facts", get(get_facts).put(put_facts))
-        .route("/media/{cid}/vectors/{index}", put(put_vector))
+        .route("/media/{pan_id}", get(get_media).delete(delete_media))
+        .route("/media/{pan_id}/facts", get(get_facts).put(put_facts))
+        .route("/media/{pan_id}/vectors/{index}", put(put_vector))
         .route("/query", post(query))
         .route("/search", post(search))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))

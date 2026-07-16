@@ -13,17 +13,17 @@ pan: a owl:Ontology ;
 
 pan:Media a owl:Class ;
     rdfs:label "Media" ;
-    rdfs:comment "A stored media object, content-addressed by cid." .
+    rdfs:comment "A stored media object, identified by an assigned panId. Subject IRIs are standard full https IRIs: https://repolex.ai/ontology/pan/<class-segment>/<panId> (e.g. …/pan/image/k7m2p9x4)." .
 
 pan:Image a owl:Class ;
     rdfs:subClassOf pan:Media ;
     rdfs:label "Image" .
 
-pan:cid a owl:DatatypeProperty ;
+pan:panId a owl:DatatypeProperty ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:string ;
-    rdfs:label "content id" ;
-    rdfs:comment "The bare content id, `sha256:<hex>`. For PNGs this is the PIXEL cid — stable across metadata edits. Subject IRI form is `urn:sha256:<hex>`." .
+    rdfs:label "pan id" ;
+    rdfs:comment "The ASSIGNED identity of a media object: short random base32, minted at put. Not content-derived — two puts of the same bytes are two different objects. Not for dedup, comparison, or cross-system correlation." .
 
 pan:blobPath a owl:DatatypeProperty ;
     rdfs:domain pan:Media ;

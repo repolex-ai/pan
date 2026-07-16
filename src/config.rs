@@ -14,6 +14,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub const PAN_NS: &str = "https://repolex.ai/ontology/pan/";
+
+/// The a-box (instance) base: media subjects mint as
+/// `{PAN_MEDIA_NS}<class-segment>/<panId>` (e.g. `…/pan/image/k7m2p9x4`).
+/// Deliberately a SEPARATE constant from `PAN_NS` (the t-box/vocabulary base)
+/// even though they coincide today — vocabulary and instances have different
+/// lifecycles, and relocating instances (e.g. under a `/resource/` base) must
+/// never move where the classes and predicates live.
+pub const PAN_MEDIA_NS: &str = "https://repolex.ai/ontology/pan/";
+
 pub const DEFAULT_STORAGE_ID: &str = "default";
 pub const DEFAULT_INDEX_ID: &str = "default";
 

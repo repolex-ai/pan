@@ -47,6 +47,6 @@ endpoints. No render orchestration.
   oxigraph/          RDF graph store — always local, never relocated
   hnsw/              vector index — always local, never relocated
   storage/           media (blobs + raw vector sidecars) — the ONE overridable root
-    blob/image/YYYY/MM/DD/<cid-hex>.png
+    blob/image/YYYY/MM/DD/<panId>.png
     vectors/<index>/...npy
 ```

@@ -10,9 +10,11 @@
 //!   and every consumer tripped on it (`?s ?p ?o` read zero). One store = one
 //!   media graph; `SELECT ?s ?p ?o` just works. Graph names carrying identity
 //!   was the disease; Pan doesn't have graph names at all.
-//! - **cid** is the bare `sha256:<hex>` form everywhere (wire, index, XMP);
-//!   the subject IRI form is `urn:sha256:<hex>`. For PNGs the cid is the
-//!   PIXEL cid — metadata edits never rotate identity.
+//! - **panId** is the identity: an ASSIGNED short random id (8 base32 chars),
+//!   minted at put. NOT content-derived — two puts of the same bytes are two
+//!   different media objects with different ids. The subject IRI is a standard
+//!   full https IRI, `https://repolex.ai/ontology/pan/image/<panId>`, written
+//!   once at put and looked up as data thereafter (never re-derived).
 //! - **Loud failures.** Unresolvable predicates and broken config are errors,
 //!   never silent drops.
 
@@ -22,7 +24,6 @@ use oxigraph::model::{GraphName, Literal, NamedNode, Quad, NamedOrBlankNode};
 pub use oxigraph::model::Term;
 pub use oxigraph::sparql::{QueryResults, QuerySolution};
 use oxigraph::store::Store;
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,7 +38,7 @@ pub mod npy;
 pub mod serve;
 pub mod xmp;
 
-pub use config::{PanConfig, PAN_NS};
+pub use config::{PanConfig, PAN_MEDIA_NS, PAN_NS};
 pub use facts::Facts;
 pub use layout::PanLayout;
 
@@ -46,19 +47,55 @@ pub use layout::PanLayout;
 /// schema is documentation, not data).
 pub const PAN_ONTOLOGY_TTL: &str = include_str!("../ontology/pan.ttl");
 
-/// Compute the FILE-byte content id (`sha256:<hex>`) of a byte slice. Used for
-/// non-PNG media where no pixel-domain identity exists (yet).
-pub fn compute_cid(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(bytes);
-    format!("sha256:{:x}", h.finalize())
+/// The panId alphabet: RFC 4648 base32, lowercased. Short, IRI/filename-safe.
+const PAN_ID_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+const PAN_ID_LEN: usize = 8;
+
+/// Generate a candidate panId: 8 random base32 chars (40 bits). panIds are
+/// ASSIGNED, not content-derived — identity is the media OBJECT (bytes +
+/// mutable description), not the pixels, so a hash would be a collision
+/// footgun, not a feature. Collision safety is the caller's mint loop
+/// (`Pan::mint_pan_id` retries against the store).
+fn gen_pan_id() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..PAN_ID_LEN)
+        .map(|_| PAN_ID_ALPHABET[rng.gen_range(0..PAN_ID_ALPHABET.len())] as char)
+        .collect()
 }
 
-/// cid → subject IRI. Idempotent on the `urn:` prefix (carried from Pool's
-/// Day-94 double-urn lesson): bare → urn:bare, urn:bare → urn:bare.
-fn cid_iri(cid: &str) -> Result<NamedNode> {
-    let bare = cid.strip_prefix("urn:").unwrap_or(cid);
-    NamedNode::new(format!("urn:{bare}")).map_err(|e| anyhow!("invalid cid IRI urn:{bare}: {e}"))
+/// A caller-supplied panId reaches filesystem paths (vector sidecars) — reject
+/// anything that isn't a bare token before it touches `Path::join` (the same
+/// discipline as [`validate_index_name`]).
+fn validate_pan_id(id: &str) -> Result<()> {
+    if id.is_empty() || id.len() > 64 {
+        return Err(anyhow!("invalid panId {id:?}"));
+    }
+    if !id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(anyhow!("invalid panId {id:?}: only [A-Za-z0-9] allowed"));
+    }
+    Ok(())
+}
+
+/// The class path segment of a media subject IRI, from the MIME major type:
+/// `image/png` → `image` (subject `…/pan/image/<panId>`). Derivable and
+/// self-documenting; the precise MIME stays in `pan:mediaType`.
+fn media_class_segment(media_type: &str) -> &str {
+    media_type
+        .split('/')
+        .next()
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("media")
+}
+
+/// Mint the subject IRI for a NEW media object — a standard full https IRI,
+/// `https://repolex.ai/ontology/pan/image/<panId>`. No `urn:`, no store
+/// identity in the subject (the store is the scope). Minted exactly once, at
+/// put; every later lookup resolves the panId to this IRI via the graph.
+fn media_subject_iri(media_type: &str, pan_id: &str) -> Result<NamedNode> {
+    let seg = media_class_segment(media_type);
+    NamedNode::new(format!("{PAN_MEDIA_NS}{seg}/{pan_id}"))
+        .map_err(|e| anyhow!("invalid media subject IRI: {e}"))
 }
 
 fn pan_iri(local: &str) -> NamedNode {
@@ -103,14 +140,14 @@ fn term_str(t: &Term) -> String {
     }
 }
 
-/// One vector index: usearch HNSW + the CID↔key bijection sidecar
+/// One vector index: usearch HNSW + the panId↔key bijection sidecar
 /// (`keymap.json`). Lifted from Pool. The index for a name lives at
 /// `<hnsw_root>/<name>/index.usearch`; dim is fixed by the first insert.
 struct VectorIndex {
     dim: usize,
     index: Index,
-    cid_to_key: HashMap<String, u64>,
-    key_to_cid: HashMap<u64, String>,
+    id_to_key: HashMap<String, u64>,
+    key_to_id: HashMap<u64, String>,
     next_key: u64,
     path: PathBuf,
     dirty: bool,
@@ -141,8 +178,8 @@ impl VectorIndex {
         let index = Index::new(&opts)?;
         index.reserve(1024)?;
 
-        let mut cid_to_key = HashMap::new();
-        let mut key_to_cid = HashMap::new();
+        let mut id_to_key = HashMap::new();
+        let mut key_to_id = HashMap::new();
         let mut next_key = 0u64;
         // The authoritative dim: the caller's hint until an on-disk index
         // overrides it with its real, persisted dimensionality.
@@ -161,18 +198,18 @@ impl VectorIndex {
                 let raw = fs::read_to_string(&map_path)?;
                 let m: HashMap<String, u64> = serde_json::from_str(&raw)?;
                 next_key = m.values().copied().max().map(|m| m + 1).unwrap_or(0);
-                for (cid, key) in &m {
-                    key_to_cid.insert(*key, cid.clone());
+                for (id, key) in &m {
+                    key_to_id.insert(*key, id.clone());
                 }
-                cid_to_key = m;
+                id_to_key = m;
             }
         }
 
         Ok(Self {
             dim: true_dim,
             index,
-            cid_to_key,
-            key_to_cid,
+            id_to_key,
+            key_to_id,
             next_key,
             path,
             dirty: false,
@@ -182,14 +219,14 @@ impl VectorIndex {
     fn save(&self) -> Result<()> {
         self.index.save(self.path.to_str().unwrap())?;
         let map_path = self.path.parent().unwrap().join("keymap.json");
-        fs::write(&map_path, serde_json::to_string(&self.cid_to_key)?)?;
+        fs::write(&map_path, serde_json::to_string(&self.id_to_key)?)?;
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchHit {
-    pub cid: String,
+    pub pan_id: String,
     pub score: f32,
 }
 
@@ -201,11 +238,12 @@ pub struct IndexStats {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PutResult {
-    pub cid: String,
+    /// The assigned identity — new on EVERY put (never content-derived).
+    pub pan_id: String,
+    /// The full subject IRI minted for this object.
+    pub subject: String,
     pub blob_path: String,
     pub created_at: String,
-    /// True when this call newly stored the object (false = already present).
-    pub created: bool,
 }
 
 /// One open Pan store.
@@ -249,44 +287,51 @@ impl Pan {
 
     // ── CRUD ────────────────────────────────────────────────────────────────
 
-    /// Store media bytes. Content-addressed: PNGs by PIXEL cid, other bytes by
-    /// file cid. For PNGs: any existing XMP app facts are ingested into the
-    /// graph (real RDF parser), then Pan re-authors + stamps its own packet
-    /// (pan: identity block + the graph's app facts) — pixel cid unchanged.
+    /// Mint a fresh panId, retrying on the (astronomically rare) collision
+    /// with an id already in the store.
+    fn mint_pan_id(&self) -> Result<String> {
+        loop {
+            let cand = gen_pan_id();
+            if self.subject_for(&cand)?.is_none() {
+                return Ok(cand);
+            }
+        }
+    }
+
+    /// Resolve a panId to its subject IRI. The IRI is DATA, written once at
+    /// put and looked up here via `pan:panId` — never re-derived, so the mint
+    /// scheme can evolve without breaking lookups of existing objects.
+    pub fn subject_for(&self, pan_id: &str) -> Result<Option<NamedNode>> {
+        let obj = Literal::new_simple_literal(pan_id);
+        for quad in self.store.quads_for_pattern(
+            None,
+            Some(pan_iri("panId").as_ref()),
+            Some(obj.as_ref().into()),
+            Some(GraphName::DefaultGraph.as_ref()),
+        ) {
+            let quad = quad.context("resolve panId")?;
+            if let NamedOrBlankNode::NamedNode(n) = quad.subject {
+                return Ok(Some(n));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Store media bytes as a NEW media object. Every put mints a fresh
+    /// assigned panId — putting the same bytes twice creates two different
+    /// objects (identity is the object, never the pixels; there is no dedup).
+    ///
+    /// For PNGs: any existing XMP app facts are ingested into the graph (real
+    /// RDF parser; sub-subjects are REBASED onto the new subject), then Pan
+    /// re-authors + stamps its own packet (pan: identity block + the graph's
+    /// app facts) — pixels unchanged.
     ///
     /// `facts` are caller-supplied descriptions (loud on unresolvable
-    /// predicates). Idempotent per cid: a re-put refreshes bytes + merges
-    /// facts, keeps the original createdAt.
+    /// predicates).
     pub fn put(&self, bytes: &[u8], content_type: Option<&str>, facts: Facts) -> Result<PutResult> {
         let png = xmp::is_png(bytes);
-        let cid = if png {
-            xmp::compute_pixel_cid(bytes)?
-        } else {
-            compute_cid(bytes)
-        };
-        let subject = cid_iri(&cid)?;
-
-        // Re-put keeps the original createdAt AND the original mediaType/blob
-        // location — identity, once minted, is stable. A re-put refreshes bytes
-        // and merges caller facts; it must not fork a second blobPath by
-        // honoring a different Content-Type on the same pixels.
-        let existing = self.facts_for(&cid)?;
-        let created = existing.is_empty();
-        let find_one = |p: &str| -> Option<String> {
-            existing
-                .iter()
-                .find(|(pred, _)| pred == &format!("{PAN_NS}{p}"))
-                .and_then(|(_, v)| v.first().cloned())
-        };
-        let created_at =
-            find_one("createdAt").unwrap_or_else(|| Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-        // mediaType: existing wins on re-put; otherwise the caller's, else a
-        // sensible default. This keeps the blob extension (and thus blobPath)
-        // constant across re-puts.
-        let media_type = find_one("mediaType").unwrap_or_else(|| {
-            content_type.map(|s| s.to_string()).unwrap_or_else(|| {
-                if png { "image/png".to_string() } else { "application/octet-stream".to_string() }
-            })
+        let media_type = content_type.map(|s| s.to_string()).unwrap_or_else(|| {
+            if png { "image/png".to_string() } else { "application/octet-stream".to_string() }
         });
         let ext = match media_type.as_str() {
             "image/png" => "png",
@@ -296,39 +341,19 @@ impl Pan {
             _ => "bin",
         };
 
-        // blob/image/YYYY/MM/DD/<hex>.<ext> — date shard from createdAt,
-        // filename from the cid (identity IS the name). On re-put, prefer the
-        // stored blobPath verbatim so we never orphan a prior copy.
-        let hex = cid.rsplit(':').next().unwrap_or(&cid);
-        let shard = created_at.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
-        let rel_path =
-            find_one("blobPath").unwrap_or_else(|| format!("{}/{shard}/{hex}.{ext}", PanLayout::BLOB_SUBPATH));
-        let abs_path = self.layout.storage_root.join(&rel_path);
+        let pan_id = self.mint_pan_id()?;
+        let subject = media_subject_iri(&media_type, &pan_id)?;
+        let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-        // Clear the prior identity block before re-authoring it — a re-put must
-        // not accumulate stale cid/blobPath/createdAt/mediaType quads (the
-        // fork-on-different-Content-Type bug). Caller/app facts merge; identity
-        // is replaced.
-        if !created {
-            for local in ["cid", "blobPath", "createdAt", "mediaType"] {
-                for quad in self
-                    .store
-                    .quads_for_pattern(
-                        Some((&subject).into()),
-                        Some(pan_iri(local).as_ref()),
-                        None,
-                        Some(GraphName::DefaultGraph.as_ref()),
-                    )
-                    .collect::<Result<Vec<_>, _>>()?
-                {
-                    self.store.remove(quad.as_ref()).context("clear prior identity quad")?;
-                }
-            }
-        }
+        // blob/image/YYYY/MM/DD/<panId>.<ext> — date shard from createdAt,
+        // filename from the assigned id.
+        let shard = created_at.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
+        let rel_path = format!("{}/{shard}/{pan_id}.{ext}", PanLayout::BLOB_SUBPATH);
+        let abs_path = self.layout.storage_root.join(&rel_path);
 
         // Identity facts — Pan's own block.
         let mut quads = vec![
-            self.quad(&subject, "cid", &cid),
+            self.quad(&subject, "panId", &pan_id),
             self.quad(&subject, "blobPath", &rel_path),
             self.quad(&subject, "createdAt", &created_at),
             self.quad(&subject, "mediaType", &media_type),
@@ -336,25 +361,38 @@ impl Pan {
 
         // Ingest existing XMP app facts (the walker-lite: media traveling in
         // carries its descriptions with it). pan: identity fields are skipped —
-        // Pan re-authors those; a foreign store's blobPath is meaningless here.
-        // A malformed foreign packet must NOT fail the store — media-in is the
-        // job; a broken travel copy is logged and the bytes still land.
+        // Pan re-authors those; a foreign store's blobPath/panId are not facts
+        // about THIS object. Sub-subjects (regions etc.) were scoped under the
+        // SOURCE object's subject; the source packet's own pan:panId tells us
+        // where that scope starts, so they REBASE onto the new subject and stay
+        // query/delete-reachable here. A malformed foreign packet must NOT fail
+        // the store — media-in is the job; it is logged and the bytes still land.
         if png {
             match xmp::read_xmp_packet_from_bytes(bytes) {
                 Ok(Some(packet)) => match xmp::parse_packet(&packet) {
                     Ok(blocks) => {
-                        for block in blocks {
-                            // A sub-subject scoped OUTSIDE this cid's subject is a
-                            // foreign region (its scope was the source store's cid);
-                            // it can never be found or deleted here, so drop it
-                            // rather than orphan it.
+                        let source_pan_id: Option<String> = blocks
+                            .iter()
+                            .find(|b| b.subject.is_none())
+                            .and_then(|b| b.facts.iter().find(|(p, _)| p == &format!("{PAN_NS}panId")))
+                            .and_then(|(_, v)| v.first().map(|t| t.value().to_string()));
+                        for block in &blocks {
                             let subj = match &block.subject {
                                 None => subject.clone(),
-                                Some(iri) if iri.starts_with(&format!("{}/", subject.as_str())) => {
-                                    NamedNode::new(iri.as_str())
-                                        .map_err(|e| anyhow!("invalid sub-subject IRI {iri}: {e}"))?
+                                Some(iri) => {
+                                    // Rebase `<source-subject>/<tail>` → `<subject>/<tail>`.
+                                    // No source panId, or an IRI outside its scope
+                                    // = unknowable foreign subject; drop rather
+                                    // than orphan.
+                                    let Some(src) = &source_pan_id else { continue };
+                                    let marker = format!("/{src}/");
+                                    let Some(pos) = iri.find(&marker) else { continue };
+                                    let tail = &iri[pos + marker.len()..];
+                                    match NamedNode::new(format!("{}/{tail}", subject.as_str())) {
+                                        Ok(n) => n,
+                                        Err(_) => continue,
+                                    }
                                 }
-                                Some(_) => continue,
                             };
                             for (pred, values) in &block.facts {
                                 if pred.starts_with(PAN_NS) {
@@ -381,10 +419,10 @@ impl Pan {
                             }
                         }
                     }
-                    Err(e) => tracing::warn!(cid = %cid, "skipping unparseable travel XMP: {e:#}"),
+                    Err(e) => tracing::warn!(pan_id = %pan_id, "skipping unparseable travel XMP: {e:#}"),
                 },
                 Ok(None) => {}
-                Err(e) => tracing::warn!(cid = %cid, "skipping unreadable travel XMP: {e:#}"),
+                Err(e) => tracing::warn!(pan_id = %pan_id, "skipping unreadable travel XMP: {e:#}"),
             }
         }
 
@@ -400,7 +438,7 @@ impl Pan {
             fs::create_dir_all(parent).context("create blob shard dir")?;
         }
         if png {
-            let packet = self.build_packet_from_graph(&cid, &rel_path, &created_at)?;
+            let packet = self.build_packet_from_graph(&pan_id, &rel_path, &created_at)?;
             let stamped = xmp::write_packet_into_png_bytes(bytes, &packet)?;
             fs::write(&abs_path, &stamped)
                 .with_context(|| format!("write blob {}", abs_path.display()))?;
@@ -410,17 +448,17 @@ impl Pan {
         }
 
         Ok(PutResult {
-            cid,
+            pan_id,
+            subject: subject.into_string(),
             blob_path: rel_path,
             created_at,
-            created,
         })
     }
 
     /// Assert one triple on an arbitrary subject IRI. `object_is_iri` picks
     /// whether the object is a NamedNode (an IRI, e.g. an `rdf:type`) or a
     /// plain literal. Used to describe sub-subjects (regions etc.) that hang
-    /// off a media object's subject. Does NOT re-stamp — call `restamp(cid)`
+    /// off a media object's subject. Does NOT re-stamp — call `restamp(panId)`
     /// when the sub-subject belongs to a PNG and you want the travel copy
     /// refreshed.
     pub fn describe_subject(&self, subject_iri: &str, predicate_iri: &str, object: &str, object_is_iri: bool) -> Result<()> {
@@ -437,23 +475,25 @@ impl Pan {
         Ok(())
     }
 
-    /// Read media bytes + facts by cid. Works for bare and urn: cid forms.
-    pub fn get(&self, cid: &str) -> Result<(Vec<u8>, Vec<(String, Vec<String>)>)> {
-        let facts = self.facts_for(cid)?;
+    /// Read media bytes + facts by panId.
+    pub fn get(&self, pan_id: &str) -> Result<(Vec<u8>, Vec<(String, Vec<String>)>)> {
+        let facts = self.facts_for(pan_id)?;
         let blob_path = facts
             .iter()
             .find(|(p, _)| p == &format!("{PAN_NS}blobPath"))
             .and_then(|(_, v)| v.first().cloned())
-            .ok_or_else(|| anyhow!("cid not found: {cid}"))?;
+            .ok_or_else(|| anyhow!("panId not found: {pan_id}"))?;
         let abs = self.layout.storage_root.join(&blob_path);
         let bytes = fs::read(&abs).with_context(|| format!("read blob {}", abs.display()))?;
         Ok((bytes, facts))
     }
 
-    /// All facts for a cid's subject: full-IRI predicate → values. Empty vec =
-    /// unknown cid.
-    pub fn facts_for(&self, cid: &str) -> Result<Vec<(String, Vec<String>)>> {
-        let subject = cid_iri(cid)?;
+    /// All facts for a panId's subject: full-IRI predicate → values. Empty vec
+    /// = unknown panId.
+    pub fn facts_for(&self, pan_id: &str) -> Result<Vec<(String, Vec<String>)>> {
+        let Some(subject) = self.subject_for(pan_id)? else {
+            return Ok(vec![]);
+        };
         let mut map: HashMap<String, Vec<String>> = HashMap::new();
         for quad in self
             .store
@@ -469,31 +509,28 @@ impl Pan {
         Ok(out)
     }
 
-    /// Merge additional facts onto an existing cid (LOUD on unresolvable
-    /// predicates, 404-style error on unknown cid). PNGs are re-stamped so the
-    /// XMP mirror follows the graph.
-    pub fn describe(&self, cid: &str, facts: Facts) -> Result<()> {
-        let existing = self.facts_for(cid)?;
-        if existing.is_empty() {
-            return Err(anyhow!("cid not found: {cid}"));
-        }
-        let subject = cid_iri(cid)?;
+    /// Merge additional facts onto an existing panId (LOUD on unresolvable
+    /// predicates, 404-style error on unknown panId). PNGs are re-stamped so
+    /// the XMP mirror follows the graph.
+    pub fn describe(&self, pan_id: &str, facts: Facts) -> Result<()> {
+        let Some(subject) = self.subject_for(pan_id)? else {
+            return Err(anyhow!("panId not found: {pan_id}"));
+        };
         let quads = facts.into_quads(&subject, &self.cfg.prefixes, &self.cfg.default_prefix)?;
         for q in &quads {
             self.store.insert(q.as_ref()).context("insert quad")?;
         }
-        self.restamp(cid)?;
+        self.restamp(pan_id)?;
         Ok(())
     }
 
-    /// Delete a cid: triples (subject + its sub-subjects), blob file, vector
+    /// Delete a panId: triples (subject + its sub-subjects), blob file, vector
     /// sidecars, and index entries.
-    pub fn delete(&self, cid: &str) -> Result<()> {
-        let facts = self.facts_for(cid)?;
-        if facts.is_empty() {
-            return Err(anyhow!("cid not found: {cid}"));
-        }
-        let subject = cid_iri(cid)?;
+    pub fn delete(&self, pan_id: &str) -> Result<()> {
+        let Some(subject) = self.subject_for(pan_id)? else {
+            return Err(anyhow!("panId not found: {pan_id}"));
+        };
+        let facts = self.facts_for(pan_id)?;
 
         // Blob file first (facts still know where it is).
         if let Some(blob_path) = facts
@@ -524,7 +561,7 @@ impl Pan {
         }
 
         // Vector index entries + sidecars, across all on-disk indexes.
-        let bare = cid.strip_prefix("urn:").unwrap_or(cid);
+        validate_pan_id(pan_id)?;
         let index_names: Vec<String> = fs::read_dir(&self.layout.hnsw_root)
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
@@ -539,17 +576,17 @@ impl Pan {
                 // dim unknown until load; probe via a throwaway load with dim from
                 // the keymap-less path is impossible — usearch stores dim in the
                 // file, but the wrapper needs one. Load lazily only if the keymap
-                // knows this cid, using the sidecar's dim.
+                // knows this panId, using the sidecar's dim.
                 let keymap_path = self.layout.hnsw_root.join(&name).join("keymap.json");
                 let known = fs::read_to_string(&keymap_path)
                     .ok()
                     .and_then(|raw| serde_json::from_str::<HashMap<String, u64>>(&raw).ok())
-                    .map(|m| m.contains_key(bare))
+                    .map(|m| m.contains_key(pan_id))
                     .unwrap_or(false);
                 if !known {
                     continue;
                 }
-                let sidecar = self.layout.vector_sidecar_path(&name, bare);
+                let sidecar = self.layout.vector_sidecar_path(&name, pan_id);
                 let dim = npy::read_f32_1d(&sidecar).map(|v| v.len()).unwrap_or(0);
                 if dim == 0 {
                     continue; // can't load without a dim; index entry becomes stale but harmless
@@ -557,13 +594,13 @@ impl Pan {
                 indexes.insert(name.clone(), VectorIndex::create(&self.layout.hnsw_root, &name, dim)?);
             }
             if let Some(vi) = indexes.get_mut(&name) {
-                if let Some(key) = vi.cid_to_key.remove(bare) {
-                    vi.key_to_cid.remove(&key);
+                if let Some(key) = vi.id_to_key.remove(pan_id) {
+                    vi.key_to_id.remove(&key);
                     vi.index.remove(key).ok();
                     vi.dirty = true;
                 }
             }
-            let sidecar = self.layout.vector_sidecar_path(&name, bare);
+            let sidecar = self.layout.vector_sidecar_path(&name, pan_id);
             if sidecar.exists() {
                 fs::remove_file(&sidecar).ok();
             }
@@ -573,13 +610,13 @@ impl Pan {
 
     // ── Vectors + search (the crown jewel, lifted from Pool) ────────────────
 
-    /// Attach a vector to an existing cid: writes the raw `.npy` sidecar
+    /// Attach a vector to an existing panId: writes the raw `.npy` sidecar
     /// (media-derived, follows storage) and adds to the named HNSW index.
     ///
-    /// **Idempotent**: if `cid` is already indexed in `index_name`, no-op and
-    /// `Ok(false)`. `Ok(true)` when a new entry was added.
-    pub fn add_vector(&self, cid: &str, index_name: &str, vec: &[f32]) -> Result<bool> {
-        let bare = cid.strip_prefix("urn:").unwrap_or(cid);
+    /// **Idempotent**: if `pan_id` is already indexed in `index_name`, no-op
+    /// and `Ok(false)`. `Ok(true)` when a new entry was added.
+    pub fn add_vector(&self, pan_id: &str, index_name: &str, vec: &[f32]) -> Result<bool> {
+        validate_pan_id(pan_id)?;
         let mut indexes = self.indexes.lock().unwrap();
         if !indexes.contains_key(index_name) {
             let vi = VectorIndex::create(&self.layout.hnsw_root, index_name, vec.len())?;
@@ -596,38 +633,37 @@ impl Pan {
             ));
         }
 
-        // Idempotency gate: usearch throws on duplicate-key insert; same CID =
-        // same vector, no work to do.
-        if vi.cid_to_key.contains_key(bare) {
+        // Idempotency gate: usearch throws on duplicate-key insert; same panId
+        // = same vector, no work to do.
+        if vi.id_to_key.contains_key(pan_id) {
             return Ok(false);
         }
 
         // Raw sidecar first (reembed/migration source of truth for the vector).
-        npy::write_f32_1d(&self.layout.vector_sidecar_path(index_name, bare), vec)?;
+        npy::write_f32_1d(&self.layout.vector_sidecar_path(index_name, pan_id), vec)?;
 
         let key = vi.next_key;
         vi.next_key += 1;
-        vi.cid_to_key.insert(bare.to_string(), key);
-        vi.key_to_cid.insert(key, bare.to_string());
+        vi.id_to_key.insert(pan_id.to_string(), key);
+        vi.key_to_id.insert(key, pan_id.to_string());
 
-        let capacity_needed = vi.cid_to_key.len();
+        let capacity_needed = vi.id_to_key.len();
         if vi.index.capacity() < capacity_needed {
             vi.index.reserve(capacity_needed.max(1024))?;
         }
         vi.index
             .add(key, vec)
-            .map_err(|e| anyhow!("usearch add (cid {}, index {}): {}", bare, index_name, e))?;
+            .map_err(|e| anyhow!("usearch add (panId {}, index {}): {}", pan_id, index_name, e))?;
         vi.dirty = true;
         Ok(true)
     }
 
-    /// Whether `cid` is already present in `index_name`.
-    pub fn contains_cid(&self, cid: &str, index_name: &str) -> bool {
-        let bare = cid.strip_prefix("urn:").unwrap_or(cid);
+    /// Whether `pan_id` is already present in `index_name`.
+    pub fn contains_id(&self, pan_id: &str, index_name: &str) -> bool {
         let indexes = self.indexes.lock().unwrap();
         indexes
             .get(index_name)
-            .map(|vi| vi.cid_to_key.contains_key(bare))
+            .map(|vi| vi.id_to_key.contains_key(pan_id))
             .unwrap_or(false)
     }
 
@@ -641,7 +677,7 @@ impl Pan {
                     name.clone(),
                     IndexStats {
                         dim: vi.dim,
-                        count: vi.cid_to_key.len(),
+                        count: vi.id_to_key.len(),
                     },
                 )
             })
@@ -669,11 +705,11 @@ impl Pan {
     }
 
     /// Hybrid query — THE reason Pan exists. SPARQL `where` (must constrain
-    /// `?s`, which binds `?cid` via `pan:cid`) gates the candidate set; usearch
-    /// kNN ranks by cosine similarity to `like`. Strategy A: pre-filter then
-    /// search, joined at the application layer by the CID↔key map — no custom
-    /// SPARQL UDF. Lifted from Pool with one simplification: facts live in the
-    /// default graph, so there is no GRAPH wrapper to splice into.
+    /// `?s`, which binds `?id` via `pan:panId`) gates the candidate set;
+    /// usearch kNN ranks by cosine similarity to `like`. Strategy A: pre-filter
+    /// then search, joined at the application layer by the panId↔key map — no
+    /// custom SPARQL UDF. Lifted from Pool with one simplification: facts live
+    /// in the default graph, so there is no GRAPH wrapper to splice into.
     ///
     /// An empty `where_clause` means "no graph gate" — pure kNN over the index.
     pub fn search(&self, where_clause: &str, like: &[f32], k: usize, index_name: &str) -> Result<Vec<SearchHit>> {
@@ -683,27 +719,23 @@ impl Pan {
         // the two SPARQL paths.
         let q = format!(
             "{}
-             SELECT DISTINCT ?cid WHERE {{
-               ?s pan:cid ?cid .
+             SELECT DISTINCT ?id WHERE {{
+               ?s pan:panId ?id .
                {where_clause}
              }}",
             self.prefix_prologue()
         );
-        let mut candidate_cids: HashSet<String> = HashSet::new();
+        let mut candidate_ids: HashSet<String> = HashSet::new();
         if let QueryResults::Solutions(sols) = self.store.query(&q).map_err(|e| anyhow!("search where-clause: {e}"))? {
             for s in sols {
                 let s = s?;
-                if let Some(t) = s.get("cid") {
-                    // pan:cid is stored as the bare literal, but guard the urn:
-                    // form anyway (Pool's lesson: robust to either wire shape).
-                    let raw = term_str(t);
-                    let cid = raw.strip_prefix("urn:").unwrap_or(&raw).to_string();
-                    candidate_cids.insert(cid);
+                if let Some(t) = s.get("id") {
+                    candidate_ids.insert(term_str(t));
                 }
             }
         }
 
-        if candidate_cids.is_empty() {
+        if candidate_ids.is_empty() {
             return Ok(vec![]);
         }
 
@@ -731,9 +763,9 @@ impl Pan {
             ));
         }
 
-        let candidate_keys: HashSet<u64> = candidate_cids
+        let candidate_keys: HashSet<u64> = candidate_ids
             .iter()
-            .filter_map(|c| vi.cid_to_key.get(c).copied())
+            .filter_map(|c| vi.id_to_key.get(c).copied())
             .collect();
 
         if candidate_keys.is_empty() {
@@ -742,7 +774,7 @@ impl Pan {
 
         // Adaptive search breadth from prefilter selectivity (ported verbatim —
         // non-obvious quality tuning).
-        let total = vi.cid_to_key.len() as f32;
+        let total = vi.id_to_key.len() as f32;
         let selectivity = (candidate_keys.len() as f32 / total).max(0.001);
         let ef = ((k as f32 / selectivity).clamp(64.0, 4096.0)) as usize;
         vi.index.change_expansion_search(ef);
@@ -751,9 +783,9 @@ impl Pan {
 
         let mut hits = Vec::with_capacity(matches.keys.len());
         for (key, distance) in matches.keys.iter().zip(matches.distances.iter()) {
-            if let Some(cid) = vi.key_to_cid.get(key) {
+            if let Some(id) = vi.key_to_id.get(key) {
                 hits.push(SearchHit {
-                    cid: cid.clone(),
+                    pan_id: id.clone(),
                     score: 1.0 - *distance,
                 });
             }
@@ -792,15 +824,15 @@ impl Pan {
     /// mirror rule: the packet carries the pan: identity block plus every
     /// graph fact expressible in a configured prefix (unmapped namespaces stay
     /// graph-only — the graph is the full truth, XMP is the travel copy).
-    pub fn restamp(&self, cid: &str) -> Result<()> {
-        let facts = self.facts_for(cid)?;
+    pub fn restamp(&self, pan_id: &str) -> Result<()> {
+        let facts = self.facts_for(pan_id)?;
         let blob_path = match facts
             .iter()
             .find(|(p, _)| p == &format!("{PAN_NS}blobPath"))
             .and_then(|(_, v)| v.first())
         {
             Some(p) => p.clone(),
-            None => return Err(anyhow!("cid not found: {cid}")),
+            None => return Err(anyhow!("panId not found: {pan_id}")),
         };
         let abs = self.layout.storage_root.join(&blob_path);
         let bytes = fs::read(&abs).with_context(|| format!("read blob {}", abs.display()))?;
@@ -812,7 +844,7 @@ impl Pan {
             .find(|(p, _)| p == &format!("{PAN_NS}createdAt"))
             .and_then(|(_, v)| v.first().cloned())
             .unwrap_or_default();
-        let packet = self.build_packet_from_graph(cid, &blob_path, &created_at)?;
+        let packet = self.build_packet_from_graph(pan_id, &blob_path, &created_at)?;
         let stamped = xmp::write_packet_into_png_bytes(&bytes, &packet)?;
         fs::write(&abs, &stamped).with_context(|| format!("write blob {}", abs.display()))?;
         Ok(())
@@ -821,8 +853,10 @@ impl Pan {
     /// Graph facts → XMP packet. Facts group into app blocks by reverse prefix
     /// lookup; multi-value predicates become Bags; sub-subjects (`<subj>/…`)
     /// re-author as their own Descriptions.
-    fn build_packet_from_graph(&self, cid: &str, blob_path: &str, created_at: &str) -> Result<String> {
-        let subject = cid_iri(cid)?;
+    fn build_packet_from_graph(&self, pan_id: &str, blob_path: &str, created_at: &str) -> Result<String> {
+        let Some(subject) = self.subject_for(pan_id)? else {
+            return Err(anyhow!("panId not found: {pan_id}"));
+        };
         let subj_prefix = format!("{}/", subject.as_str());
 
         // Reverse prefix map, longest namespace first (most-specific wins).
@@ -841,7 +875,7 @@ impl Pan {
 
         // Root facts → app blocks (pan: identity fields re-authored, not copied).
         let mut app_fields: HashMap<(String, String), Vec<(String, xmp::FieldValue)>> = HashMap::new();
-        for (pred, values) in self.facts_for(cid)? {
+        for (pred, values) in self.facts_for(pan_id)? {
             if pred.starts_with(PAN_NS) {
                 continue;
             }
@@ -863,7 +897,7 @@ impl Pan {
             .collect();
         app_blocks.sort_by(|a, b| a.prefix.cmp(&b.prefix));
 
-        // Sub-subjects: named subjects scoped under this cid's subject IRI.
+        // Sub-subjects: named subjects scoped under this object's subject IRI.
         // Keep object term-type so rdf:type (and other IRI objects) re-author
         // as `rdf:resource` on the way out, not as string literals.
         let rdf_type_iri = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -919,7 +953,7 @@ impl Pan {
         }
         sub_blocks.sort_by(|a, b| a.about.cmp(&b.about));
 
-        Ok(xmp::build_packet(cid, blob_path, created_at, &app_blocks, &sub_blocks))
+        Ok(xmp::build_packet(pan_id, blob_path, created_at, &app_blocks, &sub_blocks))
     }
 
     /// Persist dirty vector indexes. Called on Drop too.

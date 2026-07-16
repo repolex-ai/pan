@@ -1,7 +1,7 @@
 //! XMP authoring + reading for PNG media.
 //!
 //! The two-tier packet model, lifted from Pool (`pool/src/xmp.rs`):
-//!   - Pan ALWAYS authors its own `pan:` block (identity: cid / blobPath /
+//!   - Pan ALWAYS authors its own `pan:` block (identity: panId / blobPath /
 //!     createdAt) on the root `<rdf:Description>`.
 //!   - App namespaces (copia:, dc:, …) are written beside it as OPAQUE
 //!     PASSTHROUGH — Pan judges nothing about their meaning.
@@ -15,8 +15,9 @@
 //! ([`parse_packet`]).
 //!
 //! NON-NEGOTIABLE INVARIANT (ported with its test): stamping metadata into a
-//! PNG preserves the PIXELS exactly, so [`compute_pixel_cid`] before == after.
-//! Metadata edits never rotate identity.
+//! PNG preserves the PIXELS exactly, so [`pixel_hash`] before == after.
+//! (`pixel_hash` is a pixel-equality instrument for pinning this invariant —
+//! it is NOT an identity; identity is the assigned panId.)
 
 use anyhow::{anyhow, Context, Result};
 use oxigraph::io::RdfFormat;
@@ -93,9 +94,9 @@ fn serialize_field(prefix: &str, local: &str, value: &FieldValue, indent: &str) 
 }
 
 /// The ALWAYS-present `pan:` identity block.
-fn pan_block_fields(cid: &str, blob_path: &str, created_at: &str) -> Vec<(String, FieldValue)> {
+fn pan_block_fields(pan_id: &str, blob_path: &str, created_at: &str) -> Vec<(String, FieldValue)> {
     vec![
-        ("cid".to_string(), FieldValue::Scalar(cid.to_string())),
+        ("panId".to_string(), FieldValue::Scalar(pan_id.to_string())),
         ("blobPath".to_string(), FieldValue::Scalar(blob_path.to_string())),
         ("createdAt".to_string(), FieldValue::Scalar(created_at.to_string())),
     ]
@@ -107,7 +108,7 @@ fn pan_block_fields(cid: &str, blob_path: &str, created_at: &str) -> Vec<(String
 /// block. Self-contained `<?xpacket?>`-wrapped, round-trips through
 /// [`parse_packet`].
 pub fn build_packet(
-    cid: &str,
+    pan_id: &str,
     blob_path: &str,
     created_at: &str,
     app_blocks: &[AppBlock],
@@ -130,7 +131,7 @@ pub fn build_packet(
     }
     out.push_str(">\n");
 
-    for (local, value) in pan_block_fields(cid, blob_path, created_at) {
+    for (local, value) in pan_block_fields(pan_id, blob_path, created_at) {
         out.push_str(&serialize_field("pan", &local, &value, "      "));
     }
     for b in app_blocks {
@@ -171,9 +172,9 @@ pub fn build_packet(
 /// existing XMP chunk is dropped, the new packet is written as a UTF-8 iTXt
 /// chunk. Non-XMP text chunks are preserved best-effort.
 ///
-/// CRITICAL for the pixel-cid contract: re-encoding preserves the PIXELS
-/// exactly, so `compute_pixel_cid(output) == compute_pixel_cid(input)`.
-/// Stamping does NOT rotate identity. (The FILE-byte sha DOES change.)
+/// CRITICAL for the stamp invariant: re-encoding preserves the PIXELS
+/// exactly, so `pixel_hash(output) == pixel_hash(input)` — a metadata edit
+/// never touches the image. (The FILE bytes DO change.)
 pub fn write_packet_into_png_bytes(png_bytes: &[u8], packet: &str) -> Result<Vec<u8>> {
     use std::io::BufWriter;
 
@@ -407,8 +408,9 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
 
 /// The synthetic base IRI the RDF/XML parser resolves rdf:about="" against.
 /// A root Description with an empty about becomes THIS subject; we map it back
-/// to `None` (= the media object itself).
-const XMP_BASE: &str = "urn:pan:xmp-root";
+/// to `None` (= the media object itself). Never stored — a parse-time marker
+/// only (kept in the pan namespace family; no urn: anywhere in Pan).
+const XMP_BASE: &str = "https://repolex.ai/ontology/pan/xmp-root";
 
 /// Find the real `<rdf:RDF` element open (followed by whitespace or `>`), not
 /// a literal that merely contains the substring.
@@ -445,26 +447,29 @@ fn obj_term(t: &Term) -> ObjTerm {
     }
 }
 
-// ── Pixel cid — the identity function (lifted verbatim from Pool) ───────────
+// ── Pixel hash — the stamp-invariant instrument (lifted verbatim from Pool) ──
 
-/// Compute the PIXEL content id of a PNG: the content address of the *image*,
-/// stable across XMP/metadata edits.
+/// Compute a hash of a PNG's PIXELS, stable across XMP/metadata edits.
+///
+/// NOT an identity — Pan's identity is the assigned panId. This exists to PIN
+/// the stamp invariant (stamping never touches the image): equal hash before
+/// and after = pixels untouched.
 ///
 /// CANONICAL CROSS-REPO DEFINITION (matches Pool + OpenIris byte-for-byte):
 /// `sha256` of the decoded pixel buffer **normalized to 8-bit RGB (no alpha),
 /// row-major top-to-bottom, 3 bytes/pixel in R,G,B order** — exactly PIL's
 /// `Image.open(png).convert("RGB").tobytes()`. Palette → expanded; grayscale →
 /// replicated to R=G=B; alpha → stripped; 16-bit → high byte (`>>8`).
-pub fn compute_pixel_cid(png_bytes: &[u8]) -> Result<String> {
+pub fn pixel_hash(png_bytes: &[u8]) -> Result<String> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
     // EXPAND: palette → RGB, sub-8-bit grayscale/tRNS → 8-bit. Leaves 16-bit
     // as 16-bit and alpha as-is; we handle those two below to match PIL.
     decoder.set_transformations(png::Transformations::EXPAND);
-    let mut reader = decoder.read_info().context("pixel-cid: decode PNG info")?;
+    let mut reader = decoder.read_info().context("pixel-hash: decode PNG info")?;
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let frame = reader
         .next_frame(&mut buf)
-        .context("pixel-cid: read PNG frame")?;
+        .context("pixel-hash: read PNG frame")?;
     let data = &buf[..frame.buffer_size()];
 
     let (color, depth) = (frame.color_type, frame.bit_depth);
@@ -474,14 +479,14 @@ pub fn compute_pixel_cid(png_bytes: &[u8]) -> Result<String> {
         png::ColorType::Rgb => 3,
         png::ColorType::Rgba => 4,
         png::ColorType::Indexed => {
-            return Err(anyhow!("pixel-cid: unexpected Indexed color after EXPAND"))
+            return Err(anyhow!("pixel-hash: unexpected Indexed color after EXPAND"))
         }
     };
     let bytes_per_sample = if depth == png::BitDepth::Sixteen { 2 } else { 1 };
     let stride = channels * bytes_per_sample;
     if stride == 0 || data.len() % stride != 0 {
         return Err(anyhow!(
-            "pixel-cid: buffer {} not divisible by stride {} (color={:?} depth={:?})",
+            "pixel-hash: buffer {} not divisible by stride {} (color={:?} depth={:?})",
             data.len(),
             stride,
             color,
@@ -547,14 +552,14 @@ mod tests {
     }
 
     #[test]
-    fn stamp_preserves_pixel_cid() {
-        // THE invariant: metadata edits never rotate identity.
+    fn stamp_preserves_pixels() {
+        // THE invariant: a metadata edit never touches the image.
         let png = make_test_png(16, 16, 7);
-        let cid_before = compute_pixel_cid(&png).unwrap();
-        let packet = build_packet(&cid_before, "blob/image/x.png", "2026-07-15T00:00:00Z", &[], &[]);
+        let hash_before = pixel_hash(&png).unwrap();
+        let packet = build_packet("abc123xy", "blob/image/x.png", "2026-07-15T00:00:00Z", &[], &[]);
         let stamped = write_packet_into_png_bytes(&png, &packet).unwrap();
-        let cid_after = compute_pixel_cid(&stamped).unwrap();
-        assert_eq!(cid_before, cid_after, "stamping rotated the pixel cid");
+        let hash_after = pixel_hash(&stamped).unwrap();
+        assert_eq!(hash_before, hash_after, "stamping changed the pixels");
         assert_ne!(png, stamped, "file bytes should differ (packet embedded)");
     }
 
@@ -586,8 +591,9 @@ mod tests {
         }];
         // A sub-subject spanning TWO namespaces — copia: AND dc: — to prove the
         // multi-namespace fix: neither is dropped from the travel copy.
+        const SUBJ: &str = "https://repolex.ai/ontology/pan/image/abc123xy";
         let subs = vec![SubSubjectBlock {
-            about: "urn:sha256:abc/Region/wolf/01".to_string(),
+            about: format!("{SUBJ}/Region/wolf/01"),
             rdf_type: format!("{COPIA}Sam3Region"),
             namespaces: vec![("copia".to_string(), COPIA.to_string()), ("dc".to_string(), DC.to_string())],
             fields: vec![
@@ -595,11 +601,11 @@ mod tests {
                 ("dc".to_string(), "creator".to_string(), FieldValue::Scalar("w4r3z".to_string())),
             ],
         }];
-        let packet = build_packet("sha256:abc", "blob/image/x.png", "2026-07-15T00:00:00Z", &apps, &subs);
+        let packet = build_packet("abc123xy", "blob/image/x.png", "2026-07-15T00:00:00Z", &apps, &subs);
 
         let parsed = parse_packet(&packet).unwrap();
         let root = parsed.iter().find(|p| p.subject.is_none()).expect("root block");
-        assert_eq!(vals(&root.facts, "https://repolex.ai/ontology/pan/cid"), vec!["sha256:abc"]);
+        assert_eq!(vals(&root.facts, "https://repolex.ai/ontology/pan/panId"), vec!["abc123xy"]);
         assert_eq!(
             vals(&root.facts, &format!("{COPIA}sceneMood")),
             vec!["calm & <bright>"],
@@ -613,7 +619,7 @@ mod tests {
 
         let region = parsed
             .iter()
-            .find(|p| p.subject.as_deref() == Some("urn:sha256:abc/Region/wolf/01"))
+            .find(|p| p.subject.as_deref() == Some(format!("{SUBJ}/Region/wolf/01").as_str()))
             .expect("region sub-subject scoped separately, not clobbering root");
         assert_eq!(vals(&region.facts, &format!("{COPIA}regionDescriptor")), vec!["wolf"]);
         assert_eq!(
@@ -649,13 +655,13 @@ mod tests {
     #[test]
     fn stamp_replaces_prior_xmp_and_preserves_other_text() {
         let png = make_test_png(8, 8, 1);
-        let p1 = build_packet("sha256:one", "a.png", "2026-01-01T00:00:00Z", &[], &[]);
+        let p1 = build_packet("oldid111", "a.png", "2026-01-01T00:00:00Z", &[], &[]);
         let s1 = write_packet_into_png_bytes(&png, &p1).unwrap();
-        let p2 = build_packet("sha256:two", "b.png", "2026-01-02T00:00:00Z", &[], &[]);
+        let p2 = build_packet("newid222", "b.png", "2026-01-02T00:00:00Z", &[], &[]);
         let s2 = write_packet_into_png_bytes(&s1, &p2).unwrap();
         let packet = read_xmp_packet_from_bytes(&s2).unwrap().expect("xmp present");
-        assert!(packet.contains("sha256:two"), "new packet wins");
-        assert!(!packet.contains("sha256:one"), "old packet fully replaced");
+        assert!(packet.contains("newid222"), "new packet wins");
+        assert!(!packet.contains("oldid111"), "old packet fully replaced");
     }
 
     #[test]

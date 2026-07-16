@@ -1,6 +1,7 @@
 //! Regression tests for the defects the adversarial review fleet confirmed.
 //! Each names the finding it pins so a future change that reopens the hole
-//! fails loudly here.
+//! fails loudly here. (Updated for the Day-50 identity model: assigned panId,
+//! standard https subject IRIs, no content-addressing.)
 
 use pan::{Facts, Pan};
 use std::collections::HashMap;
@@ -19,36 +20,35 @@ fn make_png(seed: u8) -> Vec<u8> {
     out
 }
 
-fn facts_map(store: &Pan, cid: &str) -> HashMap<String, Vec<String>> {
-    store.facts_for(cid).unwrap().into_iter().collect()
+fn facts_map(store: &Pan, pan_id: &str) -> HashMap<String, Vec<String>> {
+    store.facts_for(pan_id).unwrap().into_iter().collect()
 }
 
-/// #1/#18 — re-put with a different content_type must NOT fork a second
-/// blobPath/mediaType or orphan a blob on delete.
+/// #1/#18 (revised for assigned identity) — two puts of the same bytes are two
+/// INDEPENDENT objects: distinct panIds, distinct blobPaths, and deleting one
+/// never touches the other's blob or facts.
 #[test]
-fn reput_different_content_type_does_not_fork_identity() {
+fn same_bytes_twice_are_independent_objects() {
     let dir = tempfile::tempdir().unwrap();
     let store = Pan::open(dir.path()).unwrap();
     let png = make_png(1);
 
     let a = store.put(&png, Some("image/png"), Facts::new()).unwrap();
-    // Same PIXELS, different (wrong) Content-Type on the re-put.
-    let b = store.put(&png, Some("image/jpeg"), Facts::new()).unwrap();
-    assert_eq!(a.cid, b.cid);
-    assert_eq!(a.blob_path, b.blob_path, "blobPath must stay stable across re-put");
+    let b = store.put(&png, Some("image/png"), Facts::new()).unwrap();
+    assert_ne!(a.pan_id, b.pan_id, "assigned ids never collide on same bytes");
+    assert_ne!(a.blob_path, b.blob_path, "each object owns its own blob");
 
-    let f = facts_map(&store, &a.cid);
-    assert_eq!(f["https://repolex.ai/ontology/pan/blobPath"].len(), 1, "exactly one blobPath");
-    assert_eq!(f["https://repolex.ai/ontology/pan/mediaType"].len(), 1, "exactly one mediaType");
-    assert_eq!(f["https://repolex.ai/ontology/pan/mediaType"][0], "image/png", "original mediaType wins");
+    let fa = facts_map(&store, &a.pan_id);
+    assert_eq!(fa["https://repolex.ai/ontology/pan/blobPath"].len(), 1, "exactly one blobPath");
+    assert_eq!(fa["https://repolex.ai/ontology/pan/mediaType"].len(), 1, "exactly one mediaType");
 
-    // Delete removes the one and only blob — nothing orphaned.
-    store.delete(&a.cid).unwrap();
-    let blob = store.layout.blob_root.join(format!("{}.png", a.cid.rsplit(':').next().unwrap()));
-    // (path is date-sharded; just assert the store has no leftover blob files)
+    // Deleting one object leaves the other fully intact.
+    store.delete(&a.pan_id).unwrap();
+    assert!(store.facts_for(&a.pan_id).unwrap().is_empty());
+    assert!(store.get(&b.pan_id).is_ok(), "sibling object untouched by delete");
+    // And no blob is orphaned for the deleted one.
     let leftover = walk_files(&store.layout.blob_root);
-    assert!(leftover.is_empty(), "delete orphaned files: {leftover:?}");
-    let _ = blob;
+    assert_eq!(leftover.len(), 1, "exactly the sibling's blob remains: {leftover:?}");
 }
 
 /// #2/#6 — one malformed /search must not poison a valid index's dim for the
@@ -66,7 +66,7 @@ fn wrong_dim_query_does_not_poison_index() {
         let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
         v.iter().map(|x| x / n).collect()
     };
-    store.add_vector(&put.cid, "idx", &good).unwrap();
+    store.add_vector(&put.pan_id, "idx", &good).unwrap();
     store.flush().unwrap();
     drop(store);
 
@@ -78,11 +78,11 @@ fn wrong_dim_query_does_not_poison_index() {
     // Now a CORRECT-length query must still work.
     let hits = store.search("", &good, 3, "idx").unwrap();
     assert_eq!(hits.len(), 1, "valid dim-8 query rejected — index dim was poisoned");
-    assert_eq!(hits[0].cid, put.cid);
+    assert_eq!(hits[0].pan_id, put.pan_id);
 }
 
 /// #3/#4/#10 — a vector index name with path-traversal must be rejected, never
-/// reach Path::join and write outside the store.
+/// reach Path::join and write outside the store. Same for a traversal panId.
 #[test]
 fn traversal_index_name_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
@@ -93,12 +93,17 @@ fn traversal_index_name_is_rejected() {
 
     for evil in ["../escape", "a/b", "..", "/abs/path", "with\0nul", "dir/../x"] {
         assert!(
-            store.add_vector(&put.cid, evil, &v).is_err(),
+            store.add_vector(&put.pan_id, evil, &v).is_err(),
             "add_vector accepted a traversal index name: {evil:?}"
         );
         assert!(
             store.search("", &v, 1, evil).is_err(),
             "search accepted a traversal index name: {evil:?}"
+        );
+        // A panId is also a path component (sidecar filename) — same gate.
+        assert!(
+            store.add_vector(evil, "ok-index", &v).is_err(),
+            "add_vector accepted a traversal panId: {evil:?}"
         );
     }
     // Nothing was created outside the hnsw root by the rejected calls.
@@ -106,7 +111,7 @@ fn traversal_index_name_is_rejected() {
     assert!(!escaped.exists(), "a traversal write escaped the store");
 
     // A legitimate name still works.
-    assert!(store.add_vector(&put.cid, "qwen-vl-2b-2048", &v).is_ok());
+    assert!(store.add_vector(&put.pan_id, "qwen-vl-2b-2048", &v).is_ok());
 }
 
 /// #11/#14 — a standard Adobe-style PNG (root rdf:about="") must ingest, not
@@ -132,7 +137,7 @@ fn standard_adobe_xmp_ingests_and_garbage_is_skipped() {
 
     // Must NOT error — the whole point is real-world files ingest.
     let put = store.put(&adobe_png, Some("image/png"), Facts::new()).unwrap();
-    let f = facts_map(&store, &put.cid);
+    let f = facts_map(&store, &put.pan_id);
     assert_eq!(
         f.get("http://purl.org/dc/elements/1.1/title").map(|v| v.as_slice()),
         Some(["Adobe Title".to_string()].as_slice()),
@@ -142,11 +147,13 @@ fn standard_adobe_xmp_ingests_and_garbage_is_skipped() {
     // A PNG with a corrupt XMP chunk must store fine, just without facts.
     let garbage = pan::xmp::write_packet_into_png_bytes(&make_png(5), "<not xml at all <<<").unwrap();
     let put2 = store.put(&garbage, Some("image/png"), Facts::new()).unwrap();
-    assert!(store.get(&put2.cid).is_ok(), "garbage XMP must not fail the store");
+    assert!(store.get(&put2.pan_id).is_ok(), "garbage XMP must not fail the store");
 }
 
 /// #12/#15 — rdf:type from travel XMP survives ingest as an IRI, so a type
-/// query (`?s a copia:Sam3Region`) matches.
+/// query (`?s a copia:Sam3Region`) matches. Under assigned identity the region
+/// sub-subject is REBASED onto the receiving store's subject — the type query
+/// runs against the rebased IRI.
 #[test]
 fn travel_rdf_type_survives_as_iri_for_type_queries() {
     const COPIA: &str = "https://repolex.ai/ontology/kit/copia/";
@@ -157,28 +164,30 @@ fn travel_rdf_type_survives_as_iri_for_type_queries() {
     let put = store_a.put(&png, Some("image/png"), Facts::new()).unwrap();
 
     // Author a region sub-subject with an rdf:type onto the graph, re-stamp.
-    let region = format!("urn:{}/Region/wolf/01", put.cid);
+    let region = format!("{}/Region/wolf/01", put.subject);
     store_a
         .describe_subject(&region, "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", &format!("{COPIA}Sam3Region"), true)
         .unwrap();
     store_a
         .describe_subject(&region, &format!("{COPIA}regionDescriptor"), "wolf", false)
         .unwrap();
-    store_a.restamp(&put.cid).unwrap();
-    let (stamped, _) = store_a.get(&put.cid).unwrap();
+    store_a.restamp(&put.pan_id).unwrap();
+    let (stamped, _) = store_a.get(&put.pan_id).unwrap();
 
     // Travel to a fresh store.
     let dir_b = tempfile::tempdir().unwrap();
     std::fs::write(dir_b.path().join("pan.yml"), format!("prefixes:\n  copia: {COPIA}\n")).unwrap();
     let store_b = Pan::open(dir_b.path()).unwrap();
-    store_b.put(&stamped, Some("image/png"), Facts::new()).unwrap();
+    let put_b = store_b.put(&stamped, Some("image/png"), Facts::new()).unwrap();
 
-    // The type query must match — proves rdf:type ingested as an IRI.
+    // The region rebased onto store_b's subject; the type query must match
+    // there — proves rdf:type ingested as an IRI AND the rebase landed.
+    let region_b = format!("{}/Region/wolf/01", put_b.subject);
     let results = store_b
-        .query(&format!("ASK {{ <{region}> a <{COPIA}Sam3Region> }}"))
+        .query(&format!("ASK {{ <{region_b}> a <{COPIA}Sam3Region> }}"))
         .unwrap();
     match results {
-        pan::QueryResults::Boolean(b) => assert!(b, "rdf:type degraded to a string; type query fails"),
+        pan::QueryResults::Boolean(b) => assert!(b, "rdf:type degraded to a string or rebase failed; type query fails"),
         _ => panic!("expected ASK boolean"),
     }
 }
@@ -194,22 +203,32 @@ fn multi_namespace_sub_subject_survives_travel() {
     let store_a = Pan::open(dir_a.path()).unwrap();
     let png = make_png(7);
     let put = store_a.put(&png, Some("image/png"), Facts::new()).unwrap();
-    let region = format!("urn:{}/Region/sea/01", put.cid);
+    let region = format!("{}/Region/sea/01", put.subject);
     store_a.describe_subject(&region, &format!("{COPIA}regionDescriptor"), "sea", false).unwrap();
     store_a.describe_subject(&region, &format!("{DC}creator"), "w4r3z", false).unwrap();
-    store_a.restamp(&put.cid).unwrap();
-    let (stamped, _) = store_a.get(&put.cid).unwrap();
+    store_a.restamp(&put.pan_id).unwrap();
+    let (stamped, _) = store_a.get(&put.pan_id).unwrap();
 
     let dir_b = tempfile::tempdir().unwrap();
     std::fs::write(dir_b.path().join("pan.yml"), format!("prefixes:\n  copia: {COPIA}\n  dc: {DC}\n")).unwrap();
     let store_b = Pan::open(dir_b.path()).unwrap();
-    store_b.put(&stamped, Some("image/png"), Facts::new()).unwrap();
+    let put_b = store_b.put(&stamped, Some("image/png"), Facts::new()).unwrap();
 
-    let f: HashMap<String, Vec<String>> = store_b.facts_for(&region).unwrap().into_iter().collect();
-    assert_eq!(f.get(&format!("{COPIA}regionDescriptor")).map(|v| v.as_slice()), Some(["sea".to_string()].as_slice()));
-    assert_eq!(
-        f.get(&format!("{DC}creator")).map(|v| v.as_slice()),
-        Some(["w4r3z".to_string()].as_slice()),
+    // Region facts live at the REBASED IRI in store_b; read them via SPARQL
+    // (facts_for is panId-scoped; sub-subjects are plain graph nodes).
+    let region_b = format!("{}/Region/sea/01", put_b.subject);
+    let ask = |pred: &str, val: &str| -> bool {
+        match store_b
+            .query(&format!("ASK {{ <{region_b}> <{pred}> \"{val}\" }}"))
+            .unwrap()
+        {
+            pan::QueryResults::Boolean(b) => b,
+            _ => panic!("expected ASK boolean"),
+        }
+    };
+    assert!(ask(&format!("{COPIA}regionDescriptor"), "sea"));
+    assert!(
+        ask(&format!("{DC}creator"), "w4r3z"),
         "second-namespace fact dropped in the travel copy"
     );
 }

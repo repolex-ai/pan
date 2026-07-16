@@ -13,7 +13,7 @@
 //!   ├── oxigraph/               RDF graph store — ALWAYS here, NEVER relocated
 //!   ├── hnsw/                   vector index (index.usearch + keymap.json) — ALWAYS here
 //!   └── storage/                media root — DEFAULT here; the ONLY overridable
-//!       ├── blob/image/YYYY/MM/DD/<cid-hex>.png
+//!       ├── blob/image/YYYY/MM/DD/<panId>.png
 //!       └── vectors/<index>/... raw per-object .npy sidecars
 //! ```
 
@@ -66,12 +66,10 @@ impl PanLayout {
         }
     }
 
-    /// The raw `.npy` sidecar path for a cid in a named index:
-    /// `<vectors_root>/<index>/<cid-hex>.npy`. The hex is the cid without its
-    /// `sha256:` prefix — filenames never carry a colon.
-    pub fn vector_sidecar_path(&self, index_name: &str, cid: &str) -> PathBuf {
-        let hex = cid.rsplit(':').next().unwrap_or(cid);
-        self.vectors_root.join(index_name).join(format!("{hex}.npy"))
+    /// The raw `.npy` sidecar path for a panId in a named index:
+    /// `<vectors_root>/<index>/<panId>.npy`.
+    pub fn vector_sidecar_path(&self, index_name: &str, pan_id: &str) -> PathBuf {
+        self.vectors_root.join(index_name).join(format!("{pan_id}.npy"))
     }
 }
 
@@ -107,11 +105,11 @@ mod tests {
     }
 
     #[test]
-    fn vector_sidecar_strips_cid_scheme() {
+    fn vector_sidecar_is_panid_named() {
         let l = PanLayout::resolve(Path::new("/x"), None);
         assert_eq!(
-            l.vector_sidecar_path("my-index", "sha256:abcd12"),
-            PathBuf::from("/x/storage/vectors/my-index/abcd12.npy")
+            l.vector_sidecar_path("my-index", "abcd12xy"),
+            PathBuf::from("/x/storage/vectors/my-index/abcd12xy.npy")
         );
     }
 }
