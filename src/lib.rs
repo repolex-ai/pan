@@ -13,7 +13,7 @@
 //! - **panId** is the identity: an ASSIGNED short random id (8 base32 chars),
 //!   minted at put. NOT content-derived — two puts of the same bytes are two
 //!   different media objects with different ids. The subject IRI is a standard
-//!   full https IRI, `https://repolex.ai/resource/pan/image/<panId>`, written
+//!   full https IRI, `https://repolex.ai/pan/Image/<panId>`, written
 //!   once at put and looked up as data thereafter (never re-derived).
 //! - **Loud failures.** Unresolvable predicates and broken config are errors,
 //!   never silent drops.
@@ -77,24 +77,27 @@ fn validate_pan_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-/// The class path segment of a media subject IRI, from the MIME major type:
-/// `image/png` → `image` (subject `…/pan/image/<panId>`). Derivable and
-/// self-documenting; the precise MIME stays in `pan:mediaType`.
-fn media_class_segment(media_type: &str) -> &str {
-    media_type
-        .split('/')
-        .next()
-        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
-        .unwrap_or("media")
+/// The ONTOLOGY CLASS of a media object, from the MIME major type. This is
+/// the Capitalized class local-name from ontology/pan.ttl — it names both the
+/// instance-path segment (`…/pan/Image/<panId>`) and the `rdf:type` object
+/// (`pan:Image`). Only classes the ontology DECLARES are minted: image/* →
+/// Image; everything else falls back to the base class Media until its class
+/// (Audio, Video, …) is declared. The precise MIME stays in `pan:mediaType`.
+fn media_class(media_type: &str) -> &str {
+    match media_type.split('/').next() {
+        Some("image") => "Image",
+        _ => "Media",
+    }
 }
 
-/// Mint the subject IRI for a NEW media object — a standard full https IRI,
-/// `https://repolex.ai/resource/pan/image/<panId>`. No `urn:`, no store
-/// identity in the subject (the store is the scope). Minted exactly once, at
-/// put; every later lookup resolves the panId to this IRI via the graph.
+/// Mint the subject IRI for a NEW media object — the subtexture-wide shape
+/// `https://repolex.ai/pan/<Class>/<panId>` (e.g. `…/pan/Image/k7m2p9x4`).
+/// No `urn:`, no store identity in the subject (the store is the scope).
+/// Minted exactly once, at put; every later lookup resolves the panId to
+/// this IRI via the graph.
 fn media_subject_iri(media_type: &str, pan_id: &str) -> Result<NamedNode> {
-    let seg = media_class_segment(media_type);
-    NamedNode::new(format!("{PAN_MEDIA_NS}{seg}/{pan_id}"))
+    let class = media_class(media_type);
+    NamedNode::new(format!("{PAN_MEDIA_NS}{class}/{pan_id}"))
         .map_err(|e| anyhow!("invalid media subject IRI: {e}"))
 }
 
@@ -351,8 +354,16 @@ impl Pan {
         let rel_path = format!("{}/{shard}/{pan_id}.{ext}", PanLayout::BLOB_SUBPATH);
         let abs_path = self.layout.storage_root.join(&rel_path);
 
-        // Identity facts — Pan's own block.
+        // Identity facts — Pan's own block. The instance is TYPED against the
+        // kit ontology class (`a pan:Image`) — same class that names the path.
+        let rdf_type = NamedNode::new("http://www.w3.org/1999/02/22-rdf-syntax-ns#type").expect("rdf:type IRI");
         let mut quads = vec![
+            Quad::new(
+                subject.clone(),
+                rdf_type,
+                pan_iri(media_class(&media_type)),
+                GraphName::DefaultGraph,
+            ),
             self.quad(&subject, "panId", &pan_id),
             self.quad(&subject, "blobPath", &rel_path),
             self.quad(&subject, "createdAt", &created_at),

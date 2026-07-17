@@ -29,7 +29,7 @@ pan: a owl:Ontology ;
 
 pan:Media a owl:Class ;
     rdfs:label "Media" ;
-    rdfs:comment "A stored media object, identified by an assigned panId. Subject IRIs are standard full https IRIs under the /resource/ instance base: https://repolex.ai/resource/pan/<class-segment>/<panId> (e.g. …/resource/pan/image/k7m2p9x4). Vocabulary stays under /ontology/." .
+    rdfs:comment "A stored media object, identified by an assigned panId. Subject IRIs follow the subtexture-wide instance shape https://repolex.ai/<application>/<Class>/<instanceId> — for Pan: https://repolex.ai/pan/Image/<panId>, with Image the class declared here. Vocabulary stays under /ontology/. Instances are typed (rdf:type) against these classes." .
 
 pan:Image a owl:Class ;
     rdfs:subClassOf pan:Media ;

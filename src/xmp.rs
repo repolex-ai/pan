@@ -591,7 +591,7 @@ mod tests {
         }];
         // A sub-subject spanning TWO namespaces — copia: AND dc: — to prove the
         // multi-namespace fix: neither is dropped from the travel copy.
-        const SUBJ: &str = "https://repolex.ai/resource/pan/image/abc123xy";
+        const SUBJ: &str = "https://repolex.ai/pan/Image/abc123xy";
         let subs = vec![SubSubjectBlock {
             about: format!("{SUBJ}/Region/wolf/01"),
             rdf_type: format!("{COPIA}Sam3Region"),

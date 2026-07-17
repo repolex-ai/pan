@@ -64,7 +64,7 @@ fn full_store_describe_query_search_roundtrip() {
     assert_eq!(wolf.pan_id.len(), 8, "panId is a short assigned id");
     assert_eq!(
         wolf.subject,
-        format!("https://repolex.ai/resource/pan/image/{}", wolf.pan_id),
+        format!("https://repolex.ai/pan/Image/{}", wolf.pan_id),
         "subject is a standard full https IRI"
     );
 
@@ -88,6 +88,11 @@ fn full_store_describe_query_search_roundtrip() {
         facts_map["https://repolex.ai/ontology/pan/panId"],
         vec![wolf.pan_id.clone()],
         "pan:panId identity fact present"
+    );
+    assert_eq!(
+        facts_map["http://www.w3.org/1999/02/22-rdf-syntax-ns#type"],
+        vec!["https://repolex.ai/ontology/pan/Image".to_string()],
+        "instance is typed against the kit ontology class"
     );
 
     // ── the stamped XMP mirror carries the app facts (travel copy) ──

@@ -64,7 +64,7 @@ pub struct MediaCreated {
     /// the same bytes are two different media objects).
     pub pan_id: String,
     /// The full subject IRI minted for this object,
-    /// e.g. `https://repolex.ai/resource/pan/image/<panId>`.
+    /// e.g. `https://repolex.ai/pan/Image/<panId>`.
     pub subject: String,
     pub blob_path: String,
     pub created_at: String,
