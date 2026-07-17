@@ -136,7 +136,7 @@ mod tests {
         // The anti-silent-drop contract: a typo'd prefix is an ERROR, not a
         // vanished fact.
         let facts = Facts::new().with("copai:sceneMood", "calm");
-        let subj = NamedNode::new("https://repolex.ai/ontology/pan/image/abc123xy").unwrap();
+        let subj = NamedNode::new("https://repolex.ai/resource/pan/image/abc123xy").unwrap();
         let err = facts.into_quads(&subj, &prefixes(), "pan").unwrap_err();
         assert!(err.to_string().contains("unknown prefix 'copai'"), "got: {err}");
     }
@@ -146,7 +146,7 @@ mod tests {
         let mut facts = Facts::new();
         facts.insert("dc:subject", "wolves");
         facts.insert("dc:subject", "forest");
-        let subj = NamedNode::new("https://repolex.ai/ontology/pan/image/abc123xy").unwrap();
+        let subj = NamedNode::new("https://repolex.ai/resource/pan/image/abc123xy").unwrap();
         let quads = facts.into_quads(&subj, &prefixes(), "pan").unwrap();
         assert_eq!(quads.len(), 2);
     }

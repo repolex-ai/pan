@@ -64,7 +64,7 @@ fn full_store_describe_query_search_roundtrip() {
     assert_eq!(wolf.pan_id.len(), 8, "panId is a short assigned id");
     assert_eq!(
         wolf.subject,
-        format!("https://repolex.ai/ontology/pan/image/{}", wolf.pan_id),
+        format!("https://repolex.ai/resource/pan/image/{}", wolf.pan_id),
         "subject is a standard full https IRI"
     );
 

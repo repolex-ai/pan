@@ -13,7 +13,7 @@
 //! - **panId** is the identity: an ASSIGNED short random id (8 base32 chars),
 //!   minted at put. NOT content-derived — two puts of the same bytes are two
 //!   different media objects with different ids. The subject IRI is a standard
-//!   full https IRI, `https://repolex.ai/ontology/pan/image/<panId>`, written
+//!   full https IRI, `https://repolex.ai/resource/pan/image/<panId>`, written
 //!   once at put and looked up as data thereafter (never re-derived).
 //! - **Loud failures.** Unresolvable predicates and broken config are errors,
 //!   never silent drops.
@@ -89,7 +89,7 @@ fn media_class_segment(media_type: &str) -> &str {
 }
 
 /// Mint the subject IRI for a NEW media object — a standard full https IRI,
-/// `https://repolex.ai/ontology/pan/image/<panId>`. No `urn:`, no store
+/// `https://repolex.ai/resource/pan/image/<panId>`. No `urn:`, no store
 /// identity in the subject (the store is the scope). Minted exactly once, at
 /// put; every later lookup resolves the panId to this IRI via the graph.
 fn media_subject_iri(media_type: &str, pan_id: &str) -> Result<NamedNode> {

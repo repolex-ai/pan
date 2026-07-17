@@ -13,7 +13,7 @@ pan: a owl:Ontology ;
 
 pan:Media a owl:Class ;
     rdfs:label "Media" ;
-    rdfs:comment "A stored media object, identified by an assigned panId. Subject IRIs are standard full https IRIs: https://repolex.ai/ontology/pan/<class-segment>/<panId> (e.g. …/pan/image/k7m2p9x4)." .
+    rdfs:comment "A stored media object, identified by an assigned panId. Subject IRIs are standard full https IRIs under the /resource/ instance base: https://repolex.ai/resource/pan/<class-segment>/<panId> (e.g. …/resource/pan/image/k7m2p9x4). Vocabulary stays under /ontology/." .
 
 pan:Image a owl:Class ;
     rdfs:subClassOf pan:Media ;

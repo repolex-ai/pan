@@ -16,12 +16,13 @@ use std::path::{Path, PathBuf};
 pub const PAN_NS: &str = "https://repolex.ai/ontology/pan/";
 
 /// The a-box (instance) base: media subjects mint as
-/// `{PAN_MEDIA_NS}<class-segment>/<panId>` (e.g. `…/pan/image/k7m2p9x4`).
-/// Deliberately a SEPARATE constant from `PAN_NS` (the t-box/vocabulary base)
-/// even though they coincide today — vocabulary and instances have different
-/// lifecycles, and relocating instances (e.g. under a `/resource/` base) must
-/// never move where the classes and predicates live.
-pub const PAN_MEDIA_NS: &str = "https://repolex.ai/ontology/pan/";
+/// `{PAN_MEDIA_NS}<class-segment>/<panId>` (e.g. `…/resource/pan/image/k7m2p9x4`).
+/// Instances live under `/resource/` (the conventional linked-data split from
+/// the `/ontology/` t-box; Rob Day-50) — a SEPARATE constant from `PAN_NS`
+/// because vocabulary and instances have different lifecycles. The IRI is
+/// stable identity; a future resolver (Syrinx) can answer GET on it and
+/// redirect to wherever the asset currently lives (Cool-URIs dereference).
+pub const PAN_MEDIA_NS: &str = "https://repolex.ai/resource/pan/";
 
 pub const DEFAULT_STORAGE_ID: &str = "default";
 pub const DEFAULT_INDEX_ID: &str = "default";
