@@ -59,8 +59,16 @@ fn parse_flags(rest: &[String]) -> Result<Args> {
 fn usage() -> ! {
     eprintln!(
         "pan {} — a standalone media store that speaks git-lex\n\n\
-         USAGE:\n  pan serve [--root DIR] [--bind ADDR] [--port N]\n  pan info  [--root DIR]\n\n\
-         Defaults: --root ~/.pan  --bind {DEFAULT_BIND}  --port {DEFAULT_PORT}\n\
+         USAGE:\n  \
+           pan serve  [--root DIR] [--bind ADDR] [--port N]\n  \
+           pan info   [--root DIR]\n  \
+           pan import --source POOL_DIR [--root DIR] [--limit N] [--per-month N] [--dry-run]\n\n\
+         Defaults: --root ~/.pan  --bind {DEFAULT_BIND}  --port {DEFAULT_PORT}\n\n\
+         `import` migrates a Pool store into Pan: media is COPIED (the source is\n\
+         never modified), each enricher's output becomes a data file beside the\n\
+         blob, and the image carries a reference to every one of them.\n\
+         --per-month samples evenly within each month, so a short run still meets\n\
+         every metadata shape the source contains.\n\n\
          Swagger (the interface spec): http://{DEFAULT_BIND}:{DEFAULT_PORT}/swagger-ui",
         env!("CARGO_PKG_VERSION")
     );
@@ -102,6 +110,92 @@ fn main() -> Result<()> {
             }
             for (name, s) in stats {
                 println!("index {name}: dim={} count={}", s.dim, s.count);
+            }
+            Ok(())
+        }
+        "import" => {
+            let mut root = default_root();
+            let mut source: Option<PathBuf> = None;
+            let mut limit: Option<usize> = None;
+            let mut per_month: Option<usize> = None;
+            let mut dry_run = false;
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--root" => {
+                        i += 1;
+                        root = PathBuf::from(rest.get(i).ok_or_else(|| anyhow!("--root needs a path"))?);
+                    }
+                    "--source" => {
+                        i += 1;
+                        source = Some(PathBuf::from(
+                            rest.get(i).ok_or_else(|| anyhow!("--source needs a path"))?,
+                        ));
+                    }
+                    "--limit" => {
+                        i += 1;
+                        limit = Some(rest.get(i).ok_or_else(|| anyhow!("--limit needs a number"))?.parse()?);
+                    }
+                    "--per-month" => {
+                        i += 1;
+                        per_month =
+                            Some(rest.get(i).ok_or_else(|| anyhow!("--per-month needs a number"))?.parse()?);
+                    }
+                    "--dry-run" => dry_run = true,
+                    other => return Err(anyhow!("unknown flag: {other}")),
+                }
+                i += 1;
+            }
+            let source = source.ok_or_else(|| anyhow!("import needs --source POOL_DIR"))?;
+            if !source.join("blob/image").is_dir() {
+                return Err(anyhow!(
+                    "{} does not look like a Pool store (no blob/image)",
+                    source.display()
+                ));
+            }
+
+            let pan = pan::Pan::open(&root)?;
+            let opts = pan::import::ImportOptions { source_root: source, limit, per_month, dry_run };
+            let stats = pan::import::import_pool(&pan, &opts)?;
+
+            println!("\n── import {} ──", if dry_run { "(dry run)" } else { "complete" });
+            println!("scanned:  {}", stats.scanned);
+            println!("imported: {}", stats.imported);
+            if stats.skipped_already > 0 {
+                println!("skipped:  {} (already imported)", stats.skipped_already);
+            }
+            if stats.failed > 0 {
+                println!("FAILED:   {}", stats.failed);
+            }
+            println!(
+                "records:  {} regions · {} poses · {} captions · {} vectors · {} pose overlays",
+                stats.regions, stats.poses, stats.captions, stats.vectors, stats.overlays
+            );
+            if !stats.by_month.is_empty() {
+                println!("\nby month:");
+                for (m, n) in &stats.by_month {
+                    println!("  {m}  {n}");
+                }
+            }
+            if !stats.passthrough_fields.is_empty() {
+                println!("\napplication fields carried through (name × images):");
+                let mut rows: Vec<_> = stats.passthrough_fields.iter().collect();
+                rows.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+                for (name, n) in rows.iter().take(40) {
+                    println!("  {n:>5}  {name}");
+                }
+                if rows.len() > 40 {
+                    println!("  … {} more", rows.len() - 40);
+                }
+            }
+            if !stats.warnings.is_empty() {
+                println!("\nwarnings ({}):", stats.warnings.len());
+                for w in stats.warnings.iter().take(20) {
+                    println!("  {w}");
+                }
+                if stats.warnings.len() > 20 {
+                    println!("  … {} more", stats.warnings.len() - 20);
+                }
             }
             Ok(())
         }

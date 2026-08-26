@@ -113,7 +113,7 @@ pub struct QueryBody {
 #[derive(Deserialize, ToSchema)]
 pub struct SearchBody {
     /// SPARQL graph pattern gating the candidate set. `?s` is the media
-    /// subject and `?id` is pre-bound via `?s pan:panId ?id`. Empty/absent =
+    /// subject and `?id` is pre-bound via `?s pan:id ?id`. Empty/absent =
     /// no graph gate (pure kNN).
     #[serde(default)]
     pub r#where: String,

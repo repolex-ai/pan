@@ -10,7 +10,7 @@
 //!   and every consumer tripped on it (`?s ?p ?o` read zero). One store = one
 //!   media graph; `SELECT ?s ?p ?o` just works. Graph names carrying identity
 //!   was the disease; Pan doesn't have graph names at all.
-//! - **panId** is the identity: an ASSIGNED short random id (8 base32 chars),
+//! - **pan:id** is the identity: an ASSIGNED short random id (8 base32 chars),
 //!   minted at put. NOT content-derived — two puts of the same bytes are two
 //!   different media objects with different ids. The subject IRI is a standard
 //!   full https IRI, `https://repolex.ai/pan/Image/<panId>`, written
@@ -32,7 +32,9 @@ use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 
 pub mod config;
 pub mod detectors;
+pub mod enrich;
 pub mod facts;
+pub mod import;
 pub mod layout;
 pub mod npy;
 pub mod serve;
@@ -56,7 +58,7 @@ const PAN_ID_LEN: usize = 8;
 /// mutable description), not the pixels, so a hash would be a collision
 /// footgun, not a feature. Collision safety is the caller's mint loop
 /// (`Pan::mint_pan_id` retries against the store).
-fn gen_pan_id() -> String {
+pub(crate) fn gen_pan_id() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     (0..PAN_ID_LEN)
@@ -67,7 +69,7 @@ fn gen_pan_id() -> String {
 /// A caller-supplied panId reaches filesystem paths (vector sidecars) — reject
 /// anything that isn't a bare token before it touches `Path::join` (the same
 /// discipline as [`validate_index_name`]).
-fn validate_pan_id(id: &str) -> Result<()> {
+pub(crate) fn validate_pan_id(id: &str) -> Result<()> {
     if id.is_empty() || id.len() > 64 {
         return Err(anyhow!("invalid panId {id:?}"));
     }
@@ -83,7 +85,7 @@ fn validate_pan_id(id: &str) -> Result<()> {
 /// (`pan:Image`). Only classes the ontology DECLARES are minted: image/* →
 /// Image; everything else falls back to the base class Media until its class
 /// (Audio, Video, …) is declared. The precise MIME stays in `pan:mediaType`.
-fn media_class(media_type: &str) -> &str {
+pub(crate) fn media_class(media_type: &str) -> &str {
     match media_type.split('/').next() {
         Some("image") => "Image",
         _ => "Media",
@@ -95,13 +97,13 @@ fn media_class(media_type: &str) -> &str {
 /// No `urn:`, no store identity in the subject (the store is the scope).
 /// Minted exactly once, at put; every later lookup resolves the panId to
 /// this IRI via the graph.
-fn media_subject_iri(media_type: &str, pan_id: &str) -> Result<NamedNode> {
+pub(crate) fn media_subject_iri(media_type: &str, pan_id: &str) -> Result<NamedNode> {
     let class = media_class(media_type);
     NamedNode::new(format!("{PAN_MEDIA_NS}{class}/{pan_id}"))
         .map_err(|e| anyhow!("invalid media subject IRI: {e}"))
 }
 
-fn pan_iri(local: &str) -> NamedNode {
+pub(crate) fn pan_iri(local: &str) -> NamedNode {
     NamedNode::new(format!("{PAN_NS}{local}")).expect("valid pan IRI")
 }
 
@@ -302,13 +304,13 @@ impl Pan {
     }
 
     /// Resolve a panId to its subject IRI. The IRI is DATA, written once at
-    /// put and looked up here via `pan:panId` — never re-derived, so the mint
+    /// put and looked up here via `pan:id` — never re-derived, so the mint
     /// scheme can evolve without breaking lookups of existing objects.
     pub fn subject_for(&self, pan_id: &str) -> Result<Option<NamedNode>> {
         let obj = Literal::new_simple_literal(pan_id);
         for quad in self.store.quads_for_pattern(
             None,
-            Some(pan_iri("panId").as_ref()),
+            Some(pan_iri("id").as_ref()),
             Some(obj.as_ref().into()),
             Some(GraphName::DefaultGraph.as_ref()),
         ) {
@@ -364,7 +366,7 @@ impl Pan {
                 pan_iri(media_class(&media_type)),
                 GraphName::DefaultGraph,
             ),
-            self.quad(&subject, "panId", &pan_id),
+            self.quad(&subject, "id", &pan_id),
             self.quad(&subject, "blobPath", &rel_path),
             self.quad(&subject, "createdAt", &created_at),
             self.quad(&subject, "mediaType", &media_type),
@@ -374,7 +376,7 @@ impl Pan {
         // carries its descriptions with it). pan: identity fields are skipped —
         // Pan re-authors those; a foreign store's blobPath/panId are not facts
         // about THIS object. Sub-subjects (regions etc.) were scoped under the
-        // SOURCE object's subject; the source packet's own pan:panId tells us
+        // SOURCE object's subject; the source packet's own pan:id tells us
         // where that scope starts, so they REBASE onto the new subject and stay
         // query/delete-reachable here. A malformed foreign packet must NOT fail
         // the store — media-in is the job; it is logged and the bytes still land.
@@ -385,7 +387,7 @@ impl Pan {
                         let source_pan_id: Option<String> = blocks
                             .iter()
                             .find(|b| b.subject.is_none())
-                            .and_then(|b| b.facts.iter().find(|(p, _)| p == &format!("{PAN_NS}panId")))
+                            .and_then(|b| b.facts.iter().find(|(p, _)| p == &format!("{PAN_NS}id")))
                             .and_then(|(_, v)| v.first().map(|t| t.value().to_string()));
                         for block in &blocks {
                             let subj = match &block.subject {
@@ -464,6 +466,40 @@ impl Pan {
             blob_path: rel_path,
             created_at,
         })
+    }
+
+    /// Insert quads directly. The migration path: an importer has already
+    /// assembled every statement (identity, passthrough, enrichment) and needs
+    /// them landed as one batch.
+    pub fn insert_quads(&self, quads: &[Quad]) -> Result<()> {
+        for q in quads {
+            self.store.insert(q.as_ref()).context("insert quad")?;
+        }
+        Ok(())
+    }
+
+    /// Mint a fresh, unused id. Public so an importer can assign identity
+    /// before it has anything to store.
+    pub fn new_id(&self) -> Result<String> {
+        self.mint_pan_id()
+    }
+
+    /// Whether any media in this store was imported from `source` — the
+    /// re-run guard, so an interrupted migration resumes instead of
+    /// duplicating (identity is assigned per put, so a second import of the
+    /// same file would otherwise silently create a second object).
+    pub fn imported_from(&self, source: &str) -> Result<bool> {
+        let obj = Literal::new_simple_literal(source);
+        Ok(self
+            .store
+            .quads_for_pattern(
+                None,
+                Some(pan_iri("importedFrom").as_ref()),
+                Some(obj.as_ref().into()),
+                Some(GraphName::DefaultGraph.as_ref()),
+            )
+            .next()
+            .is_some())
     }
 
     /// Assert one triple on an arbitrary subject IRI. `object_is_iri` picks
@@ -716,7 +752,7 @@ impl Pan {
     }
 
     /// Hybrid query — THE reason Pan exists. SPARQL `where` (must constrain
-    /// `?s`, which binds `?id` via `pan:panId`) gates the candidate set;
+    /// `?s`, which binds `?id` via `pan:id`) gates the candidate set;
     /// usearch kNN ranks by cosine similarity to `like`. Strategy A: pre-filter
     /// then search, joined at the application layer by the panId↔key map — no
     /// custom SPARQL UDF. Lifted from Pool with one simplification: facts live
@@ -731,7 +767,7 @@ impl Pan {
         let q = format!(
             "{}
              SELECT DISTINCT ?id WHERE {{
-               ?s pan:panId ?id .
+               ?s pan:id ?id .
                {where_clause}
              }}",
             self.prefix_prologue()
@@ -884,9 +920,63 @@ impl Pan {
             None
         };
 
+        let all_facts = self.facts_for(pan_id)?;
+        let pan_field = |local: &str| -> Option<String> {
+            all_facts
+                .iter()
+                .find(|(p, _)| p == &format!("{PAN_NS}{local}"))
+                .and_then(|(_, v)| v.first().cloned())
+        };
+
+        // Enrichment references: follow each reference predicate to its
+        // Enrichment node and read back what that node declares. The packet is
+        // the image's own index of what exists for it, rebuilt from the graph
+        // so the two cannot disagree.
+        let mut enrichment: Vec<(String, Vec<enrich::EnrichmentRef>)> = Vec::new();
+        for ref_local in ["regionData", "poseData", "captionData", "vectorData"] {
+            let mut refs: Vec<enrich::EnrichmentRef> = Vec::new();
+            for (pred, values) in &all_facts {
+                if pred != &format!("{PAN_NS}{ref_local}") {
+                    continue;
+                }
+                for node_iri in values {
+                    let Ok(node) = NamedNode::new(node_iri.as_str()) else { continue };
+                    let mut got = enrich::EnrichmentRef {
+                        id: String::new(),
+                        model: String::new(),
+                        path: String::new(),
+                        count: 0,
+                    };
+                    for q in self.store.quads_for_pattern(
+                        Some((&node).into()),
+                        None,
+                        None,
+                        Some(GraphName::DefaultGraph.as_ref()),
+                    ) {
+                        let q = q.context("read enrichment reference")?;
+                        let v = term_str(&q.object);
+                        match q.predicate.as_str().strip_prefix(PAN_NS) {
+                            Some("id") => got.id = v,
+                            Some("model") => got.model = v,
+                            Some("path") => got.path = v,
+                            Some("count") => got.count = v.parse().unwrap_or(0),
+                            _ => {}
+                        }
+                    }
+                    if !got.path.is_empty() {
+                        refs.push(got);
+                    }
+                }
+            }
+            refs.sort_by(|a, b| a.path.cmp(&b.path));
+            if !refs.is_empty() {
+                enrichment.push((ref_local.to_string(), refs));
+            }
+        }
+
         // Root facts → app blocks (pan: identity fields re-authored, not copied).
         let mut app_fields: HashMap<(String, String), Vec<(String, xmp::FieldValue)>> = HashMap::new();
-        for (pred, values) in self.facts_for(pan_id)? {
+        for (pred, values) in all_facts.iter().cloned() {
             if pred.starts_with(PAN_NS) {
                 continue;
             }
@@ -964,7 +1054,18 @@ impl Pan {
         }
         sub_blocks.sort_by(|a, b| a.about.cmp(&b.about));
 
-        Ok(xmp::build_packet(pan_id, blob_path, created_at, &app_blocks, &sub_blocks))
+        Ok(xmp::build_packet(&xmp::ImagePacket {
+            pan_id: pan_id.to_string(),
+            blob_path: blob_path.to_string(),
+            created_at: created_at.to_string(),
+            media_type: pan_field("mediaType").unwrap_or_default(),
+            width: pan_field("width").and_then(|v| v.parse().ok()),
+            height: pan_field("height").and_then(|v| v.parse().ok()),
+            caption: pan_field("caption"),
+            enrichment,
+            app_blocks,
+            sub_subjects: sub_blocks,
+        }))
     }
 
     /// Persist dirty vector indexes. Called on Drop too.

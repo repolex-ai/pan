@@ -3,58 +3,244 @@
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
 
-# Pan base ontology v0.1 — the vocabulary Pan itself authors about stored media.
-# App ontologies (copia etc.) are EXTERNAL: installed beside the store, read as
-# vocabulary, never vendored here. Pan's own predicate space is infrastructure.
+# Pan base ontology v0.2 — identity + location + provenance (v0.1) plus the
+# ENRICHMENT layer: the generic, model-derived facts about stored pixels.
 #
-# DEFERRED, NOT ABSENT (v0.1 models the identity/location/provenance layer only;
-# the following are Pan-base vocabulary whose modeling is deferred, so silence
-# here must not be read as "Pan doesn't do this"):
-#   - SEARCH LAYER (v0.2): vector/embedding/index terms — "this object has an
-#     embedding in index X of dim N." The fusion search itself does NOT need
-#     these (the graph↔vector join is the panId↔key map at the app layer); the
-#     vocabulary is for QUERYABILITY — e.g. "which objects lack an embedding."
-#     Co-design with tr1p.lex (2026_07_16_PAN_ONTOLOGY_REVIEW Finding 1).
-#   - DETECTOR / STAGE STATUS: per-role outcome facts (embed: ok / skipped /
-#     miss) — first-class facts about a Media object, currently Rust-only.
-#   - pan:storageId: conditionally needed ONLY if multiple stores' graphs are
-#     ever merged (store scope is ambient within one store). Defined home is
-#     HERE so federation never invents it ad-hoc at the join.
-#   - Extended media classes: Audio/Video/Pdf as siblings of Image under Media.
+# Application ontologies (copia etc.) stay EXTERNAL — installed beside the
+# store, read as vocabulary, carried through the packet untouched. Pan's own
+# predicate space is infrastructure: what a model saw, where its output lives.
+#
+# WHERE THE DATA LIVES (Rob, 2026-08-25). Bulk enrichment output does NOT ride
+# inside the image. Each enricher writes its own DATA FILE beside the blob
+# (sam3/, pose/, caption/, vectors/) and the image's XMP carries one
+# REFERENCE per output — an pan:Enrichment record naming the model, the file,
+# and how many items are in it. The image therefore stays light and readable,
+# while never depending on filesystem convention to find its own data: every
+# path is declared in the packet.
+#
+# TWO LAYERS, ONE VOCABULARY:
+#   IMAGE PACKET   <image> pan:regionData [ pan:model "sam3" ;
+#                                           pan:path "sam3/…/<id>.xml" ;
+#                                           pan:count 15 ]
+#   DATA FILE      <image> pan:region <…/pan/Region/<id>> ;
+#                  <…/pan/Region/<id>> a pan:Region ; pan:polygon "…" ; …
+# Both parse into the same graph with the same reader — a data file is just
+# triples about the image, written where the image says they are.
+#
+# DEFERRED, NOT ABSENT:
+#   - ENRICHMENT STATUS: per-role outcome facts (ran / failed / not
+#     configured). Presence-of-reference already distinguishes "ran" from
+#     "never ran"; the failed-vs-unconfigured split waits until the detector
+#     wiring shows its real failure shapes.
+#   - pan:storageId: needed ONLY if several stores' graphs are ever merged
+#     (store scope is ambient within one store). Home declared here so a
+#     future federation never invents it at the join.
+#   - Audio/Video/Pdf as siblings of Image under Media.
 
 pan: a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
-    owl:versionInfo "0.1.0" ;
-    rdfs:comment "Identity + location + provenance facts Pan authors for every stored media object." .
+    owl:versionInfo "0.2.0" ;
+    rdfs:comment "Identity, location, provenance and enrichment facts Pan authors for stored media." .
+
+# ── Media classes ──────────────────────────────────────────────────────────
 
 pan:Media a owl:Class ;
     rdfs:label "Media" ;
-    rdfs:comment "A stored media object, identified by an assigned panId. Subject IRIs follow the subtexture-wide instance shape https://repolex.ai/<application>/<Class>/<instanceId> — for Pan: https://repolex.ai/pan/Image/<panId>, with Image the class declared here. Vocabulary stays under /ontology/. Instances are typed (rdf:type) against these classes." .
+    rdfs:comment "A stored media object. Subject IRIs follow the subtexture-wide instance shape https://repolex.ai/<application>/<Class>/<instanceId> — for Pan: https://repolex.ai/pan/Image/<id>, with the CONCRETE class (Image) naming both the path segment and the rdf:type. Vocabulary stays under /ontology/." .
 
 pan:Image a owl:Class ;
     rdfs:subClassOf pan:Media ;
-    rdfs:label "Image" .
+    rdfs:label "Image" ;
+    rdfs:comment "Media whose bytes are a raster image. Region and pose enrichment are declared on Image, not Media: they are facts about PIXELS." .
 
-pan:panId a owl:DatatypeProperty ;
-    rdfs:domain pan:Media ;
+# ── Enrichment classes ─────────────────────────────────────────────────────
+# Every enrichment record is a first-class node with its own assigned id and
+# its own angle-bracket IRI https://repolex.ai/pan/<Class>/<id>. The producing
+# model is DATA (pan:model), never part of a class or property name — a new
+# model must never mean new vocabulary (the copia:qwen35vl9bCaption lesson).
+
+pan:Enrichment a owl:Class ;
+    rdfs:label "Enrichment" ;
+    rdfs:comment "A REFERENCE, written in the image's packet, to one enricher's output file: which model produced it, where the file is, how many items it holds. The image's own index of what exists for it." .
+
+pan:Region a owl:Class ;
+    rdfs:label "Region" ;
+    rdfs:comment "A segmented region of an image — an outline around one detected thing, with the model's own word for it in pan:descriptor. Produced by a segmentation model named in pan:model." .
+
+pan:Pose a owl:Class ;
+    rdfs:label "Pose" ;
+    rdfs:comment "One detected body pose: a skeleton of keypoints for one figure." .
+
+pan:Caption a owl:Class ;
+    rdfs:label "Caption" ;
+    rdfs:comment "One model's prose caption of an image. Several per image is the normal case — one per captioning model, all kept. Re-captioning with the same model replaces that model's record." .
+
+pan:Embedding a owl:Class ;
+    rdfs:label "Embedding" ;
+    rdfs:comment "A vector embedding of the media: which model, what dimension, where the vector file is. The vector itself never enters the packet — thousands of floats serve no reader and would exhaust JPEG's 64KB XMP segment." .
+
+pan:Thumbnail a owl:Class ;
+    rdfs:label "Thumbnail" ;
+    rdfs:comment "A reduced-size rendition Pan generated from the media." .
+
+# ── Enrichment references (image packet → data file) ───────────────────────
+
+pan:regionData a owl:ObjectProperty ;
+    rdfs:domain pan:Image ; rdfs:range pan:Enrichment ;
+    rdfs:label "region data" ;
+    rdfs:comment "Reference to a segmentation output file holding this image's regions." .
+
+pan:poseData a owl:ObjectProperty ;
+    rdfs:domain pan:Image ; rdfs:range pan:Enrichment ;
+    rdfs:label "pose data" ;
+    rdfs:comment "Reference to a pose-detection output file holding this image's poses." .
+
+pan:captionData a owl:ObjectProperty ;
+    rdfs:domain pan:Media ; rdfs:range pan:Enrichment ;
+    rdfs:label "caption data" ;
+    rdfs:comment "Reference to one captioning model's output file. One per model." .
+
+pan:vectorData a owl:ObjectProperty ;
+    rdfs:domain pan:Media ; rdfs:range pan:Enrichment ;
+    rdfs:label "vector data" ;
+    rdfs:comment "Reference to an embedding vector file (.npy). One per embedding model." .
+
+# ── Enrichment membership (data file → items) ──────────────────────────────
+
+pan:region a owl:ObjectProperty ;
+    rdfs:domain pan:Image ; rdfs:range pan:Region ;
+    rdfs:label "region" .
+
+pan:pose a owl:ObjectProperty ;
+    rdfs:domain pan:Image ; rdfs:range pan:Pose ;
+    rdfs:label "pose" .
+
+pan:captionItem a owl:ObjectProperty ;
+    rdfs:domain pan:Media ; rdfs:range pan:Caption ;
+    rdfs:label "caption item" ;
+    rdfs:comment "Links media to one Caption record. Named captionItem because pan:caption carries the current caption TEXT on the media itself — NAMING OPEN, one-line change if a better word is chosen." .
+
+pan:embedding a owl:ObjectProperty ;
+    rdfs:domain pan:Media ; rdfs:range pan:Embedding ;
+    rdfs:label "embedding" .
+
+pan:thumbnail a owl:ObjectProperty ;
+    rdfs:domain pan:Media ; rdfs:range pan:Thumbnail ;
+    rdfs:label "thumbnail" .
+
+# ── Shared fields ──────────────────────────────────────────────────────────
+
+pan:id a owl:DatatypeProperty ;
     rdfs:range xsd:string ;
-    rdfs:label "pan id" ;
-    rdfs:comment "The ASSIGNED identity of a media object: short random base32, minted at put. Not content-derived — two puts of the same bytes are two different objects. Not for dedup, comparison, or cross-system correlation." .
+    rdfs:label "id" ;
+    rdfs:comment "THE assigned identifier of any pan node — short random base32, Media included (Rob, 08-20: one standard, no per-class variants, replaces v0.1's pan:panId). Carries the bare {identifier}; full identity is the angle-bracket IRI https://repolex.ai/pan/<Class>/<id>. Not content-derived: two puts of identical bytes are two objects." .
+
+pan:model a owl:DatatypeProperty ;
+    rdfs:range xsd:string ;
+    rdfs:label "model" ;
+    rdfs:comment "The external model that produced this record, as the endpoint reported it (sam3, dw_openpose_full, qwen3.5-vl-9b). Data, not identity — models change, classes do not." .
+
+pan:path a owl:DatatypeProperty ;
+    rdfs:range xsd:string ;
+    rdfs:label "path" ;
+    rdfs:comment "Location of a file this record refers to, relative to the store's storage root. Declared, never inferred from a naming convention." .
+
+pan:count a owl:DatatypeProperty ;
+    rdfs:domain pan:Enrichment ; rdfs:range xsd:integer ;
+    rdfs:label "count" ;
+    rdfs:comment "How many items the referenced file holds — so the image can answer 'how many regions?' without opening anything, and a short read is detectable." .
+
+# ── Media fields ───────────────────────────────────────────────────────────
 
 pan:blobPath a owl:DatatypeProperty ;
-    rdfs:domain pan:Media ;
-    rdfs:range xsd:string ;
+    rdfs:domain pan:Media ; rdfs:range xsd:string ;
     rdfs:label "blob path" ;
-    rdfs:comment "On-disk location relative to the store's storage root." .
+    rdfs:comment "On-disk location of the media bytes, relative to the storage root." .
 
 pan:mediaType a owl:DatatypeProperty ;
-    rdfs:domain pan:Media ;
-    rdfs:range xsd:string ;
+    rdfs:domain pan:Media ; rdfs:range xsd:string ;
     rdfs:label "media type" ;
     rdfs:comment "MIME type of the stored bytes, e.g. image/png." .
 
 pan:createdAt a owl:DatatypeProperty ;
-    rdfs:domain pan:Media ;
-    rdfs:range xsd:dateTime ;
+    rdfs:domain pan:Media ; rdfs:range xsd:dateTime ;
     rdfs:label "created at" ;
-    rdfs:comment "RFC3339 timestamp of when the object entered this store. CONTRACT: this is the cross-store time-anchor shared with pool:createdAt and weave:timestamp (all xsd:dateTime) — cross-graph time-window joins depend on the shared datatype; never narrow it to xsd:date or a custom format." .
+    rdfs:comment "RFC3339 timestamp for when this object came into being. CONTRACT: the cross-store time anchor shared with weave:timestamp (all xsd:dateTime) — cross-graph time-window joins depend on the shared datatype; never narrow it to xsd:date or a custom format. On migration this is the SOURCE's creation time, not the import time: a migrated store must keep its own chronology." .
+
+pan:width a owl:DatatypeProperty ;
+    rdfs:range xsd:integer ;
+    rdfs:label "width" ;
+    rdfs:comment "Pixel width. Domain open across Media and Thumbnail." .
+
+pan:height a owl:DatatypeProperty ;
+    rdfs:range xsd:integer ;
+    rdfs:label "height" ;
+    rdfs:comment "Pixel height. Domain open across Media and Thumbnail." .
+
+pan:caption a owl:DatatypeProperty ;
+    rdfs:domain pan:Media ; rdfs:range xsd:string ;
+    rdfs:label "caption" ;
+    rdfs:comment "The current best caption TEXT, carried in the image itself so any viewer shows something meaningful. The per-model record set lives in caption data files (pan:captionData); this field is the one a reader wants without opening anything." .
+
+# ── Region fields ──────────────────────────────────────────────────────────
+
+pan:descriptor a owl:DatatypeProperty ;
+    rdfs:domain pan:Region ; rdfs:range xsd:string ;
+    rdfs:label "descriptor" ;
+    rdfs:comment "What the model called the thing in this region (person, keyboard). Description, never identity — identity is pan:id." .
+
+pan:polygon a owl:DatatypeProperty ;
+    rdfs:domain pan:Region ; rdfs:range xsd:string ;
+    rdfs:label "polygon" ;
+    rdfs:comment "Outline as 'x,y;x,y;…' in pixel coordinates. Compact by design: per-vertex structures cost an order of magnitude more bytes for the same points." .
+
+pan:bbox a owl:DatatypeProperty ;
+    rdfs:domain pan:Region ; rdfs:range xsd:string ;
+    rdfs:label "bounding box" ;
+    rdfs:comment "'x1,y1,x2,y2' in pixel coordinates." .
+
+pan:score a owl:DatatypeProperty ;
+    rdfs:domain pan:Region ; rdfs:range xsd:decimal ;
+    rdfs:label "score" ;
+    rdfs:comment "Model confidence, 0..1." .
+
+pan:maskPath a owl:DatatypeProperty ;
+    rdfs:domain pan:Region ; rdfs:range xsd:string ;
+    rdfs:label "mask path" ;
+    rdfs:comment "Store-relative path to this region's mask image, when the segmenter returned one." .
+
+# ── Pose fields ────────────────────────────────────────────────────────────
+
+pan:keypoints a owl:DatatypeProperty ;
+    rdfs:domain pan:Pose ; rdfs:range xsd:string ;
+    rdfs:label "keypoints" ;
+    rdfs:comment "'x,y,confidence;…' triples in the model's own keypoint order." .
+
+pan:overlayPath a owl:DatatypeProperty ;
+    rdfs:domain pan:Pose ; rdfs:range xsd:string ;
+    rdfs:label "overlay path" ;
+    rdfs:comment "Store-relative path to the rendered skeleton overlay image, when the model returned one." .
+
+# ── Caption / embedding fields ─────────────────────────────────────────────
+
+pan:text a owl:DatatypeProperty ;
+    rdfs:domain pan:Caption ; rdfs:range xsd:string ;
+    rdfs:label "text" ;
+    rdfs:comment "The caption prose." .
+
+pan:dim a owl:DatatypeProperty ;
+    rdfs:range xsd:integer ;
+    rdfs:label "dimension" ;
+    rdfs:comment "Length of an embedding vector." .
+
+pan:vectorPath a owl:DatatypeProperty ;
+    rdfs:domain pan:Embedding ; rdfs:range xsd:string ;
+    rdfs:label "vector path" ;
+    rdfs:comment "Store-relative path to the .npy file holding the vector. The searchable copy lives in the index; this file is the rebuildable source." .
+
+# ── Provenance of a migrated object ────────────────────────────────────────
+
+pan:importedFrom a owl:DatatypeProperty ;
+    rdfs:domain pan:Media ; rdfs:range xsd:string ;
+    rdfs:label "imported from" ;
+    rdfs:comment "For migrated media: the source path this object was imported from. Keeps a migrated store honest about where its contents came from, and makes a re-run able to recognise what it already brought over." .

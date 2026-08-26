@@ -93,53 +93,110 @@ fn serialize_field(prefix: &str, local: &str, value: &FieldValue, indent: &str) 
     }
 }
 
-/// The ALWAYS-present `pan:` identity block.
-fn pan_block_fields(pan_id: &str, blob_path: &str, created_at: &str) -> Vec<(String, FieldValue)> {
-    vec![
-        ("panId".to_string(), FieldValue::Scalar(pan_id.to_string())),
-        ("blobPath".to_string(), FieldValue::Scalar(blob_path.to_string())),
-        ("createdAt".to_string(), FieldValue::Scalar(created_at.to_string())),
-    ]
+/// Everything Pan authors about one media object in its packet.
+///
+/// The shape Rob converged on over the demo rounds (2026-08-20/25): ONE
+/// `pan:image` struct holds identity and the current caption, plus one
+/// REFERENCE bag per enricher naming where that enricher's data file is. Bulk
+/// output (polygons, keypoints, vectors) lives in those files, not here — the
+/// image stays light, while still knowing from its own bytes what exists for
+/// it. App namespaces ride alongside as untouched passthrough.
+#[derive(Debug, Clone, Default)]
+pub struct ImagePacket {
+    pub pan_id: String,
+    pub blob_path: String,
+    pub created_at: String,
+    pub media_type: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// The current best caption text — the one thing a plain viewer should show.
+    pub caption: Option<String>,
+    /// `(reference predicate local name, references)`, e.g.
+    /// `("regionData", [...])`. Empty groups are omitted: an absent reference
+    /// means "nothing of this kind exists", which is exactly true.
+    pub enrichment: Vec<(String, Vec<crate::enrich::EnrichmentRef>)>,
+    pub app_blocks: Vec<AppBlock>,
+    pub sub_subjects: Vec<SubSubjectBlock>,
 }
 
-/// Author a COMPLETE XMP packet from scratch — Pan is the stamping authority.
-/// The root `<rdf:Description>` (no rdf:about) carries the `pan:` block ALWAYS
-/// FIRST, then each app block's fields; one sub-subject Description per region
-/// block. Self-contained `<?xpacket?>`-wrapped, round-trips through
-/// [`parse_packet`].
-pub fn build_packet(
-    pan_id: &str,
-    blob_path: &str,
-    created_at: &str,
-    app_blocks: &[AppBlock],
-    sub_subjects: &[SubSubjectBlock],
-) -> String {
-    let mut out = String::with_capacity(1024 + sub_subjects.len() * 256);
+/// Serialize one enrichment reference bag inside the `pan:image` struct.
+fn serialize_enrichment(local: &str, refs: &[crate::enrich::EnrichmentRef], indent: &str) -> String {
+    let mut out = format!("{indent}<pan:{local}>\n{indent} <rdf:Bag>\n");
+    for r in refs {
+        out.push_str(&format!("{indent}  <rdf:li rdf:parseType=\"Resource\">\n"));
+        out.push_str(&format!("{indent}   <pan:id>{}</pan:id>\n", xml_escape(&r.id)));
+        if !r.model.is_empty() {
+            out.push_str(&format!("{indent}   <pan:model>{}</pan:model>\n", xml_escape(&r.model)));
+        }
+        out.push_str(&format!("{indent}   <pan:path>{}</pan:path>\n", xml_escape(&r.path)));
+        out.push_str(&format!("{indent}   <pan:count>{}</pan:count>\n", r.count));
+        out.push_str(&format!("{indent}  </rdf:li>\n"));
+    }
+    out.push_str(&format!("{indent} </rdf:Bag>\n{indent}</pan:{local}>\n"));
+    out
+}
+
+/// Author a COMPLETE XMP packet from scratch — Pan is the authority for its
+/// own media's metadata. Self-contained `<?xpacket?>`-wrapped, and readable
+/// back through [`parse_packet`].
+pub fn build_packet(p: &ImagePacket) -> String {
+    let mut out = String::with_capacity(1024 + p.sub_subjects.len() * 256);
     out.push_str("<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n");
     out.push_str("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n");
     out.push_str("  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n");
 
-    // Root Description: pan: block ALWAYS, then app blocks (passthrough).
+    // Root Description: the pan:image struct, then app blocks (passthrough).
     // `rdf:about=""` is the standard Adobe form AND makes the root
     // unambiguous on read (it resolves to the parser's base IRI, which
     // parse_packet maps back to the media object) — an about-less Description
     // would become an anonymous blank node instead.
     out.push_str("    <rdf:Description rdf:about=\"\"");
     out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\""));
-    for b in app_blocks {
+    for b in &p.app_blocks {
         out.push_str(&format!(" xmlns:{}=\"{}\"", b.prefix, b.ns_iri));
     }
     out.push_str(">\n");
 
-    for (local, value) in pan_block_fields(pan_id, blob_path, created_at) {
-        out.push_str(&serialize_field("pan", &local, &value, "      "));
+    // The image node. Nesting under one struct is what makes flat metadata
+    // viewers render "Image Region Data Path" rather than a bare "Path" —
+    // every level's name becomes part of the label a human reads.
+    out.push_str("      <pan:image rdf:parseType=\"Resource\">\n");
+    let mut ident: Vec<(String, FieldValue)> = vec![
+        ("id".into(), FieldValue::Scalar(p.pan_id.clone())),
+        ("blobPath".into(), FieldValue::Scalar(p.blob_path.clone())),
+        ("createdAt".into(), FieldValue::Scalar(p.created_at.clone())),
+    ];
+    if !p.media_type.is_empty() {
+        ident.push(("mediaType".into(), FieldValue::Scalar(p.media_type.clone())));
     }
-    for b in app_blocks {
+    if let Some(w) = p.width {
+        ident.push(("width".into(), FieldValue::Scalar(w.to_string())));
+    }
+    if let Some(h) = p.height {
+        ident.push(("height".into(), FieldValue::Scalar(h.to_string())));
+    }
+    if let Some(c) = &p.caption {
+        ident.push(("caption".into(), FieldValue::Scalar(c.clone())));
+    }
+    for (local, value) in &ident {
+        out.push_str(&serialize_field("pan", local, value, "       "));
+    }
+    for (local, refs) in &p.enrichment {
+        if refs.is_empty() {
+            continue;
+        }
+        out.push_str(&serialize_enrichment(local, refs, "       "));
+    }
+    out.push_str("      </pan:image>\n");
+
+    for b in &p.app_blocks {
         for (local, value) in &b.fields {
             out.push_str(&serialize_field(&b.prefix, local, value, "      "));
         }
     }
     out.push_str("    </rdf:Description>\n");
+
+    let sub_subjects = &p.sub_subjects;
 
     for r in sub_subjects {
         out.push_str(&format!("    <rdf:Description rdf:about=\"{}\"", xml_escape(&r.about)));
@@ -271,6 +328,11 @@ pub struct ParsedSubject {
     /// Full-IRI predicate → object terms (a Bag/Seq flattens to its members,
     /// in order; IRI objects keep their IRI-ness).
     pub facts: Vec<(String, Vec<ObjTerm>)>,
+    /// Nested structs (`rdf:parseType="Resource"`), keyed by the predicate
+    /// pointing at them: one inner list per struct, each a list of its fields.
+    /// This is where an enrichment reference bag arrives — a predicate with
+    /// several structured members, none of which is a plain literal.
+    pub structs: Vec<(String, Vec<Vec<(String, ObjTerm)>>)>,
 }
 
 /// Parse an XMP packet with oxigraph's real RDF/XML parser.
@@ -296,7 +358,7 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
     if end <= start {
         return Err(anyhow!("XMP packet <rdf:RDF> close precedes its open"));
     }
-    let rdf_xml = &packet[start..end];
+    let rdf_xml = hoist_namespaces(&packet[start..end]);
 
     let store = Store::new().context("in-memory store for XMP parse")?;
     // Give the RDF/XML parser a base IRI: an empty rdf:about="" resolves
@@ -394,11 +456,125 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
         by_subject.entry(subject_out).or_default().push((pred.to_string(), values));
     }
 
+    // ── Third pass: nested structs (rdf:parseType="Resource"). ──
+    // A struct is a blank node with ordinary predicates — Pan's own `pan:image`
+    // wrapper, and each `rdf:li` inside an enrichment reference bag. Pass two
+    // deliberately drops blank-node values rather than fabricating a fact whose
+    // value is a node label; here we recover their CONTENTS, which is the only
+    // way an image's own identity block survives a read.
+    let mut struct_facts: HashMap<String, Vec<(String, ObjTerm)>> = HashMap::new();
+    for quad in store.iter() {
+        let quad = quad.context("XMP quad (struct pass)")?;
+        let key = subject_key(&quad.subject);
+        if !key.starts_with("_:") || container_nodes.contains(&key) {
+            continue;
+        }
+        let pred = quad.predicate.as_str();
+        if pred == type_pred
+            || pred
+                .strip_prefix(RDF_NS)
+                .and_then(|l| l.strip_prefix('_'))
+                .and_then(|n| n.parse::<u32>().ok())
+                .is_some()
+        {
+            continue;
+        }
+        // A struct field whose value is itself a container (a nested reference
+        // bag) is reported through `structs` on the OWNING subject below; here
+        // we keep only the scalar fields.
+        if let Term::BlankNode(_) = &quad.object {
+            continue;
+        }
+        struct_facts
+            .entry(key)
+            .or_default()
+            .push((pred.to_string(), obj_term(&quad.object)));
+    }
+
+    // Attach struct values to whoever points at them, and HOIST Pan's own
+    // `pan:image` wrapper onto the media subject: the wrapper exists to give
+    // flat viewers readable labels, and must not become a level of indirection
+    // for anything reading the facts back.
+    let image_pred = format!("{PAN_NS}image");
+    // Owner key: None = the media object (rdf:about=""), Some(iri) = a named
+    // subject, Some("_:x") = a struct node (the `pan:image` wrapper owns the
+    // reference bags, so it must be a valid owner or its contents vanish).
+    let mut structs_by_subject: HashMap<Option<String>, Vec<(String, Vec<Vec<(String, ObjTerm)>>)>> =
+        HashMap::new();
+    for quad in store.iter() {
+        let quad = quad.context("XMP quad (struct-attach pass)")?;
+        let owner: Option<String> = match &quad.subject {
+            oxigraph::model::NamedOrBlankNode::NamedNode(n) if n.as_str() == XMP_BASE => None,
+            oxigraph::model::NamedOrBlankNode::NamedNode(n) => Some(n.as_str().to_string()),
+            oxigraph::model::NamedOrBlankNode::BlankNode(b) => Some(format!("_:{}", b.as_str())),
+        };
+        let Term::BlankNode(b) = &quad.object else { continue };
+        let key = format!("_:{}", b.as_str());
+        let pred = quad.predicate.as_str().to_string();
+
+        if let Some(fields) = struct_facts.get(&key) {
+            if pred == image_pred {
+                // Hoist: the wrapper's fields are the media object's own facts.
+                let entry = by_subject.entry(owner.clone()).or_default();
+                for (p, v) in fields {
+                    entry.push((p.clone(), vec![v.clone()]));
+                }
+            } else {
+                structs_by_subject
+                    .entry(owner.clone())
+                    .or_default()
+                    .push((pred.clone(), vec![fields.clone()]));
+            }
+        }
+
+        // A container of structs (an enrichment reference bag): collect every
+        // member's fields under the referencing predicate.
+        if container_nodes.contains(&key) {
+            let members: Vec<Vec<(String, ObjTerm)>> = container_members
+                .get(&key)
+                .map(|m| {
+                    let mut m = m.clone();
+                    m.sort_by_key(|(n, _)| *n);
+                    m.into_iter()
+                        .filter_map(|(_, t)| match t {
+                            ObjTerm::Literal(ref l) => struct_facts.get(&format!("_:{l}")).cloned(),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !members.is_empty() {
+                structs_by_subject
+                    .entry(owner.clone())
+                    .or_default()
+                    .push((pred, members));
+            }
+        }
+    }
+
+    // Hoisted `pan:image` fields may include reference bags; those were
+    // attached to the blank wrapper, so re-home them onto the media subject.
+    if let Some(wrapper_key) = store
+        .iter()
+        .filter_map(|q| q.ok())
+        .find(|q| q.predicate.as_str() == image_pred)
+        .and_then(|q| match q.object {
+            Term::BlankNode(b) => Some(format!("_:{}", b.as_str())),
+            _ => None,
+        })
+    {
+        if let Some(inner) = structs_by_subject.remove(&Some(wrapper_key)) {
+            structs_by_subject.entry(None).or_default().extend(inner);
+        }
+    }
+
     let mut out: Vec<ParsedSubject> = by_subject
         .into_iter()
         .map(|(subject, mut facts)| {
             facts.sort_by(|a, b| a.0.cmp(&b.0));
-            ParsedSubject { subject, facts }
+            let mut structs = structs_by_subject.remove(&subject).unwrap_or_default();
+            structs.sort_by(|a, b| a.0.cmp(&b.0));
+            ParsedSubject { subject, facts, structs }
         })
         .collect();
     // Root (None) first, then named subjects in stable order.
@@ -411,6 +587,80 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
 /// to `None` (= the media object itself). Never stored — a parse-time marker
 /// only (kept in the pan namespace family; no urn: anywhere in Pan).
 const XMP_BASE: &str = "https://repolex.ai/ontology/pan/xmp-root";
+
+
+/// Re-declare every namespace prefix the packet defines onto the `<rdf:RDF>`
+/// element, so a prefix declared inside one element is usable by its SIBLINGS.
+///
+/// Why this exists: Pool wrote `xmlns:copia=` on the root `<rdf:Description>`
+/// only, then used `copia:` in the sibling Descriptions that carry regions and
+/// poses. XML scopes a declaration to the element it appears on and that
+/// element's descendants — siblings are NOT covered — so those packets are
+/// strictly malformed. Lenient tools (exiftool) accept them; a real RDF parser
+/// refuses the whole document, which would mean importing a legacy image with
+/// NO metadata at all rather than with all of it.
+///
+/// The repair invents nothing: it collects the declarations the document
+/// itself makes and widens their scope to the whole document. A prefix bound
+/// to two different namespaces in one packet is genuinely ambiguous, so it is
+/// left exactly as written and the parser's own error stands.
+fn hoist_namespaces(rdf_xml: &str) -> String {
+    let mut bindings: HashMap<String, String> = HashMap::new();
+    let mut conflicted: HashSet<String> = HashSet::new();
+
+    let bytes = rdf_xml.as_bytes();
+    let mut i = 0;
+    while let Some(rel) = rdf_xml[i..].find("xmlns:") {
+        let at = i + rel;
+        let after = at + "xmlns:".len();
+        let Some(eq) = rdf_xml[after..].find('=') else { break };
+        let prefix = &rdf_xml[after..after + eq];
+        if prefix.is_empty() || !prefix.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            i = after;
+            continue;
+        }
+        let vstart = after + eq + 1;
+        let quote = match bytes.get(vstart) {
+            Some(b'"') => '"',
+            Some(b'\'') => '\'',
+            _ => {
+                i = after;
+                continue;
+            }
+        };
+        let Some(vend) = rdf_xml[vstart + 1..].find(quote) else { break };
+        let ns = &rdf_xml[vstart + 1..vstart + 1 + vend];
+        match bindings.get(prefix) {
+            Some(existing) if existing != ns => {
+                conflicted.insert(prefix.to_string());
+            }
+            _ => {
+                bindings.insert(prefix.to_string(), ns.to_string());
+            }
+        }
+        i = vstart + 1 + vend;
+    }
+
+    // Nothing to widen if the root already declares everything.
+    let Some(open_end) = rdf_xml.find('>') else { return rdf_xml.to_string() };
+    let root_tag = &rdf_xml[..open_end];
+    let mut additions = String::new();
+    let mut names: Vec<&String> = bindings.keys().collect();
+    names.sort();
+    for prefix in names {
+        if conflicted.contains(prefix) {
+            continue;
+        }
+        if root_tag.contains(&format!("xmlns:{prefix}=")) {
+            continue;
+        }
+        additions.push_str(&format!(" xmlns:{prefix}=\"{}\"", bindings[prefix]));
+    }
+    if additions.is_empty() {
+        return rdf_xml.to_string();
+    }
+    format!("{}{}{}", root_tag, additions, &rdf_xml[open_end..])
+}
 
 /// Find the real `<rdf:RDF` element open (followed by whitespace or `>`), not
 /// a literal that merely contains the substring.
@@ -534,6 +784,17 @@ pub fn is_png(bytes: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    /// Test helper: a packet with only the identity block filled in.
+    fn simple_packet(pan_id: &str, blob: &str, created: &str) -> String {
+        build_packet(&ImagePacket {
+            pan_id: pan_id.into(),
+            blob_path: blob.into(),
+            created_at: created.into(),
+            ..Default::default()
+        })
+    }
+
+
     /// Encode a tiny RGB PNG for tests.
     pub(crate) fn make_test_png(w: u32, h: u32, seed: u8) -> Vec<u8> {
         let mut out = Vec::new();
@@ -556,7 +817,7 @@ mod tests {
         // THE invariant: a metadata edit never touches the image.
         let png = make_test_png(16, 16, 7);
         let hash_before = pixel_hash(&png).unwrap();
-        let packet = build_packet("abc123xy", "blob/image/x.png", "2026-07-15T00:00:00Z", &[], &[]);
+        let packet = simple_packet("abc123xy", "blob/image/x.png", "2026-07-15T00:00:00Z");
         let stamped = write_packet_into_png_bytes(&png, &packet).unwrap();
         let hash_after = pixel_hash(&stamped).unwrap();
         assert_eq!(hash_before, hash_after, "stamping changed the pixels");
@@ -601,11 +862,21 @@ mod tests {
                 ("dc".to_string(), "creator".to_string(), FieldValue::Scalar("w4r3z".to_string())),
             ],
         }];
-        let packet = build_packet("abc123xy", "blob/image/x.png", "2026-07-15T00:00:00Z", &apps, &subs);
+        let packet = build_packet(&ImagePacket {
+            pan_id: "abc123xy".into(),
+            blob_path: "blob/image/x.png".into(),
+            created_at: "2026-07-15T00:00:00Z".into(),
+            app_blocks: apps,
+            sub_subjects: subs,
+            ..Default::default()
+        });
 
         let parsed = parse_packet(&packet).unwrap();
         let root = parsed.iter().find(|p| p.subject.is_none()).expect("root block");
-        assert_eq!(vals(&root.facts, "https://repolex.ai/ontology/pan/panId"), vec!["abc123xy"]);
+        // pan:id lives inside the pan:image struct in the packet; parse_packet
+        // HOISTS it onto the media subject, so a reader never has to know the
+        // wrapper exists (the wrapper is there for human-facing viewers).
+        assert_eq!(vals(&root.facts, "https://repolex.ai/ontology/pan/id"), vec!["abc123xy"]);
         assert_eq!(
             vals(&root.facts, &format!("{COPIA}sceneMood")),
             vec!["calm & <bright>"],
@@ -655,9 +926,9 @@ mod tests {
     #[test]
     fn stamp_replaces_prior_xmp_and_preserves_other_text() {
         let png = make_test_png(8, 8, 1);
-        let p1 = build_packet("oldid111", "a.png", "2026-01-01T00:00:00Z", &[], &[]);
+        let p1 = simple_packet("oldid111", "a.png", "2026-01-01T00:00:00Z");
         let s1 = write_packet_into_png_bytes(&png, &p1).unwrap();
-        let p2 = build_packet("newid222", "b.png", "2026-01-02T00:00:00Z", &[], &[]);
+        let p2 = simple_packet("newid222", "b.png", "2026-01-02T00:00:00Z");
         let s2 = write_packet_into_png_bytes(&s1, &p2).unwrap();
         let packet = read_xmp_packet_from_bytes(&s2).unwrap().expect("xmp present");
         assert!(packet.contains("newid222"), "new packet wins");
@@ -668,5 +939,70 @@ mod tests {
     fn is_png_detects() {
         assert!(is_png(&make_test_png(1, 1, 0)));
         assert!(!is_png(b"\xFF\xD8\xFF jpeg-ish"));
+    }
+}
+
+#[cfg(test)]
+mod legacy_tests {
+    use super::*;
+
+    /// Pool's real defect, reproduced exactly: `xmlns:copia` declared on the
+    /// root Description only, then used by a SIBLING Description. Strictly
+    /// malformed; lenient readers accept it. If Pan refused these, importing a
+    /// legacy image would silently yield an image with no metadata rather than
+    /// one with all of it.
+    const POOL_SHAPE: &str = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="" xmlns:copia="https://repolex.ai/ontology/copia/">
+      <copia:caption>a wolf</copia:caption>
+    </rdf:Description>
+  <rdf:Description rdf:about="Sam3Region:wolf/01">
+    <rdf:type rdf:resource="https://repolex.ai/ontology/copia/Sam3Region"/>
+    <copia:regionDescriptor>wolf</copia:regionDescriptor>
+    <copia:regionScore>0.91</copia:regionScore>
+  </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"#;
+
+    #[test]
+    fn out_of_scope_prefix_is_repaired_not_refused() {
+        let parsed = parse_packet(POOL_SHAPE).expect("legacy packet must parse");
+        let root = parsed.iter().find(|p| p.subject.is_none()).expect("root");
+        assert!(
+            root.facts.iter().any(|(p, v)| p.ends_with("caption")
+                && v.iter().any(|t| t.value() == "a wolf")),
+            "root facts survive"
+        );
+        let region = parsed
+            .iter()
+            .find(|p| p.subject.as_deref() == Some("Sam3Region:wolf/01"))
+            .expect("the sibling Description must parse, not sink the document");
+        assert!(
+            region.facts.iter().any(|(p, v)| p.ends_with("regionDescriptor")
+                && v.iter().any(|t| t.value() == "wolf")),
+            "region facts survive"
+        );
+    }
+
+    #[test]
+    fn a_prefix_bound_two_ways_is_left_alone() {
+        // Genuine ambiguity must not be silently resolved in our favour.
+        let ambiguous = POOL_SHAPE.replace(
+            r#"<rdf:Description rdf:about="Sam3Region:wolf/01">"#,
+            r#"<rdf:Description rdf:about="Sam3Region:wolf/01" xmlns:copia="https://example.com/other/">"#,
+        );
+        // The second binding is in scope where it is used, so this parses; the
+        // point is that the hoist did not overwrite it with the root's binding.
+        let parsed = parse_packet(&ambiguous).expect("parses on its own declarations");
+        let region = parsed
+            .iter()
+            .find(|p| p.subject.as_deref() == Some("Sam3Region:wolf/01"))
+            .expect("region");
+        assert!(
+            region.facts.iter().any(|(p, _)| p.starts_with("https://example.com/other/")),
+            "the element's own binding wins, never the hoisted one"
+        );
     }
 }

@@ -71,6 +71,25 @@ impl PanLayout {
     pub fn vector_sidecar_path(&self, index_name: &str, pan_id: &str) -> PathBuf {
         self.vectors_root.join(index_name).join(format!("{pan_id}.npy"))
     }
+
+    /// Store-RELATIVE path of an enricher's data file:
+    /// `<kind>/YYYY/MM/DD/<panId>[.<variant>].xml`.
+    ///
+    /// Date-sharded like blobs for the same reason: a store holding 80k images
+    /// must never put 80k files in one directory. `variant` distinguishes
+    /// several files of one kind for one image — one caption file per model —
+    /// and is omitted when there is only ever one.
+    pub fn enrichment_rel_path(kind: &str, shard: &str, pan_id: &str, variant: Option<&str>) -> String {
+        match variant {
+            Some(v) => format!("{kind}/{shard}/{pan_id}.{v}.xml"),
+            None => format!("{kind}/{shard}/{pan_id}.xml"),
+        }
+    }
+
+    /// Absolute path for a store-relative path under the storage root.
+    pub fn abs(&self, rel: &str) -> PathBuf {
+        self.storage_root.join(rel)
+    }
 }
 
 #[cfg(test)]
