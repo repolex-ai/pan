@@ -39,15 +39,51 @@ const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 /// Caption predicates Pool used, and the model each one names.
 ///
-/// This is the migration's headline exhibit: the field name CHANGED when the
-/// model changed (`qwenvl8bCaption` → `qwen35vl9bCaption`), so a query for
-/// captions had to know the model roster. In Pan the model is data on a
+/// The migration's headline exhibit: the field name CHANGED every time the
+/// captioner did (`qwenvl8bCaption` → `qwen35vl9bCaption` → …), so querying
+/// captions meant knowing the model roster. In Pan the model is data on a
 /// Caption record and the vocabulary never moves again.
-const CAPTION_FIELDS: &[(&str, &str)] = &[
+///
+/// Known field → tidy model name. Anything NOT listed is still imported: the
+/// rule is "a copia field whose name ends in Caption is one model's caption",
+/// and an unrecognised one keeps the source's own token as its model name.
+/// A corpus survey found SEVEN such fields (2026-08-26) where three were
+/// expected — a fixed list would have silently dropped four models' work.
+const CAPTION_FIELD_NAMES: &[(&str, &str)] = &[
     ("qwenvl8bCaption", "qwen-vl-8b"),
     ("qwen35vl9bCaption", "qwen3.5-vl-9b"),
     ("qwen3vl8bCaption", "qwen3-vl-8b"),
+    ("qwen359bmlx8bitCaption", "qwen3.5-9b-mlx-8bit"),
+    ("qwen354bmlx8bitCaption", "qwen3.5-4b-mlx-8bit"),
+    ("qwen3vl8binstruct8bitCaption", "qwen3-vl-8b-instruct-8bit"),
+    ("qwen3vl4binstruct8bitCaption", "qwen3-vl-4b-instruct-8bit"),
 ];
+
+/// Every per-model caption field present in a packet, as `(field, model)`.
+///
+/// Derived from what the packet ACTUALLY contains rather than matched against
+/// a fixed roster, because the roster is exactly the thing that kept changing:
+/// the field name moved every time the captioner did. `copia:caption` itself
+/// is excluded — that is the current-best text, not a model's record.
+fn caption_fields_in(root: &BTreeMap<String, Vec<String>>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for pred in root.keys() {
+        let Some(local) = pred.strip_prefix(COPIA_NS) else { continue };
+        if local == "caption" || !local.ends_with("Caption") {
+            continue;
+        }
+        let model = CAPTION_FIELD_NAMES
+            .iter()
+            .find(|(f, _)| *f == local)
+            .map(|(_, m)| (*m).to_string())
+            // Unknown captioner: keep the source's own token. Never drop it —
+            // an unrecognised model is still a real caption someone paid for.
+            .unwrap_or_else(|| local.trim_end_matches("Caption").to_string());
+        out.push((local.to_string(), model));
+    }
+    out.sort();
+    out
+}
 
 #[derive(Debug, Clone)]
 pub struct ImportOptions {
@@ -332,20 +368,20 @@ fn import_one(
     }
     let mut enrichment: Vec<(String, Vec<EnrichmentRef>)> = Vec::new();
     let mut caption_refs: Vec<EnrichmentRef> = Vec::new();
-    for (field, model) in CAPTION_FIELDS {
-        let Some(text) = copia(field) else { continue };
+    for (field, model) in caption_fields_in(&root) {
+        let Some(text) = copia(&field) else { continue };
         if text.trim().is_empty() {
             continue;
         }
-        let rec = EnrichmentRecord::new(gen_pan_id(), "Caption", *model).field("text", &text);
-        let rel = PanLayout::enrichment_rel_path("caption", &shard, &pan_id, Some(model));
+        let rec = EnrichmentRecord::new(gen_pan_id(), "Caption", &model).field("text", &text);
+        let rel = PanLayout::enrichment_rel_path("caption", &shard, &pan_id, Some(&model));
         if !opts.dry_run {
             write_data_file(pan, &rel, &subject.as_str().to_string(), "captionItem", std::slice::from_ref(&rec))?;
         }
         quads.extend(record_quads(subject.as_str(), "captionItem", std::slice::from_ref(&rec))?);
         caption_refs.push(EnrichmentRef {
             id: gen_pan_id(),
-            model: (*model).to_string(),
+            model: model.clone(),
             path: rel,
             count: 1,
         });
@@ -672,9 +708,28 @@ mod tests {
     fn every_caption_field_names_its_model() {
         // The migration's headline: a model change must never again mean a
         // vocabulary change, so each legacy field maps to a model NAME.
-        for (field, model) in CAPTION_FIELDS {
+        for (field, model) in CAPTION_FIELD_NAMES {
             assert!(field.ends_with("Caption"));
             assert!(!model.is_empty());
         }
+    }
+
+    #[test]
+    fn an_unknown_captioner_is_kept_not_dropped() {
+        // The corpus had seven caption fields where three were expected. A
+        // roster-based importer drops what it has never heard of; this one
+        // keeps the source's own token as the model name.
+        let mut root = BTreeMap::new();
+        root.insert(format!("{COPIA_NS}caption"), vec!["current".into()]);
+        root.insert(format!("{COPIA_NS}qwenvl8bCaption"), vec!["known".into()]);
+        root.insert(format!("{COPIA_NS}somethingBrandNewCaption"), vec!["unknown".into()]);
+        let found = caption_fields_in(&root);
+
+        assert_eq!(found.len(), 2, "plain `caption` is the current text, not a record");
+        assert!(found.iter().any(|(_, m)| m == "qwen-vl-8b"), "known field gets its tidy name");
+        assert!(
+            found.iter().any(|(_, m)| m == "somethingBrandNew"),
+            "unknown captioner survives under the source's own name"
+        );
     }
 }
