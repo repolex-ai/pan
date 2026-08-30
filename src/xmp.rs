@@ -359,6 +359,7 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
         return Err(anyhow!("XMP packet <rdf:RDF> close precedes its open"));
     }
     let rdf_xml = hoist_namespaces(&packet[start..end]);
+    let rdf_xml = sanitize_about_iris(&rdf_xml);
 
     let store = Store::new().context("in-memory store for XMP parse")?;
     // Give the RDF/XML parser a base IRI: an empty rdf:about="" resolves
@@ -660,6 +661,34 @@ fn hoist_namespaces(rdf_xml: &str) -> String {
         return rdf_xml.to_string();
     }
     format!("{}{}{}", root_tag, additions, &rdf_xml[open_end..])
+}
+
+/// Percent-encode spaces in rdf:about="..." IRIs so strict RDF/XML parsers don't fail
+/// on legacy SAM3 descriptors like rdf:about="Sam3Region:tree trunk/01".
+fn sanitize_about_iris(xml: &str) -> String {
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(pos) = rest.find("rdf:about=") {
+        out.push_str(&rest[..pos + "rdf:about=".len()]);
+        let after = &rest[pos + "rdf:about=".len()..];
+        if let Some(quote) = after.chars().next() {
+            if quote == '"' || quote == '\'' {
+                out.push(quote);
+                let val_start = 1;
+                if let Some(val_end) = after[val_start..].find(quote) {
+                    let val = &after[val_start..val_start + val_end];
+                    let sanitized = val.replace(' ', "%20");
+                    out.push_str(&sanitized);
+                    out.push(quote);
+                    rest = &after[val_start + val_end + 1..];
+                    continue;
+                }
+            }
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Find the real `<rdf:RDF` element open (followed by whitespace or `>`), not

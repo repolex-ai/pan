@@ -73,8 +73,8 @@ pub(crate) fn validate_pan_id(id: &str) -> Result<()> {
     if id.is_empty() || id.len() > 64 {
         return Err(anyhow!("invalid panId {id:?}"));
     }
-    if !id.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err(anyhow!("invalid panId {id:?}: only [A-Za-z0-9] allowed"));
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) {
+        return Err(anyhow!("invalid panId {id:?}: only [A-Za-z0-9_-] allowed"));
     }
     Ok(())
 }
@@ -350,10 +350,10 @@ impl Pan {
         let subject = media_subject_iri(&media_type, &pan_id)?;
         let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-        // blob/image/YYYY/MM/DD/<panId>.<ext> — date shard from createdAt,
+        // media/image/YYYY/MM/DD/<panId>.<ext> — date shard from createdAt,
         // filename from the assigned id.
         let shard = created_at.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
-        let rel_path = format!("{}/{shard}/{pan_id}.{ext}", PanLayout::BLOB_SUBPATH);
+        let rel_path = format!("{}/{shard}/{pan_id}.{ext}", PanLayout::MEDIA_SUBPATH);
         let abs_path = self.layout.storage_root.join(&rel_path);
 
         // Identity facts — Pan's own block. The instance is TYPED against the
@@ -367,6 +367,7 @@ impl Pan {
                 GraphName::DefaultGraph,
             ),
             self.quad(&subject, "id", &pan_id),
+            self.quad(&subject, "mediaPath", &rel_path),
             self.quad(&subject, "blobPath", &rel_path),
             self.quad(&subject, "createdAt", &created_at),
             self.quad(&subject, "mediaType", &media_type),
@@ -527,11 +528,11 @@ impl Pan {
         let facts = self.facts_for(pan_id)?;
         let blob_path = facts
             .iter()
-            .find(|(p, _)| p == &format!("{PAN_NS}blobPath"))
+            .find(|(p, _)| p == &format!("{PAN_NS}mediaPath") || p == &format!("{PAN_NS}blobPath"))
             .and_then(|(_, v)| v.first().cloned())
             .ok_or_else(|| anyhow!("panId not found: {pan_id}"))?;
         let abs = self.layout.storage_root.join(&blob_path);
-        let bytes = fs::read(&abs).with_context(|| format!("read blob {}", abs.display()))?;
+        let bytes = fs::read(&abs).with_context(|| format!("read media {}", abs.display()))?;
         Ok((bytes, facts))
     }
 
@@ -571,7 +572,7 @@ impl Pan {
         Ok(())
     }
 
-    /// Delete a panId: triples (subject + its sub-subjects), blob file, vector
+    /// Delete a panId: triples (subject + its sub-subjects), media file, vector
     /// sidecars, and index entries.
     pub fn delete(&self, pan_id: &str) -> Result<()> {
         let Some(subject) = self.subject_for(pan_id)? else {
@@ -579,15 +580,15 @@ impl Pan {
         };
         let facts = self.facts_for(pan_id)?;
 
-        // Blob file first (facts still know where it is).
+        // Media file first (facts still know where it is).
         if let Some(blob_path) = facts
             .iter()
-            .find(|(p, _)| p == &format!("{PAN_NS}blobPath"))
+            .find(|(p, _)| p == &format!("{PAN_NS}mediaPath") || p == &format!("{PAN_NS}blobPath"))
             .and_then(|(_, v)| v.first())
         {
             let abs = self.layout.storage_root.join(blob_path);
             if abs.exists() {
-                fs::remove_file(&abs).with_context(|| format!("remove blob {}", abs.display()))?;
+                fs::remove_file(&abs).with_context(|| format!("remove media {}", abs.display()))?;
             }
         }
 

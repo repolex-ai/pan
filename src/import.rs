@@ -325,7 +325,8 @@ fn import_one(
     };
 
     // ── Identity + timing. ──────────────────────────────────────────────────
-    let pan_id = pan.new_id()?;
+    // Keep the source's original filename stem (e.g. 20260524-205716-cca829b4)
+    let pan_id = img.stem.clone();
     let media_type = "image/png".to_string();
     let subject = media_subject_iri(&media_type, &pan_id)?;
     let created_at = copia("renderTimestamp")
@@ -333,7 +334,7 @@ fn import_one(
         .or_else(|| created_at_from_stem(&img.stem))
         .unwrap_or_else(|| format!("{}T00:00:00+00:00", img.shard.replace('/', "-")));
     let shard = created_at.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
-    let blob_rel = format!("{}/{shard}/{pan_id}.png", PanLayout::BLOB_SUBPATH);
+    let media_rel = format!("{}/{shard}/{pan_id}.png", PanLayout::MEDIA_SUBPATH);
 
     let mut quads: Vec<Quad> = vec![
         Quad::new(
@@ -343,7 +344,8 @@ fn import_one(
             GraphName::DefaultGraph,
         ),
         pan_lit(&subject, "id", &pan_id)?,
-        pan_lit(&subject, "blobPath", &blob_rel)?,
+        pan_lit(&subject, "mediaPath", &media_rel)?,
+        pan_lit(&subject, "blobPath", &media_rel)?,
         pan_lit(&subject, "mediaType", &media_type)?,
         pan_lit(&subject, "createdAt", &created_at)?,
         pan_lit(&subject, "importedFrom", &source_key)?,
@@ -566,7 +568,7 @@ fn import_one(
     // ── Land it: the new packet into Pan's own copy of the bytes. ───────────
     let out_packet = xmp::build_packet(&xmp::ImagePacket {
         pan_id: pan_id.clone(),
-        blob_path: blob_rel.clone(),
+        blob_path: media_rel.clone(),
         created_at: created_at.clone(),
         media_type,
         width,
@@ -578,9 +580,9 @@ fn import_one(
     });
     let stamped = xmp::write_packet_into_png_bytes(&bytes, &out_packet)
         .with_context(|| format!("write packet into {}", img.stem))?;
-    let abs = pan.layout.abs(&blob_rel);
+    let abs = pan.layout.abs(&media_rel);
     if let Some(parent) = abs.parent() {
-        std::fs::create_dir_all(parent).context("create blob shard dir")?;
+        std::fs::create_dir_all(parent).context("create media shard dir")?;
     }
     std::fs::write(&abs, &stamped).with_context(|| format!("write {}", abs.display()))?;
 

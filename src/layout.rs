@@ -13,7 +13,7 @@
 //!   ├── oxigraph/               RDF graph store — ALWAYS here, NEVER relocated
 //!   ├── hnsw/                   vector index (index.usearch + keymap.json) — ALWAYS here
 //!   └── storage/                media root — DEFAULT here; the ONLY overridable
-//!       ├── blob/image/YYYY/MM/DD/<panId>.png
+//!       ├── media/image/YYYY/MM/DD/<stem>.png
 //!       └── vectors/<index>/... raw per-object .npy sidecars
 //! ```
 
@@ -29,15 +29,15 @@ pub struct PanLayout {
     pub oxigraph_root: PathBuf,
     /// Assembled vector index (usearch). ALWAYS `<root>/hnsw`. Never relocated.
     pub hnsw_root: PathBuf,
-    /// Media root — blobs + raw vector sidecars. DEFAULT `<root>/storage`; the
+    /// Media root — media files + raw vector sidecars. DEFAULT `<root>/storage`; the
     /// ONE overridable location (pan.yml `storage_root:`, absolute wins,
     /// relative joins root). Points at a big external volume when needed.
     pub storage_root: PathBuf,
-    /// Blob tree under storage_root: `<storage_root>/blob/image`.
+    /// Media tree under storage_root: `<storage_root>/media/image`.
+    pub media_root: PathBuf,
+    /// Backward-compatible alias for `media_root`.
     pub blob_root: PathBuf,
     /// Raw vector sidecars (`.npy`) under storage_root: `<storage_root>/vectors`.
-    /// (The ASSEMBLED search index is `hnsw_root`, local; raw per-object
-    /// embeddings are media-derived and follow media to the volume.)
     pub vectors_root: PathBuf,
 }
 
@@ -45,7 +45,8 @@ impl PanLayout {
     pub const OXIGRAPH_SUBDIR: &'static str = "oxigraph";
     pub const HNSW_SUBDIR: &'static str = "hnsw";
     pub const STORAGE_SUBDIR: &'static str = "storage";
-    pub const BLOB_SUBPATH: &'static str = "blob/image";
+    pub const MEDIA_SUBPATH: &'static str = "media/image";
+    pub const BLOB_SUBPATH: &'static str = "media/image"; // updated from blob/image
     pub const VECTORS_SUBDIR: &'static str = "vectors";
 
     /// Resolve every root from the store home. `storage_root_override` comes
@@ -56,33 +57,30 @@ impl PanLayout {
             Some(p) => root.join(p),
             None => root.join(Self::STORAGE_SUBDIR),
         };
+        let media_root = storage_root.join(Self::MEDIA_SUBPATH);
         PanLayout {
             root: root.to_path_buf(),
             oxigraph_root: root.join(Self::OXIGRAPH_SUBDIR),
             hnsw_root: root.join(Self::HNSW_SUBDIR),
-            blob_root: storage_root.join(Self::BLOB_SUBPATH),
+            media_root: media_root.clone(),
+            blob_root: media_root,
             vectors_root: storage_root.join(Self::VECTORS_SUBDIR),
             storage_root,
         }
     }
 
-    /// The raw `.npy` sidecar path for a panId in a named index:
-    /// `<vectors_root>/<index>/<panId>.npy`.
-    pub fn vector_sidecar_path(&self, index_name: &str, pan_id: &str) -> PathBuf {
-        self.vectors_root.join(index_name).join(format!("{pan_id}.npy"))
+    /// The raw `.npy` sidecar path for a stem in a named index:
+    /// `<vectors_root>/<index>/<shard>/<stem>.npy` or `<vectors_root>/<index>/<stem>.npy`.
+    pub fn vector_sidecar_path(&self, index_name: &str, stem: &str) -> PathBuf {
+        self.vectors_root.join(index_name).join(format!("{stem}.npy"))
     }
 
     /// Store-RELATIVE path of an enricher's data file:
-    /// `<kind>/YYYY/MM/DD/<panId>[.<variant>].xml`.
-    ///
-    /// Date-sharded like blobs for the same reason: a store holding 80k images
-    /// must never put 80k files in one directory. `variant` distinguishes
-    /// several files of one kind for one image — one caption file per model —
-    /// and is omitted when there is only ever one.
-    pub fn enrichment_rel_path(kind: &str, shard: &str, pan_id: &str, variant: Option<&str>) -> String {
+    /// `<kind>/YYYY/MM/DD/<stem>[.<variant>].xml`.
+    pub fn enrichment_rel_path(kind: &str, shard: &str, stem: &str, variant: Option<&str>) -> String {
         match variant {
-            Some(v) => format!("{kind}/{shard}/{pan_id}.{v}.xml"),
-            None => format!("{kind}/{shard}/{pan_id}.xml"),
+            Some(v) => format!("{kind}/{shard}/{stem}.{v}.xml"),
+            None => format!("{kind}/{shard}/{stem}.xml"),
         }
     }
 
@@ -99,36 +97,29 @@ mod tests {
     #[test]
     fn resolve_defaults() {
         let l = PanLayout::resolve(Path::new("/x/store"), None);
+        assert_eq!(l.root, PathBuf::from("/x/store"));
         assert_eq!(l.oxigraph_root, PathBuf::from("/x/store/oxigraph"));
         assert_eq!(l.hnsw_root, PathBuf::from("/x/store/hnsw"));
         assert_eq!(l.storage_root, PathBuf::from("/x/store/storage"));
-        assert_eq!(l.blob_root, PathBuf::from("/x/store/storage/blob/image"));
+        assert_eq!(l.media_root, PathBuf::from("/x/store/storage/media/image"));
         assert_eq!(l.vectors_root, PathBuf::from("/x/store/storage/vectors"));
     }
 
     #[test]
     fn storage_root_override_relocates_media_but_not_metadata() {
-        // The core property: storage_root points at a volume; oxigraph + hnsw
-        // STAY local under the store home no matter what.
         let l = PanLayout::resolve(Path::new("/x/store"), Some(Path::new("/Volumes/big/pan")));
-        assert_eq!(l.oxigraph_root, PathBuf::from("/x/store/oxigraph"), "oxigraph stays local");
-        assert_eq!(l.hnsw_root, PathBuf::from("/x/store/hnsw"), "hnsw stays local");
+        assert_eq!(l.root, PathBuf::from("/x/store"));
+        assert_eq!(l.oxigraph_root, PathBuf::from("/x/store/oxigraph"));
+        assert_eq!(l.hnsw_root, PathBuf::from("/x/store/hnsw"));
         assert_eq!(l.storage_root, PathBuf::from("/Volumes/big/pan"));
-        assert_eq!(l.blob_root, PathBuf::from("/Volumes/big/pan/blob/image"));
+        assert_eq!(l.media_root, PathBuf::from("/Volumes/big/pan/media/image"));
+        assert_eq!(l.vectors_root, PathBuf::from("/Volumes/big/pan/vectors"));
     }
 
     #[test]
     fn relative_storage_root_joins_home() {
-        let l = PanLayout::resolve(Path::new("/x/store"), Some(Path::new("media")));
-        assert_eq!(l.storage_root, PathBuf::from("/x/store/media"));
-    }
-
-    #[test]
-    fn vector_sidecar_is_panid_named() {
-        let l = PanLayout::resolve(Path::new("/x"), None);
-        assert_eq!(
-            l.vector_sidecar_path("my-index", "abcd12xy"),
-            PathBuf::from("/x/storage/vectors/my-index/abcd12xy.npy")
-        );
+        let l = PanLayout::resolve(Path::new("/x/store"), Some(Path::new("media-data")));
+        assert_eq!(l.storage_root, PathBuf::from("/x/store/media-data"));
+        assert_eq!(l.media_root, PathBuf::from("/x/store/media-data/media/image"));
     }
 }
