@@ -66,7 +66,7 @@ pub struct MediaCreated {
     /// The full subject IRI minted for this object,
     /// e.g. `https://repolex.ai/pan/Image/<panId>`.
     pub subject: String,
-    pub blob_path: String,
+    pub media_path: String,
     pub created_at: String,
     /// True when the embed detector ran and the vector was indexed.
     pub embedded: bool,
@@ -260,7 +260,7 @@ async fn put_media(
         Json(MediaCreated {
             pan_id: res.pan_id,
             subject: res.subject,
-            blob_path: res.blob_path,
+            media_path: res.media_path,
             created_at: res.created_at,
             embedded,
             embed_error,

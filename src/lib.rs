@@ -247,7 +247,7 @@ pub struct PutResult {
     pub pan_id: String,
     /// The full subject IRI minted for this object.
     pub subject: String,
-    pub blob_path: String,
+    pub media_path: String,
     pub created_at: String,
 }
 
@@ -368,7 +368,6 @@ impl Pan {
             ),
             self.quad(&subject, "id", &pan_id),
             self.quad(&subject, "mediaPath", &rel_path),
-            self.quad(&subject, "blobPath", &rel_path),
             self.quad(&subject, "createdAt", &created_at),
             self.quad(&subject, "mediaType", &media_type),
         ];
@@ -464,7 +463,7 @@ impl Pan {
         Ok(PutResult {
             pan_id,
             subject: subject.into_string(),
-            blob_path: rel_path,
+            media_path: rel_path,
             created_at,
         })
     }
@@ -526,12 +525,12 @@ impl Pan {
     /// Read media bytes + facts by panId.
     pub fn get(&self, pan_id: &str) -> Result<(Vec<u8>, Vec<(String, Vec<String>)>)> {
         let facts = self.facts_for(pan_id)?;
-        let blob_path = facts
+        let media_path = facts
             .iter()
-            .find(|(p, _)| p == &format!("{PAN_NS}mediaPath") || p == &format!("{PAN_NS}blobPath"))
+            .find(|(p, _)| p == &format!("{PAN_NS}mediaPath"))
             .and_then(|(_, v)| v.first().cloned())
             .ok_or_else(|| anyhow!("panId not found: {pan_id}"))?;
-        let abs = self.layout.storage_root.join(&blob_path);
+        let abs = self.layout.storage_root.join(&media_path);
         let bytes = fs::read(&abs).with_context(|| format!("read media {}", abs.display()))?;
         Ok((bytes, facts))
     }
@@ -581,12 +580,12 @@ impl Pan {
         let facts = self.facts_for(pan_id)?;
 
         // Media file first (facts still know where it is).
-        if let Some(blob_path) = facts
+        if let Some(media_path) = facts
             .iter()
-            .find(|(p, _)| p == &format!("{PAN_NS}mediaPath") || p == &format!("{PAN_NS}blobPath"))
+            .find(|(p, _)| p == &format!("{PAN_NS}mediaPath"))
             .and_then(|(_, v)| v.first())
         {
-            let abs = self.layout.storage_root.join(blob_path);
+            let abs = self.layout.storage_root.join(media_path);
             if abs.exists() {
                 fs::remove_file(&abs).with_context(|| format!("remove media {}", abs.display()))?;
             }
@@ -874,16 +873,16 @@ impl Pan {
     /// graph-only — the graph is the full truth, XMP is the travel copy).
     pub fn restamp(&self, pan_id: &str) -> Result<()> {
         let facts = self.facts_for(pan_id)?;
-        let blob_path = match facts
+        let media_path = match facts
             .iter()
-            .find(|(p, _)| p == &format!("{PAN_NS}blobPath"))
+            .find(|(p, _)| p == &format!("{PAN_NS}mediaPath"))
             .and_then(|(_, v)| v.first())
         {
             Some(p) => p.clone(),
             None => return Err(anyhow!("panId not found: {pan_id}")),
         };
-        let abs = self.layout.storage_root.join(&blob_path);
-        let bytes = fs::read(&abs).with_context(|| format!("read blob {}", abs.display()))?;
+        let abs = self.layout.storage_root.join(&media_path);
+        let bytes = fs::read(&abs).with_context(|| format!("read media {}", abs.display()))?;
         if !xmp::is_png(&bytes) {
             return Ok(()); // non-PNG media has no XMP mirror (v1)
         }
@@ -892,16 +891,16 @@ impl Pan {
             .find(|(p, _)| p == &format!("{PAN_NS}createdAt"))
             .and_then(|(_, v)| v.first().cloned())
             .unwrap_or_default();
-        let packet = self.build_packet_from_graph(pan_id, &blob_path, &created_at)?;
+        let packet = self.build_packet_from_graph(pan_id, &media_path, &created_at)?;
         let stamped = xmp::write_packet_into_png_bytes(&bytes, &packet)?;
-        fs::write(&abs, &stamped).with_context(|| format!("write blob {}", abs.display()))?;
+        fs::write(&abs, &stamped).with_context(|| format!("write media {}", abs.display()))?;
         Ok(())
     }
 
     /// Graph facts → XMP packet. Facts group into app blocks by reverse prefix
     /// lookup; multi-value predicates become Bags; sub-subjects (`<subj>/…`)
     /// re-author as their own Descriptions.
-    fn build_packet_from_graph(&self, pan_id: &str, blob_path: &str, created_at: &str) -> Result<String> {
+    fn build_packet_from_graph(&self, pan_id: &str, media_path: &str, created_at: &str) -> Result<String> {
         let Some(subject) = self.subject_for(pan_id)? else {
             return Err(anyhow!("panId not found: {pan_id}"));
         };
@@ -1057,7 +1056,7 @@ impl Pan {
 
         Ok(xmp::build_packet(&xmp::ImagePacket {
             pan_id: pan_id.to_string(),
-            blob_path: blob_path.to_string(),
+            media_path: media_path.to_string(),
             created_at: created_at.to_string(),
             media_type: pan_field("mediaType").unwrap_or_default(),
             width: pan_field("width").and_then(|v| v.parse().ok()),

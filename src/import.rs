@@ -345,7 +345,6 @@ fn import_one(
         ),
         pan_lit(&subject, "id", &pan_id)?,
         pan_lit(&subject, "mediaPath", &media_rel)?,
-        pan_lit(&subject, "blobPath", &media_rel)?,
         pan_lit(&subject, "mediaType", &media_type)?,
         pan_lit(&subject, "createdAt", &created_at)?,
         pan_lit(&subject, "importedFrom", &source_key)?,
@@ -568,7 +567,7 @@ fn import_one(
     // ── Land it: the new packet into Pan's own copy of the bytes. ───────────
     let out_packet = xmp::build_packet(&xmp::ImagePacket {
         pan_id: pan_id.clone(),
-        blob_path: media_rel.clone(),
+        media_path: media_rel.clone(),
         created_at: created_at.clone(),
         media_type,
         width,

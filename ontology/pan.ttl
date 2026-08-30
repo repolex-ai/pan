@@ -157,11 +157,6 @@ pan:mediaPath a owl:DatatypeProperty ;
     rdfs:label "media path" ;
     rdfs:comment "On-disk location of the media bytes, relative to the storage root." .
 
-pan:blobPath a owl:DatatypeProperty ;
-    rdfs:domain pan:Media ; rdfs:range xsd:string ;
-    rdfs:label "blob path" ;
-    rdfs:comment "Legacy alias for media path." .
-
 pan:mediaType a owl:DatatypeProperty ;
     rdfs:domain pan:Media ; rdfs:range xsd:string ;
     rdfs:label "media type" ;

@@ -36,19 +36,19 @@ fn same_bytes_twice_are_independent_objects() {
     let a = store.put(&png, Some("image/png"), Facts::new()).unwrap();
     let b = store.put(&png, Some("image/png"), Facts::new()).unwrap();
     assert_ne!(a.pan_id, b.pan_id, "assigned ids never collide on same bytes");
-    assert_ne!(a.blob_path, b.blob_path, "each object owns its own blob");
+    assert_ne!(a.media_path, b.media_path, "each object owns its own media file");
 
     let fa = facts_map(&store, &a.pan_id);
-    assert_eq!(fa["https://repolex.ai/ontology/pan/blobPath"].len(), 1, "exactly one blobPath");
+    assert_eq!(fa["https://repolex.ai/ontology/pan/mediaPath"].len(), 1, "exactly one mediaPath");
     assert_eq!(fa["https://repolex.ai/ontology/pan/mediaType"].len(), 1, "exactly one mediaType");
 
     // Deleting one object leaves the other fully intact.
     store.delete(&a.pan_id).unwrap();
     assert!(store.facts_for(&a.pan_id).unwrap().is_empty());
     assert!(store.get(&b.pan_id).is_ok(), "sibling object untouched by delete");
-    // And no blob is orphaned for the deleted one.
-    let leftover = walk_files(&store.layout.blob_root);
-    assert_eq!(leftover.len(), 1, "exactly the sibling's blob remains: {leftover:?}");
+    // And no media file is orphaned for the deleted one.
+    let leftover = walk_files(&store.layout.media_root);
+    assert_eq!(leftover.len(), 1, "exactly the sibling's media file remains: {leftover:?}");
 }
 
 /// #2/#6 — one malformed /search must not poison a valid index's dim for the

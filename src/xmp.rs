@@ -104,7 +104,7 @@ fn serialize_field(prefix: &str, local: &str, value: &FieldValue, indent: &str) 
 #[derive(Debug, Clone, Default)]
 pub struct ImagePacket {
     pub pan_id: String,
-    pub blob_path: String,
+    pub media_path: String,
     pub created_at: String,
     pub media_type: String,
     pub width: Option<u32>,
@@ -163,7 +163,7 @@ pub fn build_packet(p: &ImagePacket) -> String {
     out.push_str("      <pan:image rdf:parseType=\"Resource\">\n");
     let mut ident: Vec<(String, FieldValue)> = vec![
         ("id".into(), FieldValue::Scalar(p.pan_id.clone())),
-        ("blobPath".into(), FieldValue::Scalar(p.blob_path.clone())),
+        ("mediaPath".into(), FieldValue::Scalar(p.media_path.clone())),
         ("createdAt".into(), FieldValue::Scalar(p.created_at.clone())),
     ];
     if !p.media_type.is_empty() {
@@ -814,10 +814,10 @@ mod tests {
     use super::*;
 
     /// Test helper: a packet with only the identity block filled in.
-    fn simple_packet(pan_id: &str, blob: &str, created: &str) -> String {
+    fn simple_packet(pan_id: &str, media: &str, created: &str) -> String {
         build_packet(&ImagePacket {
             pan_id: pan_id.into(),
-            blob_path: blob.into(),
+            media_path: media.into(),
             created_at: created.into(),
             ..Default::default()
         })
@@ -846,7 +846,7 @@ mod tests {
         // THE invariant: a metadata edit never touches the image.
         let png = make_test_png(16, 16, 7);
         let hash_before = pixel_hash(&png).unwrap();
-        let packet = simple_packet("abc123xy", "blob/image/x.png", "2026-07-15T00:00:00Z");
+        let packet = simple_packet("abc123xy", "media/image/x.png", "2026-07-15T00:00:00Z");
         let stamped = write_packet_into_png_bytes(&png, &packet).unwrap();
         let hash_after = pixel_hash(&stamped).unwrap();
         assert_eq!(hash_before, hash_after, "stamping changed the pixels");
@@ -893,7 +893,7 @@ mod tests {
         }];
         let packet = build_packet(&ImagePacket {
             pan_id: "abc123xy".into(),
-            blob_path: "blob/image/x.png".into(),
+            media_path: "media/image/x.png".into(),
             created_at: "2026-07-15T00:00:00Z".into(),
             app_blocks: apps,
             sub_subjects: subs,
