@@ -60,6 +60,22 @@ pub fn bracket_iri(iri: &str) -> String {
     }
 }
 
+/// Write a file so that no reader ever sees it half done: bytes go to
+/// `.<name>.partial` beside the target, then one `rename` puts it in place
+/// (atomic on the same volume). A viewer watching the folder as images land
+/// (Xee³, 2026-09-04) was reading a 3 MB PNG mid-write and showing Horae's
+/// block, which comes first in the packet, without Pan's, which comes last.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| anyhow!("write_atomic: no file name in {}", path.display()))?;
+    let tmp = path.with_file_name(format!(".{name}.partial"));
+    fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("rename {} → {}", tmp.display(), path.display()));
+    }
+    Ok(())
+}
+
 /// The inverse of [`bracket_iri`]: the git-lex reference form `<ns/Class/id>`
 /// (how frontmatter — and a producer's XMP field — writes a reference) to the
 /// full IRI `https://repolex.ai/ns/Class/id`. None if the text is not that
@@ -476,16 +492,16 @@ impl Pan {
                 let pan_desc = xmp::build_pan_description(&self.image_packet_from(&scratch, &subject)?);
                 let packet = xmp::compose_packet(existing_packet.as_deref(), &pan_desc);
                 let written = xmp::write_packet_into_png_bytes(bytes, &packet)?;
-                fs::write(&abs_path, &written).with_context(|| format!("write media {}", abs_path.display()))?;
+                write_atomic(&abs_path, &written).with_context(|| format!("write media {}", abs_path.display()))?;
             } else {
-                fs::write(&abs_path, bytes).with_context(|| format!("write media {}", abs_path.display()))?;
+                write_atomic(&abs_path, bytes).with_context(|| format!("write media {}", abs_path.display()))?;
             }
             if let Some((rel, _, _)) = &thumb {
                 let tabs = self.layout.abs(rel);
                 if let Some(parent) = tabs.parent() {
                     fs::create_dir_all(parent).context("create thumbnail shard dir")?;
                 }
-                fs::write(&tabs, &thumb_jpeg).with_context(|| format!("write thumbnail {}", tabs.display()))?;
+                write_atomic(&tabs, &thumb_jpeg).with_context(|| format!("write thumbnail {}", tabs.display()))?;
             }
             self.insert_quads(&quads)?;
             Ok(())
@@ -701,7 +717,7 @@ impl Pan {
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent).context("create enrichment dir")?;
         }
-        fs::write(&abs, enrich::build_data_file(subject.as_str(), link_local, records)).with_context(|| format!("write {}", abs.display()))?;
+        write_atomic(&abs, enrich::build_data_file(subject.as_str(), link_local, records).as_bytes()).with_context(|| format!("write {}", abs.display()))?;
         let mut quads = enrich::record_quads(subject.as_str(), link_local, records)?;
         let r = enrich::EnrichmentRef::new(model, &rel, records.len());
         quads.extend(enrich::ref_quads(subject.as_str(), ref_local, &r)?);
@@ -994,7 +1010,7 @@ impl Pan {
         let pan_desc = xmp::build_pan_description(&self.image_packet_from(&self.store, &subject)?);
         let packet = xmp::compose_packet(existing.as_deref(), &pan_desc);
         let written = xmp::write_packet_into_png_bytes(&bytes, &packet)?;
-        fs::write(&abs, &written).with_context(|| format!("write media {}", abs.display()))?;
+        write_atomic(&abs, &written).with_context(|| format!("write media {}", abs.display()))?;
         Ok(())
     }
 

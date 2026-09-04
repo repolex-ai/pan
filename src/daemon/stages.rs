@@ -219,7 +219,7 @@ async fn run_one(
                     if let Some(p) = abs.parent() {
                         std::fs::create_dir_all(p)?;
                     }
-                    std::fs::write(&abs, png)?;
+                    crate::write_atomic(&abs, &png)?;
                     overlay_rel = Some(rel);
                 }
                 let records: Vec<EnrichmentRecord> = r
