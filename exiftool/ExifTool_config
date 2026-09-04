@@ -1,6 +1,6 @@
 # ExifTool user config — teaches ExifTool (and every viewer that embeds it:
 # Xee³, XnView, digiKam …) the Pan and Copia XMP vocabularies, each with its
-# own family-0 group, so they show as "Pan properties" / "Copia properties"
+# own family-0 group, so they show as "pan:Image properties" / "copia:Moment properties" (the class each block is about)
 # beside "XMP properties". The image files are untouched; only the reader
 # learns. Install: cp exiftool/ExifTool_config ~/.ExifTool_config, then
 # restart the viewer (ExifTool reads this once per process).
@@ -9,7 +9,7 @@
 # pan — Pan's block about the stored file. The image struct is declared so
 # nested fields are understood.
 %Image::ExifTool::UserDefined::pan = (
-    GROUPS    => { 0 => 'Pan', 1 => 'Pan', 2 => 'Image' },
+    GROUPS    => { 0 => 'pan:Image', 1 => 'pan:Image', 2 => 'Image' },
     NAMESPACE => { 'pan' => 'https://repolex.ai/ontology/pan/' },
     WRITABLE  => 'string',
     image => {
@@ -38,7 +38,7 @@
 # every copia property present in the file on its own, so the vocabulary can
 # grow without touching this file.
 %Image::ExifTool::UserDefined::copia = (
-    GROUPS    => { 0 => 'Copia', 1 => 'Copia', 2 => 'Image' },
+    GROUPS    => { 0 => 'copia:Moment', 1 => 'copia:Moment', 2 => 'Image' },
     NAMESPACE => { 'copia' => 'https://repolex.ai/ontology/copia/' },
     WRITABLE  => 'string',
 );
