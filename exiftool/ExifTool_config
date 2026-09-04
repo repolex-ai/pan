@@ -1,0 +1,27 @@
+# Test: give Pan's XMP namespace its own family-0 group so readers that
+# section by family 0 (File / PNG / EXIF / XMP / IPTC ...) show "Pan".
+%Image::ExifTool::UserDefined::pan = (
+    GROUPS => { 0 => 'Pan', 1 => 'Pan', 2 => 'Image' },
+    NAMESPACE => { 'pan' => 'https://repolex.ai/ontology/pan/' },
+    WRITABLE => 'string',
+    image => {
+        Struct => {
+            NAMESPACE => { 'pan' => 'https://repolex.ai/ontology/pan/' },
+            STRUCT_NAME => 'PanImage',
+            id          => { },
+            mediaPath   => { },
+            createdDate => { },
+            mediaType   => { },
+            width       => { },
+            height      => { },
+            readyDate   => { },
+            thumbnail   => { Struct => { NAMESPACE => { 'pan' => 'https://repolex.ai/ontology/pan/' }, STRUCT_NAME => 'PanThumb', path => {}, width => {}, height => {} } },
+        },
+    },
+);
+%Image::ExifTool::UserDefined = (
+    'Image::ExifTool::XMP::Main' => {
+        pan => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::pan' } },
+    },
+);
+1;

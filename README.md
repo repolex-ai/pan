@@ -121,6 +121,17 @@ or moving the folder and restarting pand is the whole migration.
 Every path above is declared in the graph and in the image's own XMP; nothing
 is found by convention.
 
+## Seeing Pan's block as its own section in a viewer
+
+Pan's block lives in the image's XMP under the `pan` namespace. Viewers that
+section metadata by ExifTool family (File / PNG / XMP / EXIF / IPTC …) fold
+every namespace into "XMP". `exiftool/ExifTool_config`, copied to
+`~/.ExifTool_config`, declares the `pan` namespace to ExifTool with its own
+family-0 group, so those viewers (Xee³, anything embedding ExifTool) show a
+**Pan** section beside XMP. The file is unchanged; only the reader learns the
+vocabulary. Restart the viewer after installing; ExifTool reads the config once
+per process.
+
 ## What Pan is NOT
 
 No processing queue table. No multi-soul router (that is Syrinx). No security
