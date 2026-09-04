@@ -291,7 +291,10 @@ impl Pan {
         fs::create_dir_all(&layout.oxigraph_root).context("create oxigraph root")?;
         fs::create_dir_all(&layout.hnsw_root).context("create hnsw root")?;
         fs::create_dir_all(&layout.media_root).with_context(|| format!("create media root {}", layout.media_root.display()))?;
-        let ttl_path = root.join("pan.ttl");
+        // Reference copy of the ontology, in the POCKET: it is machine-local
+        // documentation, not a committable file (the kit installs the real one
+        // under .lex/ontology/pan/).
+        let ttl_path = layout.pocket.join("pan.ttl");
         if fs::read_to_string(&ttl_path).ok().as_deref() != Some(PAN_ONTOLOGY_TTL) {
             fs::write(&ttl_path, PAN_ONTOLOGY_TTL).context("write pan.ttl reference copy")?;
         }
