@@ -24,4 +24,15 @@
         pan => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::pan' } },
     },
 );
+
+# copia — the Moment block Horae writes into the image. Only the namespace
+# and the group are declared; ExifTool picks up every copia property in the
+# file on its own, so the vocabulary can grow without touching this file.
+%Image::ExifTool::UserDefined::copia = (
+    GROUPS => { 0 => 'Copia', 1 => 'Copia', 2 => 'Image' },
+    NAMESPACE => { 'copia' => 'https://repolex.ai/ontology/copia/' },
+    WRITABLE => 'string',
+);
+$Image::ExifTool::UserDefined{'Image::ExifTool::XMP::Main'}{copia} =
+    { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::copia' } };
 1;
