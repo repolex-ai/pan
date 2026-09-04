@@ -573,6 +573,7 @@ fn import_one(
         width,
         height,
         caption: current_caption,
+        thumbnail: None,
         enrichment: enrichment.clone(),
         app_blocks,
         sub_subjects: Vec::new(),

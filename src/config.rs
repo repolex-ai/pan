@@ -24,6 +24,8 @@ pub const PAN_NS: &str = "https://repolex.ai/ontology/pan/";
 /// a future resolver (Syrinx) can dereference it (Cool URIs).
 pub const PAN_MEDIA_NS: &str = "https://repolex.ai/pan/";
 
+pub const COPIA_NS: &str = "https://repolex.ai/ontology/copia/";
+
 pub const DEFAULT_STORAGE_ID: &str = "default";
 pub const DEFAULT_INDEX_ID: &str = "default";
 
@@ -80,6 +82,12 @@ impl PanConfig {
         prefixes
             .entry("pan".to_string())
             .or_insert_with(|| PAN_NS.to_string());
+        // copia: is the one application vocabulary every store on this
+        // machine receives (Horae's momentId rides in on every delivery), so
+        // it is known by default; a pan.yml entry still overrides it.
+        prefixes
+            .entry("copia".to_string())
+            .or_insert_with(|| COPIA_NS.to_string());
 
         Ok(PanConfig {
             root: root.to_path_buf(),

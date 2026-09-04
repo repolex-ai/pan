@@ -31,18 +31,38 @@ use std::sync::Mutex;
 use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 
 pub mod config;
-pub mod detectors;
+pub mod daemon;
 pub mod enrich;
 pub mod facts;
 pub mod import;
 pub mod layout;
 pub mod npy;
-pub mod serve;
+pub mod thumbnail;
 pub mod xmp;
 
 pub use config::{PanConfig, PAN_MEDIA_NS, PAN_NS};
 pub use facts::Facts;
 pub use layout::PanLayout;
+
+/// The angle-bracket form of a pan identity, as it appears everywhere a
+/// person or another tool sees it: `<pan/Image/k7m2p9x4>`. Same notation
+/// git-lex uses for every other Thing in the system.
+pub fn bracket_iri(iri: &str) -> String {
+    match iri.strip_prefix("https://repolex.ai/") {
+        Some(rest) => format!("<{rest}>"),
+        None => iri.to_string(),
+    }
+}
+
+/// Accept an identity in any of the forms a caller might hand over — the
+/// bracket form `<pan/Image/x>`, the full IRI, or the bare id — and return
+/// the bare id the store resolves by. Never guesses the class: the bare id
+/// is looked up via `pan:id`, which is unique across classes in a store.
+pub fn bare_id(given: &str) -> String {
+    let s = given.trim();
+    let s = s.strip_prefix('<').and_then(|r| r.strip_suffix('>')).unwrap_or(s);
+    s.rsplit('/').next().unwrap_or(s).to_string()
+}
 
 /// The Pan base ontology, shipped with the binary. Written to `<root>/pan.ttl`
 /// reference copy at open; NOT loaded into the media graph (facts stay pure —
@@ -231,7 +251,7 @@ impl VectorIndex {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchHit {
-    pub pan_id: String,
+    pub id: String,
     pub score: f32,
 }
 
@@ -243,12 +263,40 @@ pub struct IndexStats {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PutResult {
-    /// The assigned identity — new on EVERY put (never content-derived).
-    pub pan_id: String,
-    /// The full subject IRI minted for this object.
-    pub subject: String,
+    /// The assigned identity, bare — new on EVERY put (never content-derived).
+    pub id: String,
+    /// The full subject IRI written for this object.
+    pub iri: String,
     pub media_path: String,
     pub created_at: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// True when a thumbnail was generated and declared. False = the bytes
+    /// could not be decoded as an image (still stored; `pan state` says so).
+    pub thumbnail: bool,
+}
+
+/// What exists for one media object, read from the graph alone — the
+/// substance of `pan state`. Each entry is (stage, models present).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MediaState {
+    pub id: String,
+    pub iri: String,
+    pub media_type: String,
+    pub created_at: String,
+    pub thumbnail: bool,
+    /// enrichment link (embedding / captionItem / region / pose) → models
+    /// that have a record on this object.
+    pub enrichment: Vec<(String, Vec<String>)>,
+}
+
+/// One item of stage work: an image lacking a given model's output.
+#[derive(Debug, Clone)]
+pub struct PendingItem {
+    pub id: String,
+    pub iri: String,
+    pub media_path: String,
+    pub media_type: String,
 }
 
 /// One open Pan store.
@@ -362,7 +410,7 @@ impl Pan {
         let mut quads = vec![
             Quad::new(
                 subject.clone(),
-                rdf_type,
+                rdf_type.clone(),
                 pan_iri(media_class(&media_type)),
                 GraphName::DefaultGraph,
             ),
@@ -441,41 +489,280 @@ impl Pan {
 
         // Caller facts — loud resolution, nothing written on error.
         quads.extend(facts.into_quads(&subject, &self.cfg.prefixes, &self.cfg.default_prefix)?);
-        for q in &quads {
-            self.store.insert(q.as_ref()).context("insert quad")?;
-        }
 
-        // Land the blob. PNGs get the authority stamp (graph → packet → pixels
-        // preserved); other media lands verbatim.
-        if let Some(parent) = abs_path.parent() {
-            fs::create_dir_all(parent).context("create blob shard dir")?;
+        // Thumbnail — a rendition Pan makes itself, declared as its own node.
+        // Not decodable as an image = no thumbnail, still stored; the state
+        // view says so rather than the put failing.
+        let mut thumb_rel: Option<String> = None;
+        let mut thumb_jpeg: Vec<u8> = Vec::new();
+        let mut width = None;
+        let mut height = None;
+        let mut thumb_quads: Vec<Quad> = Vec::new();
+        if media_type.starts_with("image/") {
+            match thumbnail::make(bytes) {
+                Ok(t) => {
+                    width = Some(t.source_width);
+                    height = Some(t.source_height);
+                    quads.push(self.quad(&subject, "width", &t.source_width.to_string()));
+                    quads.push(self.quad(&subject, "height", &t.source_height.to_string()));
+                    let rel = format!("thumbnail/{shard}/{pan_id}.jpg");
+                    let tid = gen_pan_id();
+                    let tnode = NamedNode::new(format!("{PAN_MEDIA_NS}Thumbnail/{tid}"))
+                        .map_err(|e| anyhow!("thumbnail IRI: {e}"))?;
+                    thumb_quads.push(Quad::new(subject.clone(), pan_iri("thumbnail"), tnode.clone(), GraphName::DefaultGraph));
+                    thumb_quads.push(Quad::new(tnode.clone(), rdf_type.clone(), pan_iri("Thumbnail"), GraphName::DefaultGraph));
+                    thumb_quads.push(self.quad(&tnode, "id", &tid));
+                    thumb_quads.push(self.quad(&tnode, "path", &rel));
+                    thumb_quads.push(self.quad(&tnode, "width", &t.width.to_string()));
+                    thumb_quads.push(self.quad(&tnode, "height", &t.height.to_string()));
+                    thumb_rel = Some(rel);
+                    thumb_jpeg = t.jpeg;
+                }
+                Err(e) => tracing::warn!(id = %pan_id, "no thumbnail: {e:#}"),
+            }
         }
-        if png {
-            let packet = self.build_packet_from_graph(&pan_id, &rel_path, &created_at)?;
-            let stamped = xmp::write_packet_into_png_bytes(bytes, &packet)?;
-            fs::write(&abs_path, &stamped)
-                .with_context(|| format!("write blob {}", abs_path.display()))?;
-        } else {
-            fs::write(&abs_path, bytes)
-                .with_context(|| format!("write blob {}", abs_path.display()))?;
+        quads.extend(thumb_quads);
+
+        // THE ORDER (Rob, 2026-09-03): bytes on disk → XMP → thumbnail → graph.
+        // The packet is built from the same quads the graph is about to receive
+        // (a scratch store, so packet and graph cannot disagree), then the
+        // graph commit is ONE transaction — an image exists in the system only
+        // once that commit lands. A failure before it leaves no half-object:
+        // the files written so far are removed.
+        if let Some(parent) = abs_path.parent() {
+            fs::create_dir_all(parent).context("create media shard dir")?;
+        }
+        let land = || -> Result<()> {
+            if png {
+                let scratch = Store::new().context("scratch store")?;
+                for q in &quads {
+                    scratch.insert(q.as_ref()).context("scratch insert")?;
+                }
+                let packet = self.build_packet_from(&scratch, &pan_id, &rel_path, &created_at)?;
+                let stamped = xmp::write_packet_into_png_bytes(bytes, &packet)?;
+                fs::write(&abs_path, &stamped).with_context(|| format!("write media {}", abs_path.display()))?;
+            } else {
+                fs::write(&abs_path, bytes).with_context(|| format!("write media {}", abs_path.display()))?;
+            }
+            if let Some(rel) = &thumb_rel {
+                let tabs = self.layout.abs(rel);
+                if let Some(parent) = tabs.parent() {
+                    fs::create_dir_all(parent).context("create thumbnail shard dir")?;
+                }
+                fs::write(&tabs, &thumb_jpeg).with_context(|| format!("write thumbnail {}", tabs.display()))?;
+            }
+            self.insert_quads(&quads)?;
+            Ok(())
+        };
+        if let Err(e) = land() {
+            let _ = fs::remove_file(&abs_path);
+            if let Some(rel) = &thumb_rel {
+                let _ = fs::remove_file(self.layout.abs(rel));
+            }
+            return Err(e);
         }
 
         Ok(PutResult {
-            pan_id,
-            subject: subject.into_string(),
+            id: pan_id,
+            iri: subject.into_string(),
             media_path: rel_path,
             created_at,
+            width,
+            height,
+            thumbnail: thumb_rel.is_some(),
         })
     }
 
-    /// Insert quads directly. The migration path: an importer has already
-    /// assembled every statement (identity, passthrough, enrichment) and needs
-    /// them landed as one batch.
+    /// Insert quads as ONE transaction: all land or none do. Every graph write
+    /// in Pan goes through here so a crash mid-write can never leave a
+    /// half-described object.
     pub fn insert_quads(&self, quads: &[Quad]) -> Result<()> {
+        let mut t = self.store.start_transaction().context("start transaction")?;
         for q in quads {
-            self.store.insert(q.as_ref()).context("insert quad")?;
+            t.insert(q.as_ref());
         }
+        t.commit().context("commit transaction")?;
         Ok(())
+    }
+
+    /// One `pan:` field of an arbitrary node (an enrichment/thumbnail node
+    /// the image links to), by the node's full IRI.
+    pub fn node_field(&self, node_iri: &str, local: &str) -> Result<Option<String>> {
+        let node = NamedNode::new(node_iri).map_err(|e| anyhow!("invalid node IRI {node_iri}: {e}"))?;
+        for q in self.store.quads_for_pattern(
+            Some((&node).into()),
+            Some(pan_iri(local).as_ref()),
+            None,
+            Some(GraphName::DefaultGraph.as_ref()),
+        ) {
+            let q = q.context("read node field")?;
+            return Ok(Some(term_str(&q.object)));
+        }
+        Ok(None)
+    }
+
+    /// What exists for one object, from the graph alone.
+    pub fn state_for(&self, id: &str) -> Result<Option<MediaState>> {
+        let Some(subject) = self.subject_for(id)? else { return Ok(None) };
+        let facts = self.facts_for(id)?;
+        let one = |local: &str| -> String {
+            facts
+                .iter()
+                .find(|(p, _)| p == &format!("{PAN_NS}{local}"))
+                .and_then(|(_, v)| v.first().cloned())
+                .unwrap_or_default()
+        };
+        let mut enrichment = Vec::new();
+        for link in ["embedding", "captionItem", "region", "pose"] {
+            let mut models: Vec<String> = Vec::new();
+            for (pred, values) in &facts {
+                if pred != &format!("{PAN_NS}{link}") {
+                    continue;
+                }
+                for node_iri in values {
+                    let Ok(node) = NamedNode::new(node_iri.as_str()) else { continue };
+                    for q in self.store.quads_for_pattern(
+                        Some((&node).into()),
+                        Some(pan_iri("model").as_ref()),
+                        None,
+                        Some(GraphName::DefaultGraph.as_ref()),
+                    ) {
+                        let q = q.context("read model")?;
+                        let m = term_str(&q.object);
+                        if !models.contains(&m) {
+                            models.push(m);
+                        }
+                    }
+                }
+            }
+            models.sort();
+            enrichment.push((link.to_string(), models));
+        }
+        Ok(Some(MediaState {
+            id: id.to_string(),
+            iri: subject.into_string(),
+            media_type: one("mediaType"),
+            created_at: one("createdAt"),
+            thumbnail: facts.iter().any(|(p, _)| p == &format!("{PAN_NS}thumbnail")),
+            enrichment,
+        }))
+    }
+
+    /// Images that have NO record from `model` under `link_local` (embedding /
+    /// captionItem / region / pose) — the stage engine's work list. The graph
+    /// is the queue: pending means absent, nothing else is tracked.
+    pub fn pending_for(&self, link_local: &str, model: &str, limit: usize) -> Result<Vec<PendingItem>> {
+        let model_lit = model.replace('\\', "\\\\").replace('"', "\\\"");
+        let q = format!(
+            "SELECT ?s ?id ?path ?type WHERE {{
+               ?s a pan:Image ; pan:id ?id ; pan:mediaPath ?path ; pan:mediaType ?type .
+               FILTER NOT EXISTS {{ ?s pan:{link_local} ?e . ?e pan:model \"{model_lit}\" }}
+             }} ORDER BY ?id LIMIT {limit}"
+        );
+        let mut out = Vec::new();
+        if let QueryResults::Solutions(sols) = self.query(&q)? {
+            for s in sols {
+                let s = s?;
+                let get = |v: &str| s.get(v).map(term_str).unwrap_or_default();
+                out.push(PendingItem {
+                    id: get("id"),
+                    iri: get("s"),
+                    media_path: get("path"),
+                    media_type: get("type"),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Record one model's output for an image as a data file beside the media
+    /// plus the graph statements that describe it, then refresh the image's
+    /// XMP so its own packet lists the new file. `kind` is the data-file
+    /// directory (caption / sam3 / pose); `link_local` the membership
+    /// predicate; `ref_local` the reference predicate.
+    pub fn write_enrichment(
+        &self,
+        id: &str,
+        kind: &str,
+        link_local: &str,
+        ref_local: &str,
+        model: &str,
+        records: &[enrich::EnrichmentRecord],
+        variant: Option<&str>,
+    ) -> Result<String> {
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
+        let created_at = self
+            .facts_for(id)?
+            .iter()
+            .find(|(p, _)| p == &format!("{PAN_NS}createdAt"))
+            .and_then(|(_, v)| v.first().cloned())
+            .unwrap_or_default();
+        let shard = created_at.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
+        let rel = PanLayout::enrichment_rel_path(kind, &shard, id, variant);
+        let abs = self.layout.abs(&rel);
+        if let Some(parent) = abs.parent() {
+            fs::create_dir_all(parent).context("create enrichment dir")?;
+        }
+        fs::write(&abs, enrich::build_data_file(subject.as_str(), link_local, records))
+            .with_context(|| format!("write {}", abs.display()))?;
+
+        let mut quads = enrich::record_quads(subject.as_str(), link_local, records)?;
+        let r = enrich::EnrichmentRef { id: gen_pan_id(), model: model.to_string(), path: rel.clone(), count: records.len() };
+        quads.extend(enrich::ref_quads(subject.as_str(), ref_local, &r)?);
+        if let Err(e) = self.insert_quads(&quads) {
+            let _ = fs::remove_file(&abs);
+            return Err(e);
+        }
+        self.restamp(id)?;
+        Ok(rel)
+    }
+
+    /// Record an embedding: vector into the index + `.npy` sidecar, an
+    /// Embedding node (model, dim, vectorPath) and a vectorData reference on
+    /// the image, XMP refreshed.
+    pub fn write_embedding(&self, id: &str, model: &str, index_name: &str, vec: &[f32]) -> Result<()> {
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
+        self.add_vector(id, index_name, vec)?;
+        self.flush()?;
+        let rel = self
+            .layout
+            .vector_sidecar_path(index_name, id)
+            .strip_prefix(&self.layout.storage_root)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let rec = enrich::EnrichmentRecord::new(gen_pan_id(), "Embedding", model)
+            .field("dim", vec.len().to_string())
+            .field("vectorPath", &rel);
+        let mut quads = enrich::record_quads(subject.as_str(), "embedding", std::slice::from_ref(&rec))?;
+        let r = enrich::EnrichmentRef { id: gen_pan_id(), model: model.to_string(), path: rel, count: 1 };
+        quads.extend(enrich::ref_quads(subject.as_str(), "vectorData", &r)?);
+        self.insert_quads(&quads)?;
+        self.restamp(id)?;
+        Ok(())
+    }
+
+    /// Set the image's current caption text (the one field a plain viewer
+    /// shows). Replaces any previous value; XMP refreshed.
+    pub fn set_caption(&self, id: &str, text: &str) -> Result<()> {
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
+        let mut t = self.store.start_transaction().context("start transaction")?;
+        let old: Vec<Quad> = self
+            .store
+            .quads_for_pattern(Some((&subject).into()), Some(pan_iri("caption").as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+            .collect::<std::result::Result<_, _>>()
+            .context("read caption")?;
+        for q in &old {
+            t.remove(q.as_ref());
+        }
+        t.insert(self.quad(&subject, "caption", text).as_ref());
+        t.commit().context("commit caption")?;
+        self.restamp(id)
     }
 
     /// Mint a fresh, unused id. Public so an importer can assign identity
@@ -832,7 +1119,7 @@ impl Pan {
         for (key, distance) in matches.keys.iter().zip(matches.distances.iter()) {
             if let Some(id) = vi.key_to_id.get(key) {
                 hits.push(SearchHit {
-                    pan_id: id.clone(),
+                    id: id.clone(),
                     score: 1.0 - *distance,
                 });
             }
@@ -891,20 +1178,44 @@ impl Pan {
             .find(|(p, _)| p == &format!("{PAN_NS}createdAt"))
             .and_then(|(_, v)| v.first().cloned())
             .unwrap_or_default();
-        let packet = self.build_packet_from_graph(pan_id, &media_path, &created_at)?;
+        let packet = self.build_packet_from(&self.store, pan_id, &media_path, &created_at)?;
         let stamped = xmp::write_packet_into_png_bytes(&bytes, &packet)?;
         fs::write(&abs, &stamped).with_context(|| format!("write media {}", abs.display()))?;
         Ok(())
     }
 
-    /// Graph facts → XMP packet. Facts group into app blocks by reverse prefix
-    /// lookup; multi-value predicates become Bags; sub-subjects (`<subj>/…`)
+    /// Graph facts → XMP packet, read from `store` (the live store on
+    /// restamp; a scratch store holding the about-to-be-committed quads at
+    /// ingest). Facts group into app blocks by reverse prefix lookup;
+    /// multi-value predicates become Bags; sub-subjects (`<subj>/…`)
     /// re-author as their own Descriptions.
-    fn build_packet_from_graph(&self, pan_id: &str, media_path: &str, created_at: &str) -> Result<String> {
-        let Some(subject) = self.subject_for(pan_id)? else {
-            return Err(anyhow!("panId not found: {pan_id}"));
+    fn build_packet_from(&self, store: &Store, pan_id: &str, media_path: &str, created_at: &str) -> Result<String> {
+        let subject = {
+            let obj = Literal::new_simple_literal(pan_id);
+            let mut found = None;
+            for quad in store.quads_for_pattern(None, Some(pan_iri("id").as_ref()), Some(obj.as_ref().into()), Some(GraphName::DefaultGraph.as_ref())) {
+                let quad = quad.context("resolve id")?;
+                if let NamedOrBlankNode::NamedNode(n) = quad.subject {
+                    // The media object, not an enrichment node that happens to share nothing.
+                    if n.as_str().contains("/Image/") || n.as_str().contains("/Media/") {
+                        found = Some(n);
+                        break;
+                    }
+                }
+            }
+            found.ok_or_else(|| anyhow!("id not found: {pan_id}"))?
         };
         let subj_prefix = format!("{}/", subject.as_str());
+        let read_facts = |s: &NamedNode| -> Result<Vec<(String, Vec<String>)>> {
+            let mut map: HashMap<String, Vec<String>> = HashMap::new();
+            for quad in store.quads_for_pattern(Some(s.into()), None, None, Some(GraphName::DefaultGraph.as_ref())) {
+                let quad = quad.context("read facts")?;
+                map.entry(quad.predicate.as_str().to_string()).or_default().push(term_str(&quad.object));
+            }
+            let mut out: Vec<_> = map.into_iter().collect();
+            out.sort();
+            Ok(out)
+        };
 
         // Reverse prefix map, longest namespace first (most-specific wins).
         let mut rev: Vec<(&String, &String)> = self.cfg.prefixes.iter().collect();
@@ -920,7 +1231,7 @@ impl Pan {
             None
         };
 
-        let all_facts = self.facts_for(pan_id)?;
+        let all_facts = read_facts(&subject)?;
         let pan_field = |local: &str| -> Option<String> {
             all_facts
                 .iter()
@@ -947,7 +1258,7 @@ impl Pan {
                         path: String::new(),
                         count: 0,
                     };
-                    for q in self.store.quads_for_pattern(
+                    for q in store.quads_for_pattern(
                         Some((&node).into()),
                         None,
                         None,
@@ -1003,7 +1314,7 @@ impl Pan {
         // as `rdf:resource` on the way out, not as string literals.
         let rdf_type_iri = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
         let mut sub_facts: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
-        for quad in self.store.iter() {
+        for quad in store.iter() {
             let quad = quad.context("scan sub-subjects")?;
             let subj_iri = match &quad.subject {
                 NamedOrBlankNode::NamedNode(n) => n.as_str().to_string(),
@@ -1054,6 +1365,25 @@ impl Pan {
         }
         sub_blocks.sort_by(|a, b| a.about.cmp(&b.about));
 
+        // The thumbnail node, if declared: path + size go into the packet.
+        let thumbnail = pan_field("thumbnail").and_then(|node_iri| {
+            let node = NamedNode::new(node_iri).ok()?;
+            let mut path = None;
+            let mut w = None;
+            let mut h = None;
+            for q in store.quads_for_pattern(Some((&node).into()), None, None, Some(GraphName::DefaultGraph.as_ref())) {
+                let q = q.ok()?;
+                let v = term_str(&q.object);
+                match q.predicate.as_str().strip_prefix(PAN_NS) {
+                    Some("path") => path = Some(v),
+                    Some("width") => w = v.parse().ok(),
+                    Some("height") => h = v.parse().ok(),
+                    _ => {}
+                }
+            }
+            Some((path?, w?, h?))
+        });
+
         Ok(xmp::build_packet(&xmp::ImagePacket {
             pan_id: pan_id.to_string(),
             media_path: media_path.to_string(),
@@ -1062,6 +1392,7 @@ impl Pan {
             width: pan_field("width").and_then(|v| v.parse().ok()),
             height: pan_field("height").and_then(|v| v.parse().ok()),
             caption: pan_field("caption"),
+            thumbnail,
             enrichment,
             app_blocks,
             sub_subjects: sub_blocks,

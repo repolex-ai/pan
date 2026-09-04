@@ -111,6 +111,9 @@ pub struct ImagePacket {
     pub height: Option<u32>,
     /// The current best caption text — the one thing a plain viewer should show.
     pub caption: Option<String>,
+    /// The thumbnail Pan made: (store-relative path, width, height). Declared
+    /// in the packet so the image knows where its own rendition is.
+    pub thumbnail: Option<(String, u32, u32)>,
     /// `(reference predicate local name, references)`, e.g.
     /// `("regionData", [...])`. Empty groups are omitted: an absent reference
     /// means "nothing of this kind exists", which is exactly true.
@@ -180,6 +183,13 @@ pub fn build_packet(p: &ImagePacket) -> String {
     }
     for (local, value) in &ident {
         out.push_str(&serialize_field("pan", local, value, "       "));
+    }
+    if let Some((path, w, h)) = &p.thumbnail {
+        out.push_str("       <pan:thumbnail rdf:parseType=\"Resource\">\n");
+        out.push_str(&format!("        <pan:path>{}</pan:path>\n", xml_escape(path)));
+        out.push_str(&format!("        <pan:width>{w}</pan:width>\n"));
+        out.push_str(&format!("        <pan:height>{h}</pan:height>\n"));
+        out.push_str("       </pan:thumbnail>\n");
     }
     for (local, refs) in &p.enrichment {
         if refs.is_empty() {

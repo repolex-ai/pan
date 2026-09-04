@@ -14,6 +14,10 @@ path = "src/lib.rs"
 name = "pan"
 path = "src/bin/pan.rs"
 
+[[bin]]
+name = "pand"
+path = "src/bin/pand.rs"
+
 [dependencies]
 # The crown-jewel pair — exactly what Pool's proven vector core uses.
 oxigraph = { version = "0.5.6", features = ["rdf-12"] }
@@ -27,10 +31,13 @@ serde_json = "1"
 serde_yaml = "0.9"
 chrono = "0.4"
 png = "0.17"
+base64 = "0.22"
+# Thumbnails: decode png/jpeg/webp/gif, resize, encode jpeg.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
 # HTTP surface: axum 0.8 + utoipa Swagger (the interface spec, shipped from commit one).
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "fs", "sync", "time"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -38,7 +45,7 @@ utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 # Detector calls (external configured endpoints; rustls so no OpenSSL on macOS).
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "blocking"] }
 
 [dev-dependencies]
 tempfile = "3"

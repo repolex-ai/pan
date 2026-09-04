@@ -60,22 +60,22 @@ fn full_store_describe_query_search_roundtrip() {
             Facts::new().with("dc:subject", "sea"),
         )
         .unwrap();
-    assert_ne!(wolf.pan_id, sea.pan_id);
-    assert_eq!(wolf.pan_id.len(), 8, "panId is a short assigned id");
+    assert_ne!(wolf.id, sea.id);
+    assert_eq!(wolf.id.len(), 8, "panId is a short assigned id");
     assert_eq!(
-        wolf.subject,
-        format!("https://repolex.ai/pan/Image/{}", wolf.pan_id),
+        wolf.iri,
+        format!("https://repolex.ai/pan/Image/{}", wolf.id),
         "subject is a standard full https IRI"
     );
 
     // The identity model: putting the SAME bytes again is a NEW media object —
     // panIds are assigned, never content-derived, and there is no dedup.
     let wolf2 = store.put(&wolf_png, Some("image/png"), Facts::new()).unwrap();
-    assert_ne!(wolf2.pan_id, wolf.pan_id, "same bytes, different object, different panId");
-    store.delete(&wolf2.pan_id).unwrap();
+    assert_ne!(wolf2.id, wolf.id, "same bytes, different object, different panId");
+    store.delete(&wolf2.id).unwrap();
 
     // ── get: bytes come back, pixels stable across the stamp ──
-    let (bytes, facts) = store.get(&wolf.pan_id).unwrap();
+    let (bytes, facts) = store.get(&wolf.id).unwrap();
     assert_ne!(bytes, wolf_png, "stored PNG is stamped (file bytes differ)");
     assert_eq!(
         pan::xmp::pixel_hash(&bytes).unwrap(),
@@ -86,7 +86,7 @@ fn full_store_describe_query_search_roundtrip() {
     assert_eq!(facts_map["http://purl.org/dc/elements/1.1/subject"], vec!["wolf"]);
     assert_eq!(
         facts_map["https://repolex.ai/ontology/pan/id"],
-        vec![wolf.pan_id.clone()],
+        vec![wolf.id.clone()],
         "pan:id identity fact present"
     );
     assert_eq!(
@@ -98,19 +98,19 @@ fn full_store_describe_query_search_roundtrip() {
     // ── the stamped XMP mirror carries the app facts (travel copy) ──
     let packet = pan::xmp::read_xmp_packet_from_bytes(&bytes).unwrap().expect("stamped");
     assert!(packet.contains("wolf in forest"), "app facts mirrored into XMP");
-    assert!(packet.contains(&wolf.pan_id), "pan: identity block present");
+    assert!(packet.contains(&wolf.id), "pan: identity block present");
 
     // ── describe: merge facts, loud failure on unknown prefix ──
     store
-        .describe(&wolf.pan_id, Facts::new().with("dc:creator", "w4r3z"))
+        .describe(&wolf.id, Facts::new().with("dc:creator", "w4r3z"))
         .unwrap();
     let err = store
-        .describe(&wolf.pan_id, Facts::new().with("nope:field", "x"))
+        .describe(&wolf.id, Facts::new().with("nope:field", "x"))
         .unwrap_err();
     assert!(err.to_string().contains("unknown prefix"), "loud, not silent: {err}");
 
     // Re-stamp followed the graph: the new fact is in the file's XMP now.
-    let (bytes_after, _) = store.get(&wolf.pan_id).unwrap();
+    let (bytes_after, _) = store.get(&wolf.id).unwrap();
     let packet_after = pan::xmp::read_xmp_packet_from_bytes(&bytes_after).unwrap().unwrap();
     assert!(packet_after.contains("w4r3z"), "describe re-stamps the travel copy");
     assert_eq!(
@@ -136,28 +136,28 @@ fn full_store_describe_query_search_roundtrip() {
                 .collect(),
             _ => panic!("expected solutions"),
         };
-        assert_eq!(ids, vec![wolf.pan_id.clone()], "graph-only mode is a complete product");
+        assert_eq!(ids, vec![wolf.id.clone()], "graph-only mode is a complete product");
     }
 
     // ── attach vectors (the two-call flow) + fusion search ──
     let dim = 64;
     let wolf_vec = unit_vec(dim, 3);
     let sea_vec = unit_vec(dim, 40);
-    assert!(store.add_vector(&wolf.pan_id, "test-idx", &wolf_vec).unwrap());
-    assert!(store.add_vector(&sea.pan_id, "test-idx", &sea_vec).unwrap());
+    assert!(store.add_vector(&wolf.id, "test-idx", &wolf_vec).unwrap());
+    assert!(store.add_vector(&sea.id, "test-idx", &sea_vec).unwrap());
     assert!(
-        !store.add_vector(&wolf.pan_id, "test-idx", &wolf_vec).unwrap(),
+        !store.add_vector(&wolf.id, "test-idx", &wolf_vec).unwrap(),
         "idempotent re-add is a no-op"
     );
 
     // Raw sidecars landed (reembed source of truth).
-    let sidecar = store.layout.vector_sidecar_path("test-idx", &wolf.pan_id);
+    let sidecar = store.layout.vector_sidecar_path("test-idx", &wolf.id);
     assert!(sidecar.exists(), "npy sidecar written at {}", sidecar.display());
     assert_eq!(pan::npy::read_f32_1d(&sidecar).unwrap().len(), dim);
 
     // Ungated search: nearest to wolf_vec is wolf.
     let hits = store.search("", &wolf_vec, 2, "test-idx").unwrap();
-    assert_eq!(hits[0].pan_id, wolf.pan_id);
+    assert_eq!(hits[0].id, wolf.id);
     assert!(hits[0].score > 0.99, "self-similarity ~1.0, got {}", hits[0].score);
     assert_eq!(hits.len(), 2);
 
@@ -168,7 +168,7 @@ fn full_store_describe_query_search_roundtrip() {
         .search("?s dc:subject \"sea\" .", &wolf_vec, 5, "test-idx")
         .unwrap();
     assert_eq!(hits.len(), 1, "graph gate admits exactly the sea image");
-    assert_eq!(hits[0].pan_id, sea.pan_id);
+    assert_eq!(hits[0].id, sea.id);
 
     // Dim mismatch is loud.
     let err = store.search("", &unit_vec(32, 1), 5, "test-idx").unwrap_err();
@@ -179,24 +179,24 @@ fn full_store_describe_query_search_roundtrip() {
     drop(store);
     let reopened = Pan::open(dir.path()).unwrap();
     let hits = reopened.search("", &sea_vec, 1, "test-idx").unwrap();
-    assert_eq!(hits[0].pan_id, sea.pan_id, "index + keymap reload from disk");
+    assert_eq!(hits[0].id, sea.id, "index + keymap reload from disk");
 
     // Graph survived too.
-    let (_, facts) = reopened.get(&wolf.pan_id).unwrap();
+    let (_, facts) = reopened.get(&wolf.id).unwrap();
     let facts_map: HashMap<String, Vec<String>> = facts.into_iter().collect();
     assert_eq!(facts_map["http://purl.org/dc/elements/1.1/creator"], vec!["w4r3z"]);
 
     // ── delete: everything about the sea image goes ──
-    reopened.delete(&sea.pan_id).unwrap();
-    assert!(reopened.facts_for(&sea.pan_id).unwrap().is_empty(), "triples gone");
-    assert!(reopened.get(&sea.pan_id).is_err(), "blob gone");
+    reopened.delete(&sea.id).unwrap();
+    assert!(reopened.facts_for(&sea.id).unwrap().is_empty(), "triples gone");
+    assert!(reopened.get(&sea.id).is_err(), "blob gone");
     let hits = reopened.search("", &sea_vec, 5, "test-idx").unwrap();
     assert!(
-        hits.iter().all(|h| h.pan_id != sea.pan_id),
+        hits.iter().all(|h| h.id != sea.id),
         "deleted panId never surfaces in search"
     );
     // Wolf unaffected.
-    assert!(!reopened.facts_for(&wolf.pan_id).unwrap().is_empty());
+    assert!(!reopened.facts_for(&wolf.id).unwrap().is_empty());
 }
 
 #[test]
@@ -215,24 +215,24 @@ fn travel_copy_ingests_on_put_into_fresh_store() {
     let put_a = store_a
         .put(&png, Some("image/png"), Facts::new().with("dc:subject", "lighthouse"))
         .unwrap();
-    let (stamped, _) = store_a.get(&put_a.pan_id).unwrap();
+    let (stamped, _) = store_a.get(&put_a.id).unwrap();
 
     // New store, no shared config beyond defaults — the fact rides the file.
     let dir_b = tempfile::tempdir().unwrap();
     let store_b = Pan::open(dir_b.path()).unwrap();
     let put_b = store_b.put(&stamped, Some("image/png"), Facts::new()).unwrap();
     assert_ne!(
-        put_b.pan_id, put_a.pan_id,
+        put_b.id, put_a.id,
         "identity never travels — the receiving store assigns its own panId"
     );
 
     let facts: HashMap<String, Vec<String>> =
-        store_b.facts_for(&put_b.pan_id).unwrap().into_iter().collect();
+        store_b.facts_for(&put_b.id).unwrap().into_iter().collect();
     assert_eq!(
         facts["http://purl.org/dc/elements/1.1/subject"],
         vec!["lighthouse"],
         "facts traveled inside the file and ingested on put"
     );
     // The receiving store's identity block is its OWN, not the source's.
-    assert_eq!(facts["https://repolex.ai/ontology/pan/id"], vec![put_b.pan_id.clone()]);
+    assert_eq!(facts["https://repolex.ai/ontology/pan/id"], vec![put_b.id.clone()]);
 }

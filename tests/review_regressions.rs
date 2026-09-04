@@ -35,17 +35,17 @@ fn same_bytes_twice_are_independent_objects() {
 
     let a = store.put(&png, Some("image/png"), Facts::new()).unwrap();
     let b = store.put(&png, Some("image/png"), Facts::new()).unwrap();
-    assert_ne!(a.pan_id, b.pan_id, "assigned ids never collide on same bytes");
+    assert_ne!(a.id, b.id, "assigned ids never collide on same bytes");
     assert_ne!(a.media_path, b.media_path, "each object owns its own media file");
 
-    let fa = facts_map(&store, &a.pan_id);
+    let fa = facts_map(&store, &a.id);
     assert_eq!(fa["https://repolex.ai/ontology/pan/mediaPath"].len(), 1, "exactly one mediaPath");
     assert_eq!(fa["https://repolex.ai/ontology/pan/mediaType"].len(), 1, "exactly one mediaType");
 
     // Deleting one object leaves the other fully intact.
-    store.delete(&a.pan_id).unwrap();
-    assert!(store.facts_for(&a.pan_id).unwrap().is_empty());
-    assert!(store.get(&b.pan_id).is_ok(), "sibling object untouched by delete");
+    store.delete(&a.id).unwrap();
+    assert!(store.facts_for(&a.id).unwrap().is_empty());
+    assert!(store.get(&b.id).is_ok(), "sibling object untouched by delete");
     // And no media file is orphaned for the deleted one.
     let leftover = walk_files(&store.layout.media_root);
     assert_eq!(leftover.len(), 1, "exactly the sibling's media file remains: {leftover:?}");
@@ -66,7 +66,7 @@ fn wrong_dim_query_does_not_poison_index() {
         let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
         v.iter().map(|x| x / n).collect()
     };
-    store.add_vector(&put.pan_id, "idx", &good).unwrap();
+    store.add_vector(&put.id, "idx", &good).unwrap();
     store.flush().unwrap();
     drop(store);
 
@@ -78,7 +78,7 @@ fn wrong_dim_query_does_not_poison_index() {
     // Now a CORRECT-length query must still work.
     let hits = store.search("", &good, 3, "idx").unwrap();
     assert_eq!(hits.len(), 1, "valid dim-8 query rejected — index dim was poisoned");
-    assert_eq!(hits[0].pan_id, put.pan_id);
+    assert_eq!(hits[0].id, put.id);
 }
 
 /// #3/#4/#10 — a vector index name with path-traversal must be rejected, never
@@ -93,7 +93,7 @@ fn traversal_index_name_is_rejected() {
 
     for evil in ["../escape", "a/b", "..", "/abs/path", "with\0nul", "dir/../x"] {
         assert!(
-            store.add_vector(&put.pan_id, evil, &v).is_err(),
+            store.add_vector(&put.id, evil, &v).is_err(),
             "add_vector accepted a traversal index name: {evil:?}"
         );
         assert!(
@@ -111,7 +111,7 @@ fn traversal_index_name_is_rejected() {
     assert!(!escaped.exists(), "a traversal write escaped the store");
 
     // A legitimate name still works.
-    assert!(store.add_vector(&put.pan_id, "qwen-vl-2b-2048", &v).is_ok());
+    assert!(store.add_vector(&put.id, "qwen-vl-2b-2048", &v).is_ok());
 }
 
 /// #11/#14 — a standard Adobe-style PNG (root rdf:about="") must ingest, not
@@ -137,7 +137,7 @@ fn standard_adobe_xmp_ingests_and_garbage_is_skipped() {
 
     // Must NOT error — the whole point is real-world files ingest.
     let put = store.put(&adobe_png, Some("image/png"), Facts::new()).unwrap();
-    let f = facts_map(&store, &put.pan_id);
+    let f = facts_map(&store, &put.id);
     assert_eq!(
         f.get("http://purl.org/dc/elements/1.1/title").map(|v| v.as_slice()),
         Some(["Adobe Title".to_string()].as_slice()),
@@ -147,7 +147,7 @@ fn standard_adobe_xmp_ingests_and_garbage_is_skipped() {
     // A PNG with a corrupt XMP chunk must store fine, just without facts.
     let garbage = pan::xmp::write_packet_into_png_bytes(&make_png(5), "<not xml at all <<<").unwrap();
     let put2 = store.put(&garbage, Some("image/png"), Facts::new()).unwrap();
-    assert!(store.get(&put2.pan_id).is_ok(), "garbage XMP must not fail the store");
+    assert!(store.get(&put2.id).is_ok(), "garbage XMP must not fail the store");
 }
 
 /// #12/#15 — rdf:type from travel XMP survives ingest as an IRI, so a type
@@ -164,15 +164,15 @@ fn travel_rdf_type_survives_as_iri_for_type_queries() {
     let put = store_a.put(&png, Some("image/png"), Facts::new()).unwrap();
 
     // Author a region sub-subject with an rdf:type onto the graph, re-stamp.
-    let region = format!("{}/Region/wolf/01", put.subject);
+    let region = format!("{}/Region/wolf/01", put.iri);
     store_a
         .describe_subject(&region, "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", &format!("{COPIA}Sam3Region"), true)
         .unwrap();
     store_a
         .describe_subject(&region, &format!("{COPIA}regionDescriptor"), "wolf", false)
         .unwrap();
-    store_a.restamp(&put.pan_id).unwrap();
-    let (stamped, _) = store_a.get(&put.pan_id).unwrap();
+    store_a.restamp(&put.id).unwrap();
+    let (stamped, _) = store_a.get(&put.id).unwrap();
 
     // Travel to a fresh store.
     let dir_b = tempfile::tempdir().unwrap();
@@ -182,7 +182,7 @@ fn travel_rdf_type_survives_as_iri_for_type_queries() {
 
     // The region rebased onto store_b's subject; the type query must match
     // there — proves rdf:type ingested as an IRI AND the rebase landed.
-    let region_b = format!("{}/Region/wolf/01", put_b.subject);
+    let region_b = format!("{}/Region/wolf/01", put_b.iri);
     let results = store_b
         .query(&format!("ASK {{ <{region_b}> a <{COPIA}Sam3Region> }}"))
         .unwrap();
@@ -203,11 +203,11 @@ fn multi_namespace_sub_subject_survives_travel() {
     let store_a = Pan::open(dir_a.path()).unwrap();
     let png = make_png(7);
     let put = store_a.put(&png, Some("image/png"), Facts::new()).unwrap();
-    let region = format!("{}/Region/sea/01", put.subject);
+    let region = format!("{}/Region/sea/01", put.iri);
     store_a.describe_subject(&region, &format!("{COPIA}regionDescriptor"), "sea", false).unwrap();
     store_a.describe_subject(&region, &format!("{DC}creator"), "w4r3z", false).unwrap();
-    store_a.restamp(&put.pan_id).unwrap();
-    let (stamped, _) = store_a.get(&put.pan_id).unwrap();
+    store_a.restamp(&put.id).unwrap();
+    let (stamped, _) = store_a.get(&put.id).unwrap();
 
     let dir_b = tempfile::tempdir().unwrap();
     std::fs::write(dir_b.path().join("pan.yml"), format!("prefixes:\n  copia: {COPIA}\n  dc: {DC}\n")).unwrap();
@@ -216,7 +216,7 @@ fn multi_namespace_sub_subject_survives_travel() {
 
     // Region facts live at the REBASED IRI in store_b; read them via SPARQL
     // (facts_for is panId-scoped; sub-subjects are plain graph nodes).
-    let region_b = format!("{}/Region/sea/01", put_b.subject);
+    let region_b = format!("{}/Region/sea/01", put_b.iri);
     let ask = |pred: &str, val: &str| -> bool {
         match store_b
             .query(&format!("ASK {{ <{region_b}> <{pred}> \"{val}\" }}"))
