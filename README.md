@@ -85,18 +85,25 @@ record in the graph. `pan state` reads that record.
 
 ```
 <root>/                       soul repo: <repo>/.pan   bare: the configured dir
-  pan.yml                     optional (storage_id, storage_root, prefixes)
-  pan.ttl                     reference copy of the ontology
-  oxigraph/                   the graph — always local, never relocated
-  hnsw/<model>/               vector index per embedding model — always local
-  storage/                    the ONE relocatable root (pan.yml storage_root:)
-    media/image/YYYY/MM/DD/<id>.png
-    thumbnail/YYYY/MM/DD/<id>.jpg
-    vectors/<model>/<id>.npy
-    caption/YYYY/MM/DD/<id>.<model>.xml
-    pose/YYYY/MM/DD/<id>.xml  (+ <id>.<model>.png skeleton overlay)
-    sam3/YYYY/MM/DD/<id>.xml
+  pan.yml                     bare store only: storage_id (a soul's id is its genesis SHA)
+  _ignore/                    gitignored (git-lex writes the `.pan/_ignore/` line)
+    pan.ttl                   reference copy of the ontology
+    oxigraph/                 the graph — always here, never relocated
+    hnsw/<model>/             vector index per embedding model — always here
+    media/                    the media root — HERE unless media_volume is set
+      image/YYYY/MM/DD/<id>.png
+      thumbnail/YYYY/MM/DD/<id>.jpg
+      vectors/<model>/<id>.npy
+      caption/YYYY/MM/DD/<id>.<model>.xml
+      pose/YYYY/MM/DD/<id>.xml  (+ <id>.<model>.png skeleton overlay)
 ```
+
+With `media_volume: /Volumes/p02/_pan` the media root moves to
+`/Volumes/p02/_pan/<first 6 chars of the store id>/media` — e.g.
+`/Volumes/p02/_pan/700c5b/media`. The folder is short because a person reads
+it; the store id itself is always the full hash. The root's absolute path is
+declared in the store's graph as `pan:mediaRoot` on every start, so renaming
+or moving the folder and restarting pand is the whole migration.
 
 Every path above is declared in the graph and in the image's own XMP; nothing
 is found by convention.

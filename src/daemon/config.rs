@@ -109,10 +109,24 @@ fn expand_home(p: &Path) -> PathBuf {
     p.to_path_buf()
 }
 
+/// How many leading characters of the store id name its folder on the media
+/// volume. The id itself (graph, wire, `pan:Store`) is always the full hash;
+/// only the folder is short, because a person reads it in `ls`. 6, Rob's pick
+/// (2026-09-04).
+pub const MEDIA_FOLDER_CHARS: usize = 6;
+
+/// The folder name on the media volume for one store id.
+pub fn media_folder_name(store_id: &str) -> String {
+    store_id.chars().take(MEDIA_FOLDER_CHARS).collect()
+}
+
 impl DaemonConfig {
-    /// The media root for one store under this config, or None for the pocket default.
+    /// The media root for one store under this config, or None for the pocket
+    /// default: `<media_volume>/<first 6 chars of the id>/media`. The full path
+    /// is declared in the store's graph as `pan:mediaRoot`; nothing reads it by
+    /// convention.
     pub fn media_root_for(&self, store_id: &str) -> Option<PathBuf> {
-        self.media_volume.as_ref().map(|v| v.join(store_id).join("media"))
+        self.media_volume.as_ref().map(|v| v.join(media_folder_name(store_id)).join("media"))
     }
 
     pub fn load() -> Result<Self> {
@@ -200,6 +214,18 @@ mod tests {
         let cfg = DaemonConfig::load_from(&p).unwrap();
         assert!(cfg.models.contains_key("pose"));
         assert_eq!(cfg.active_models().count(), 0);
+    }
+
+    #[test]
+    fn media_folder_is_the_short_prefix_of_the_full_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        std::fs::write(&p, "media_volume: /Volumes/p02/_pan\n").unwrap();
+        let cfg = DaemonConfig::load_from(&p).unwrap();
+        let root = cfg.media_root_for("700c5bd4a969723107c1b92b83c0f1ec1497d9d4").unwrap();
+        assert_eq!(root, PathBuf::from("/Volumes/p02/_pan/700c5b/media"));
+        // The all-zeros bare store id shortens the same way.
+        assert_eq!(media_folder_name("0000000000000000000000000000000000000000"), "000000");
     }
 
     #[test]
