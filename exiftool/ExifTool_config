@@ -1,12 +1,20 @@
-# Test: give Pan's XMP namespace its own family-0 group so readers that
-# section by family 0 (File / PNG / EXIF / XMP / IPTC ...) show "Pan".
+# ExifTool user config — teaches ExifTool (and every viewer that embeds it:
+# Xee³, XnView, digiKam …) the Pan and Copia XMP vocabularies, each with its
+# own family-0 group, so they show as "Pan properties" / "Copia properties"
+# beside "XMP properties". The image files are untouched; only the reader
+# learns. Install: cp exiftool/ExifTool_config ~/.ExifTool_config, then
+# restart the viewer (ExifTool reads this once per process).
+# See subtexture/docs/pan/2026_09_04_EXIFTOOL_SECTIONS_AND_THE_IMAGE_DATA_STRUCTURE.md
+
+# pan — Pan's block about the stored file. The image struct is declared so
+# nested fields are understood.
 %Image::ExifTool::UserDefined::pan = (
-    GROUPS => { 0 => 'Pan', 1 => 'Pan', 2 => 'Image' },
+    GROUPS    => { 0 => 'Pan', 1 => 'Pan', 2 => 'Image' },
     NAMESPACE => { 'pan' => 'https://repolex.ai/ontology/pan/' },
-    WRITABLE => 'string',
+    WRITABLE  => 'string',
     image => {
         Struct => {
-            NAMESPACE => { 'pan' => 'https://repolex.ai/ontology/pan/' },
+            NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
             STRUCT_NAME => 'PanImage',
             id          => { },
             mediaPath   => { },
@@ -15,24 +23,30 @@
             width       => { },
             height      => { },
             readyDate   => { },
-            thumbnail   => { Struct => { NAMESPACE => { 'pan' => 'https://repolex.ai/ontology/pan/' }, STRUCT_NAME => 'PanThumb', path => {}, width => {}, height => {} } },
+            thumbnail   => {
+                Struct => {
+                    NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
+                    STRUCT_NAME => 'PanThumb',
+                    path => { }, width => { }, height => { },
+                },
+            },
         },
     },
 );
-%Image::ExifTool::UserDefined = (
-    'Image::ExifTool::XMP::Main' => {
-        pan => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::pan' } },
-    },
+
+# copia — Horae's Moment block. Namespace and group ONLY: ExifTool picks up
+# every copia property present in the file on its own, so the vocabulary can
+# grow without touching this file.
+%Image::ExifTool::UserDefined::copia = (
+    GROUPS    => { 0 => 'Copia', 1 => 'Copia', 2 => 'Image' },
+    NAMESPACE => { 'copia' => 'https://repolex.ai/ontology/copia/' },
+    WRITABLE  => 'string',
 );
 
-# copia — the Moment block Horae writes into the image. Only the namespace
-# and the group are declared; ExifTool picks up every copia property in the
-# file on its own, so the vocabulary can grow without touching this file.
-%Image::ExifTool::UserDefined::copia = (
-    GROUPS => { 0 => 'Copia', 1 => 'Copia', 2 => 'Image' },
-    NAMESPACE => { 'copia' => 'https://repolex.ai/ontology/copia/' },
-    WRITABLE => 'string',
+%Image::ExifTool::UserDefined = (
+    'Image::ExifTool::XMP::Main' => {
+        pan   => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::pan' } },
+        copia => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::copia' } },
+    },
 );
-$Image::ExifTool::UserDefined{'Image::ExifTool::XMP::Main'}{copia} =
-    { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::copia' } };
 1;
