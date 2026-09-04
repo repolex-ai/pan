@@ -21,7 +21,7 @@ use oxigraph::io::RdfFormat;
 use oxigraph::model::{GraphName, Literal, NamedNode, Quad, Term};
 use std::path::Path;
 
-use crate::config::{PAN_MEDIA_NS, PAN_NS};
+use crate::config::{now_local, GIT_LEX_NS, PAN_MEDIA_NS, PAN_NS};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
@@ -36,6 +36,8 @@ pub struct EnrichmentRecord {
     pub id: String,
     pub class: String,
     pub model: String,
+    /// When pand wrote it — RFC3339, system local time (`pan:producedDate`).
+    pub produced_date: String,
     pub fields: Vec<(String, String)>,
 }
 
@@ -45,6 +47,7 @@ impl EnrichmentRecord {
             id: id.into(),
             class: class.into(),
             model: model.into(),
+            produced_date: now_local(),
             fields: Vec::new(),
         }
     }
@@ -71,9 +74,17 @@ impl EnrichmentRecord {
 pub struct EnrichmentRef {
     pub id: String,
     pub model: String,
-    /// Path relative to the store's storage root.
+    /// Path relative to the store's media root.
     pub path: String,
     pub count: usize,
+    /// `pan:producedDate` — RFC3339, system local time.
+    pub produced_date: String,
+}
+
+impl EnrichmentRef {
+    pub fn new(model: &str, path: &str, count: usize) -> Self {
+        Self { id: crate::gen_pan_id(), model: model.to_string(), path: path.to_string(), count, produced_date: now_local() }
+    }
 }
 
 /// Escape text for XML character data / attribute values.
@@ -94,7 +105,8 @@ pub fn build_data_file(image_iri: &str, link_local: &str, records: &[EnrichmentR
     let mut out = String::with_capacity(512 + records.len() * 256);
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"\n");
-    out.push_str(&format!("         xmlns:pan=\"{PAN_NS}\">\n"));
+    out.push_str(&format!("         xmlns:pan=\"{PAN_NS}\"\n"));
+    out.push_str(&format!("         xmlns:git-lex=\"{GIT_LEX_NS}\">\n"));
 
     // The image, and what it has.
     out.push_str(&format!("  <rdf:Description rdf:about=\"{}\">\n", esc(image_iri)));
@@ -113,10 +125,11 @@ pub fn build_data_file(image_iri: &str, link_local: &str, records: &[EnrichmentR
             "    <rdf:type rdf:resource=\"{PAN_NS}{}\"/>\n",
             esc(&r.class)
         ));
-        out.push_str(&format!("    <pan:id>{}</pan:id>\n", esc(&r.id)));
+        out.push_str(&format!("    <git-lex:id rdf:resource=\"{}\"/>\n", esc(&r.iri())));
         if !r.model.is_empty() {
             out.push_str(&format!("    <pan:model>{}</pan:model>\n", esc(&r.model)));
         }
+        out.push_str(&format!("    <pan:producedDate>{}</pan:producedDate>\n", esc(&r.produced_date)));
         for (local, value) in &r.fields {
             out.push_str(&format!("    <pan:{local}>{}</pan:{local}>\n", esc(value)));
         }
@@ -150,10 +163,11 @@ pub fn record_quads(image_iri: &str, link_local: &str, records: &[EnrichmentReco
             NamedNode::new(format!("{PAN_NS}{}", r.class)).map_err(|e| anyhow!("bad class IRI: {e}"))?,
             GraphName::DefaultGraph,
         ));
-        quads.push(pan_quad(&subj, "id", &r.id)?);
+        quads.push(self_id_quad(&subj)?);
         if !r.model.is_empty() {
             quads.push(pan_quad(&subj, "model", &r.model)?);
         }
+        quads.push(pan_quad(&subj, "producedDate", &r.produced_date)?);
         for (local, value) in &r.fields {
             quads.push(pan_quad(&subj, local, value)?);
         }
@@ -181,11 +195,23 @@ pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<
             NamedNode::new(format!("{PAN_NS}Enrichment")).expect("Enrichment IRI"),
             GraphName::DefaultGraph,
         ),
-        pan_quad(&node, "id", &r.id)?,
+        self_id_quad(&node)?,
         pan_quad(&node, "model", &r.model)?,
         pan_quad(&node, "path", &r.path)?,
         pan_quad(&node, "count", &r.count.to_string())?,
+        pan_quad(&node, "producedDate", &r.produced_date)?,
     ])
+}
+
+/// `<node> git-lex:id <node>` — the universal identity, an IRI pointing at
+/// the Thing itself (base kit convention; every Thing carries one).
+pub fn self_id_quad(node: &NamedNode) -> Result<Quad> {
+    Ok(Quad::new(
+        node.clone(),
+        NamedNode::new(format!("{GIT_LEX_NS}id")).map_err(|e| anyhow!("git-lex:id IRI: {e}"))?,
+        node.clone(),
+        GraphName::DefaultGraph,
+    ))
 }
 
 fn pan_quad(subject: &NamedNode, local: &str, value: &str) -> Result<Quad> {
@@ -281,12 +307,7 @@ mod tests {
 
     #[test]
     fn reference_quads_name_model_path_and_count() {
-        let r = EnrichmentRef {
-            id: "e1e1e1".into(),
-            model: "sam3".into(),
-            path: "sam3/2026/08/17/k7m2p9x4.xml".into(),
-            count: 15,
-        };
+        let r = EnrichmentRef::new("sam3", "sam3/2026/08/17/k7m2p9x4.xml", 15);
         let quads = ref_quads("https://repolex.ai/pan/Image/k7m2p9x4", "regionData", &r).unwrap();
         let has = |local: &str, val: &str| {
             quads.iter().any(|q| {

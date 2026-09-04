@@ -78,6 +78,14 @@ pub struct DeliveryBody {
     pub timestamps: Option<serde_json::Value>,
     #[serde(default)]
     pub render: Option<serde_json::Value>,
+    /// The producer's metadata block: well-formed RDF/XML in copia vocabulary
+    /// (one or more rdf:Description about the Moment). Written into the image
+    /// XMP verbatim and loaded into the graph unchanged. Malformed = 400.
+    #[serde(default)]
+    pub metadata_xml: Option<String>,
+    /// Who is delivering (horae). Logged; not recorded in the graph.
+    #[serde(default)]
+    pub producer: Option<String>,
     #[serde(default)]
     pub png_b64: Option<String>,
     #[serde(default)]
@@ -94,11 +102,12 @@ pub struct Delivered {
     pub iri: String,
     pub store: String,
     pub media_path: String,
-    pub created_at: String,
+    pub created_date: String,
     pub thumbnail: bool,
-    /// Parts of the delivery pand received but has no declared vocabulary
-    /// to record (prompt, provenance, meta, timestamps, render). Reported so
-    /// nothing is dropped silently; recording them is an open ruling.
+    /// Statements loaded from `metadata_xml`.
+    pub delivered_statements: usize,
+    /// Parts of the delivery that are not written anywhere: the producer
+    /// puts what it wants kept into `metadata_xml` (Rob, 2026-09-03).
     pub not_recorded: Vec<String>,
 }
 
@@ -127,7 +136,9 @@ pub struct StateResponse {
     pub iri: String,
     pub store: String,
     pub media_type: String,
-    pub created_at: String,
+    pub created_date: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready_date: Option<String>,
     pub thumbnail: bool,
     pub stages: HashMap<String, StageStatus>,
 }
@@ -188,6 +199,7 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("index name")
         || msg.contains("empty")
         || msg.contains("search where-clause")
+        || msg.contains("metadata block")
         || msg.contains("ambiguous")
     {
         ApiError(StatusCode::BAD_REQUEST, msg)
@@ -281,11 +293,18 @@ async fn deliver(State(d): State<Shared>, Json(body): Json<DeliveryBody>) -> Res
     }
 
     let s = store.clone();
-    let res = tokio::task::spawn_blocking(move || s.pan.put(&bytes, Some(&content_type), facts))
+    let block = body.metadata_xml.clone();
+    if let Some(b) = &block {
+        if b.trim().is_empty() {
+            return Err(ApiError(StatusCode::BAD_REQUEST, "metadata_xml is empty".into()));
+        }
+    }
+    let producer = body.producer.clone().unwrap_or_else(|| "unknown".into());
+    let res = tokio::task::spawn_blocking(move || s.pan.put(&bytes, Some(&content_type), block.as_deref(), facts))
         .await
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(map_err)?;
-    tracing::info!(store = %store.entry.id, id = %res.id, "stored");
+    tracing::info!(store = %store.entry.id, id = %res.id, producer = %producer, statements = res.delivered_statements, "stored");
     Ok((
         StatusCode::CREATED,
         Json(Delivered {
@@ -293,8 +312,9 @@ async fn deliver(State(d): State<Shared>, Json(body): Json<DeliveryBody>) -> Res
             iri: res.iri,
             store: store.entry.id.clone(),
             media_path: res.media_path,
-            created_at: res.created_at,
+            created_date: res.created_date,
             thumbnail: res.thumbnail,
+            delivered_statements: res.delivered_statements,
             not_recorded,
         }),
     ))
@@ -413,7 +433,8 @@ async fn get_state(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Re
         iri: st.iri,
         store: store.entry.id.clone(),
         media_type: st.media_type,
-        created_at: st.created_at,
+        created_date: st.created_date,
+        ready_date: st.ready_date,
         thumbnail: st.thumbnail,
         stages: stages_out,
     }))

@@ -47,6 +47,10 @@ struct ConfigYml {
     #[serde(default)]
     stores: Vec<PathBuf>,
     default: Option<PathBuf>,
+    /// Where big media lives when not on the system drive: every store's
+    /// media root becomes `<media_volume>/<store id>/media`. Absent = each
+    /// store's own `_ignore/media` pocket.
+    media_volume: Option<PathBuf>,
     port: Option<u16>,
     #[serde(default)]
     models: BTreeMap<String, ModelEndpoint>,
@@ -64,6 +68,7 @@ pub struct DaemonConfig {
     /// directory); the registry resolves each into an id + store root.
     pub stores: Vec<PathBuf>,
     pub default: Option<PathBuf>,
+    pub media_volume: Option<PathBuf>,
     pub bind: String,
     pub port: u16,
     /// stage name → endpoint. Known stage names: embed, caption, sam3, pose.
@@ -95,6 +100,11 @@ fn expand_home(p: &Path) -> PathBuf {
 }
 
 impl DaemonConfig {
+    /// The media root for one store under this config, or None for the pocket default.
+    pub fn media_root_for(&self, store_id: &str) -> Option<PathBuf> {
+        self.media_volume.as_ref().map(|v| v.join(store_id).join("media"))
+    }
+
     pub fn load() -> Result<Self> {
         Self::load_from(&config_dir().join("config.yml"))
     }
@@ -122,6 +132,7 @@ impl DaemonConfig {
             path: path.to_path_buf(),
             stores,
             default: yml.default.map(|p| expand_home(&p)),
+            media_volume: yml.media_volume.map(|p| expand_home(&p)),
             bind: DEFAULT_BIND.to_string(),
             port: yml.port.unwrap_or(DEFAULT_PORT),
             models: yml.models,

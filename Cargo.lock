@@ -1338,6 +1338,8 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "crc32fast",
+ "flate2",
  "image",
  "oxigraph",
  "png 0.17.16",

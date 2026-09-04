@@ -68,6 +68,35 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
                 Err(e) => tracing::error!(store = %store.entry.id, stage, "stage pass failed: {e:#}"),
             }
         }
+        // Everything configured has a record → the object is ready as
+        // configured; say when. With no stages configured, ingest IS ready.
+        let required: Vec<(String, String)> = d
+            .cfg
+            .models
+            .iter()
+            .filter_map(|(stage, ep)| link_for(stage).map(|l| (l.to_string(), ep.model.clone())))
+            .collect();
+        let s = store.clone();
+        let batch = d.cfg.batch * 4;
+        match tokio::task::spawn_blocking(move || -> Result<usize> {
+            let mut n = 0;
+            for id in s.pan.ready_candidates(&required, batch)? {
+                if s.pan.mark_ready(&id)? {
+                    n += 1;
+                }
+            }
+            Ok(n)
+        })
+        .await
+        {
+            Ok(Ok(n)) if n > 0 => {
+                tracing::info!(store = %store.entry.id, n, "marked ready");
+                done += n;
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => tracing::error!(store = %store.entry.id, "ready pass failed: {e:#}"),
+            Err(e) => tracing::error!(store = %store.entry.id, "ready pass join: {e}"),
+        }
     }
     done
 }
@@ -182,7 +211,7 @@ async fn run_one(
                         .pan
                         .facts_for(&id)?
                         .iter()
-                        .find(|(p, _)| p == &format!("{}createdAt", crate::PAN_NS))
+                        .find(|(p, _)| p == &format!("{}createdDate", crate::PAN_NS))
                         .and_then(|(_, v)| v.first().cloned())
                         .unwrap_or_default();
                     let shard = created.get(0..10).unwrap_or("0000-00-00").replace('-', "/");

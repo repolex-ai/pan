@@ -50,6 +50,7 @@ fn full_store_describe_query_search_roundtrip() {
         .put(
             &wolf_png,
             Some("image/png"),
+            None,
             Facts::new().with("dc:subject", "wolf").with("dc:title", "wolf in forest"),
         )
         .unwrap();
@@ -57,6 +58,7 @@ fn full_store_describe_query_search_roundtrip() {
         .put(
             &sea_png,
             Some("image/png"),
+            None,
             Facts::new().with("dc:subject", "sea"),
         )
         .unwrap();
@@ -70,7 +72,7 @@ fn full_store_describe_query_search_roundtrip() {
 
     // The identity model: putting the SAME bytes again is a NEW media object —
     // panIds are assigned, never content-derived, and there is no dedup.
-    let wolf2 = store.put(&wolf_png, Some("image/png"), Facts::new()).unwrap();
+    let wolf2 = store.put(&wolf_png, Some("image/png"), None, Facts::new()).unwrap();
     assert_ne!(wolf2.id, wolf.id, "same bytes, different object, different panId");
     store.delete(&wolf2.id).unwrap();
 
@@ -85,9 +87,9 @@ fn full_store_describe_query_search_roundtrip() {
     let facts_map: HashMap<String, Vec<String>> = facts.into_iter().collect();
     assert_eq!(facts_map["http://purl.org/dc/elements/1.1/subject"], vec!["wolf"]);
     assert_eq!(
-        facts_map["https://repolex.ai/ontology/pan/id"],
-        vec![wolf.id.clone()],
-        "pan:id identity fact present"
+        facts_map["https://repolex.ai/ontology/git-lex/id"],
+        vec![wolf.iri.clone()],
+        "git-lex:id identity fact present (the IRI itself)"
     );
     assert_eq!(
         facts_map["http://www.w3.org/1999/02/22-rdf-syntax-ns#type"],
@@ -95,10 +97,10 @@ fn full_store_describe_query_search_roundtrip() {
         "instance is typed against the kit ontology class"
     );
 
-    // ── the stamped XMP mirror carries the app facts (travel copy) ──
-    let packet = pan::xmp::read_xmp_packet_from_bytes(&bytes).unwrap().expect("stamped");
-    assert!(packet.contains("wolf in forest"), "app facts mirrored into XMP");
-    assert!(packet.contains(&wolf.id), "pan: identity block present");
+    // ── Pan's block is in the image XMP ──
+    let packet = pan::xmp::read_xmp_packet_from_bytes(&bytes).unwrap().expect("XMP written");
+    assert!(packet.contains(&wolf.iri), "pan: identity block present");
+    assert!(packet.contains("pan:createdDate"), "createdDate in the packet");
 
     // ── describe: merge facts, loud failure on unknown prefix ──
     store
@@ -109,10 +111,9 @@ fn full_store_describe_query_search_roundtrip() {
         .unwrap_err();
     assert!(err.to_string().contains("unknown prefix"), "loud, not silent: {err}");
 
-    // Re-stamp followed the graph: the new fact is in the file's XMP now.
+    // Re-stamp rewrote the XMP without touching pixels.
     let (bytes_after, _) = store.get(&wolf.id).unwrap();
-    let packet_after = pan::xmp::read_xmp_packet_from_bytes(&bytes_after).unwrap().unwrap();
-    assert!(packet_after.contains("w4r3z"), "describe re-stamps the travel copy");
+    let _packet_after = pan::xmp::read_xmp_packet_from_bytes(&bytes_after).unwrap().unwrap();
     assert_eq!(
         pan::xmp::pixel_hash(&bytes_after).unwrap(),
         pan::xmp::pixel_hash(&wolf_png).unwrap(),
@@ -122,21 +123,21 @@ fn full_store_describe_query_search_roundtrip() {
     // ── graph-only query mode (no vectors anywhere yet) ──
     {
         let results = store
-            .query("SELECT ?id WHERE { ?s dc:subject \"wolf\" ; pan:id ?id }")
+            .query("SELECT ?id WHERE { ?s dc:subject \"wolf\" ; git-lex:id ?id }")
             .unwrap();
         let ids: Vec<String> = match results {
             pan::QueryResults::Solutions(sols) => sols
                 .map(|s| {
                     let s = s.unwrap();
                     match s.get("id").unwrap() {
-                        pan::Term::Literal(l) => l.value().to_string(),
-                        other => panic!("expected literal, got {other}"),
+                        pan::Term::NamedNode(n) => n.as_str().to_string(),
+                        other => panic!("expected IRI, got {other}"),
                     }
                 })
                 .collect(),
             _ => panic!("expected solutions"),
         };
-        assert_eq!(ids, vec![wolf.id.clone()], "graph-only mode is a complete product");
+        assert_eq!(ids, vec![wolf.iri.clone()], "graph-only mode is a complete product");
     }
 
     // ── attach vectors (the two-call flow) + fusion search ──
@@ -212,15 +213,16 @@ fn travel_copy_ingests_on_put_into_fresh_store() {
     .unwrap();
     let store_a = Pan::open(dir_a.path()).unwrap();
     let png = make_png(10, 10, 42);
+    let block = "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:subject>lighthouse</dc:subject></rdf:Description>";
     let put_a = store_a
-        .put(&png, Some("image/png"), Facts::new().with("dc:subject", "lighthouse"))
+        .put(&png, Some("image/png"), Some(block), Facts::new())
         .unwrap();
     let (stamped, _) = store_a.get(&put_a.id).unwrap();
 
     // New store, no shared config beyond defaults — the fact rides the file.
     let dir_b = tempfile::tempdir().unwrap();
     let store_b = Pan::open(dir_b.path()).unwrap();
-    let put_b = store_b.put(&stamped, Some("image/png"), Facts::new()).unwrap();
+    let put_b = store_b.put(&stamped, Some("image/png"), None, Facts::new()).unwrap();
     assert_ne!(
         put_b.id, put_a.id,
         "identity never travels — the receiving store assigns its own panId"
@@ -233,6 +235,6 @@ fn travel_copy_ingests_on_put_into_fresh_store() {
         vec!["lighthouse"],
         "facts traveled inside the file and ingested on put"
     );
-    // The receiving store's identity block is its OWN, not the source's.
-    assert_eq!(facts["https://repolex.ai/ontology/pan/id"], vec![put_b.id.clone()]);
+    // The receiving store's identity is its OWN, not the source's.
+    assert_eq!(facts["https://repolex.ai/ontology/git-lex/id"], vec![put_b.iri.clone()]);
 }

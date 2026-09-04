@@ -67,8 +67,10 @@ impl Daemon {
             if e.is_repo {
                 warn_if_not_ignored(&e.declared);
             }
-            let pan = Pan::open(&e.root).with_context(|| format!("open store {} at {}", e.id, e.root.display()))?;
-            tracing::info!(id = %e.id, root = %e.root.display(), "store open");
+            let media_root = cfg.media_root_for(&e.id);
+            let pan = Pan::open_with(&e.root, &e.id, media_root.as_deref())
+                .with_context(|| format!("open store {} at {}", e.id, e.root.display()))?;
+            tracing::info!(id = %e.id, root = %e.root.display(), media = %pan.layout.media_root.display(), "store open");
             stores.push(Arc::new(StoreHandle { entry: e, pan }));
         }
         let default_id = match &cfg.default {

@@ -26,6 +26,17 @@ pub const PAN_MEDIA_NS: &str = "https://repolex.ai/pan/";
 
 pub const COPIA_NS: &str = "https://repolex.ai/ontology/copia/";
 
+/// The base kit's namespace: every pan class is a `git-lex:Thing`, identified
+/// by the universal `git-lex:id` (an IRI pointing at the Thing itself).
+pub const GIT_LEX_NS: &str = "https://repolex.ai/ontology/git-lex/";
+
+/// RFC3339 in SYSTEM LOCAL time, to the second — the one timestamp format
+/// every `*Date` property carries (Rob, 2026-09-03: system time across the
+/// board, not UTC).
+pub fn now_local() -> String {
+    chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+}
+
 pub const DEFAULT_STORAGE_ID: &str = "default";
 pub const DEFAULT_INDEX_ID: &str = "default";
 

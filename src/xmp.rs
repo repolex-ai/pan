@@ -40,34 +40,7 @@ pub enum FieldValue {
     Bag(Vec<String>),
 }
 
-/// One app-namespaced XMP block Pan passes through as opaque data.
-#[derive(Debug, Clone)]
-pub struct AppBlock {
-    /// The short prefix, e.g. "copia", "dc".
-    pub prefix: String,
-    /// The namespace IRI the prefix binds to.
-    pub ns_iri: String,
-    /// Flat fields for THIS namespace, in a stable order for deterministic output.
-    pub fields: Vec<(String, FieldValue)>,
-}
-
-/// One sub-subject Description (`rdf:about="…"`) authored from structured data.
-/// A sub-subject's facts may span MULTIPLE namespaces (a region can carry
-/// copia: fields AND dc: fields); every namespace used is declared on the
-/// element and every field keeps its own prefix — none are dropped.
-#[derive(Debug, Clone)]
-pub struct SubSubjectBlock {
-    /// The FULLY-SCOPED subject IRI for `rdf:about`.
-    pub about: String,
-    /// The `<rdf:type rdf:resource="…"/>` IRI (empty = omit the type element).
-    pub rdf_type: String,
-    /// Namespace declarations (prefix → IRI) for every namespace used below.
-    pub namespaces: Vec<(String, String)>,
-    /// Fields as `(prefix, local, value)` — prefix must be declared in
-    /// `namespaces`.
-    pub fields: Vec<(String, String, FieldValue)>,
-}
-
+/// Escape text for XML character data / attribute values.
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -75,8 +48,7 @@ fn xml_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Serialize one `<prefix:local>…</prefix:local>` element. A `Bag` becomes an
-/// `<rdf:Bag>` of `<rdf:li>` members; a `Scalar` the bare escaped body.
+/// One field inside a Description: a scalar, or an rdf:Bag of members.
 fn serialize_field(prefix: &str, local: &str, value: &FieldValue, indent: &str) -> String {
     match value {
         FieldValue::Scalar(s) => {
@@ -93,33 +65,24 @@ fn serialize_field(prefix: &str, local: &str, value: &FieldValue, indent: &str) 
     }
 }
 
-/// Everything Pan authors about one media object in its packet.
-///
-/// The shape Rob converged on over the demo rounds (2026-08-20/25): ONE
-/// `pan:image` struct holds identity and the current caption, plus one
-/// REFERENCE bag per enricher naming where that enricher's data file is. Bulk
-/// output (polygons, keypoints, vectors) lives in those files, not here — the
-/// image stays light, while still knowing from its own bytes what exists for
-/// it. App namespaces ride alongside as untouched passthrough.
 #[derive(Debug, Clone, Default)]
 pub struct ImagePacket {
-    pub pan_id: String,
+    /// The media object's full IRI (`git-lex:id`).
+    pub iri: String,
     pub media_path: String,
-    pub created_at: String,
+    pub created_date: String,
     pub media_type: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    /// The current best caption text — the one thing a plain viewer should show.
+    /// The current caption text — the one thing a plain viewer should show.
     pub caption: Option<String>,
-    /// The thumbnail Pan made: (store-relative path, width, height). Declared
-    /// in the packet so the image knows where its own rendition is.
+    /// Set once every configured stage has a record.
+    pub ready_date: Option<String>,
+    /// The thumbnail Pan made: (media-root-relative path, width, height).
     pub thumbnail: Option<(String, u32, u32)>,
     /// `(reference predicate local name, references)`, e.g.
-    /// `("regionData", [...])`. Empty groups are omitted: an absent reference
-    /// means "nothing of this kind exists", which is exactly true.
+    /// `("regionData", [...])`. Empty groups are omitted.
     pub enrichment: Vec<(String, Vec<crate::enrich::EnrichmentRef>)>,
-    pub app_blocks: Vec<AppBlock>,
-    pub sub_subjects: Vec<SubSubjectBlock>,
 }
 
 /// Serialize one enrichment reference bag inside the `pan:image` struct.
@@ -127,12 +90,13 @@ fn serialize_enrichment(local: &str, refs: &[crate::enrich::EnrichmentRef], inde
     let mut out = format!("{indent}<pan:{local}>\n{indent} <rdf:Bag>\n");
     for r in refs {
         out.push_str(&format!("{indent}  <rdf:li rdf:parseType=\"Resource\">\n"));
-        out.push_str(&format!("{indent}   <pan:id>{}</pan:id>\n", xml_escape(&r.id)));
+        out.push_str(&format!("{indent}   <git-lex:id rdf:resource=\"{}Enrichment/{}\"/>\n", crate::config::PAN_MEDIA_NS, xml_escape(&r.id)));
         if !r.model.is_empty() {
             out.push_str(&format!("{indent}   <pan:model>{}</pan:model>\n", xml_escape(&r.model)));
         }
         out.push_str(&format!("{indent}   <pan:path>{}</pan:path>\n", xml_escape(&r.path)));
         out.push_str(&format!("{indent}   <pan:count>{}</pan:count>\n", r.count));
+        out.push_str(&format!("{indent}   <pan:producedDate>{}</pan:producedDate>\n", xml_escape(&r.produced_date)));
         out.push_str(&format!("{indent}  </rdf:li>\n"));
     }
     out.push_str(&format!("{indent} </rdf:Bag>\n{indent}</pan:{local}>\n"));
@@ -143,31 +107,23 @@ fn serialize_enrichment(local: &str, refs: &[crate::enrich::EnrichmentRef], inde
 /// own media's metadata. Self-contained `<?xpacket?>`-wrapped, and readable
 /// back through [`parse_packet`].
 pub fn build_packet(p: &ImagePacket) -> String {
-    let mut out = String::with_capacity(1024 + p.sub_subjects.len() * 256);
-    out.push_str("<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n");
-    out.push_str("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n");
-    out.push_str("  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n");
+    compose_packet(None, &build_pan_description(p), &[])
+}
 
-    // Root Description: the pan:image struct, then app blocks (passthrough).
-    // `rdf:about=""` is the standard Adobe form AND makes the root
-    // unambiguous on read (it resolves to the parser's base IRI, which
-    // parse_packet maps back to the media object) — an about-less Description
-    // would become an anonymous blank node instead.
+/// Pan's own root Description: the `pan:image` struct (identity, size,
+/// caption, thumbnail, enrichment references). `rdf:about=""` is the standard
+/// Adobe form — it resolves to the parser's base IRI, i.e. the media object.
+/// Nothing but pan: vocabulary lives here; other namespaces ride in their own
+/// Descriptions, untouched.
+pub fn build_pan_description(p: &ImagePacket) -> String {
+    let mut out = String::with_capacity(1024);
     out.push_str("    <rdf:Description rdf:about=\"\"");
-    out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\""));
-    for b in &p.app_blocks {
-        out.push_str(&format!(" xmlns:{}=\"{}\"", b.prefix, b.ns_iri));
-    }
-    out.push_str(">\n");
-
-    // The image node. Nesting under one struct is what makes flat metadata
-    // viewers render "Image Region Data Path" rather than a bare "Path" —
-    // every level's name becomes part of the label a human reads.
+    out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\" xmlns:git-lex=\"{}\">\n", crate::config::GIT_LEX_NS));
     out.push_str("      <pan:image rdf:parseType=\"Resource\">\n");
+    out.push_str(&format!("       <git-lex:id rdf:resource=\"{}\"/>\n", xml_escape(&p.iri)));
     let mut ident: Vec<(String, FieldValue)> = vec![
-        ("id".into(), FieldValue::Scalar(p.pan_id.clone())),
         ("mediaPath".into(), FieldValue::Scalar(p.media_path.clone())),
-        ("createdAt".into(), FieldValue::Scalar(p.created_at.clone())),
+        ("createdDate".into(), FieldValue::Scalar(p.created_date.clone())),
     ];
     if !p.media_type.is_empty() {
         ident.push(("mediaType".into(), FieldValue::Scalar(p.media_type.clone())));
@@ -180,6 +136,9 @@ pub fn build_packet(p: &ImagePacket) -> String {
     }
     if let Some(c) = &p.caption {
         ident.push(("caption".into(), FieldValue::Scalar(c.clone())));
+    }
+    if let Some(r) = &p.ready_date {
+        ident.push(("readyDate".into(), FieldValue::Scalar(r.clone())));
     }
     for (local, value) in &ident {
         out.push_str(&serialize_field("pan", local, value, "       "));
@@ -198,37 +157,7 @@ pub fn build_packet(p: &ImagePacket) -> String {
         out.push_str(&serialize_enrichment(local, refs, "       "));
     }
     out.push_str("      </pan:image>\n");
-
-    for b in &p.app_blocks {
-        for (local, value) in &b.fields {
-            out.push_str(&serialize_field(&b.prefix, local, value, "      "));
-        }
-    }
     out.push_str("    </rdf:Description>\n");
-
-    let sub_subjects = &p.sub_subjects;
-
-    for r in sub_subjects {
-        out.push_str(&format!("    <rdf:Description rdf:about=\"{}\"", xml_escape(&r.about)));
-        for (prefix, ns_iri) in &r.namespaces {
-            out.push_str(&format!(" xmlns:{}=\"{}\"", prefix, ns_iri));
-        }
-        out.push_str(">\n");
-        if !r.rdf_type.is_empty() {
-            out.push_str(&format!(
-                "      <rdf:type rdf:resource=\"{}\"/>\n",
-                xml_escape(&r.rdf_type)
-            ));
-        }
-        for (prefix, local, value) in &r.fields {
-            out.push_str(&serialize_field(prefix, local, value, "      "));
-        }
-        out.push_str("    </rdf:Description>\n");
-    }
-
-    out.push_str("  </rdf:RDF>\n");
-    out.push_str("</x:xmpmeta>\n");
-    out.push_str("<?xpacket end=\"w\"?>");
     out
 }
 
@@ -243,67 +172,150 @@ pub fn build_packet(p: &ImagePacket) -> String {
 /// exactly, so `pixel_hash(output) == pixel_hash(input)` — a metadata edit
 /// never touches the image. (The FILE bytes DO change.)
 pub fn write_packet_into_png_bytes(png_bytes: &[u8], packet: &str) -> Result<Vec<u8>> {
-    use std::io::BufWriter;
-
-    let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
-    let mut reader = decoder.read_info().context("decode PNG for stamp")?;
-    let mut buf = vec![0; reader.output_buffer_size()];
-    let frame = reader.next_frame(&mut buf).context("read PNG frame for stamp")?;
-    let pixels = &buf[..frame.buffer_size()];
-    let info = reader.info();
-
-    let mut out: Vec<u8> = Vec::new();
-    {
-        let w = BufWriter::new(&mut out);
-        let mut enc = png::Encoder::new(w, info.width, info.height);
-        enc.set_color(info.color_type);
-        enc.set_depth(info.bit_depth);
-        // Preserve every NON-XMP text chunk (best-effort; typically ASCII
-        // keyword/value pairs). A chunk that isn't latin1-representable is
-        // skipped rather than failing the whole write.
-        for c in info
-            .uncompressed_latin1_text
-            .iter()
-            .filter(|c| c.keyword != XMP_TEXT_KEY)
-        {
-            enc.add_text_chunk(c.keyword.clone(), c.text.clone()).ok();
-        }
-        // Our XMP as a UTF-8 iTXt chunk: the packet contains a BOM and app
-        // fields may carry arbitrary unicode — neither fits a latin1 tEXt
-        // chunk. iTXt is the correct PNG home for UTF-8 XMP.
-        enc.add_itxt_chunk(XMP_TEXT_KEY.to_string(), packet.to_string())
-            .context("add XMP iTXt chunk")?;
-        let mut writer = enc.write_header().context("write PNG header")?;
-        writer
-            .write_image_data(pixels)
-            .context("write PNG image data")?;
-        writer.finish().context("finish PNG encode")?;
-    }
-    Ok(out)
+    // Chunk surgery, not re-encoding: every chunk the producer wrote (IDAT,
+    // sdapi `parameters`, EXIF, ICC, …) is copied byte-for-byte; only the XMP
+    // chunk changes. Nothing is ever stripped (Rob, 2026-09-03).
+    crate::pngchunk::replace_xmp(png_bytes, packet)
 }
 
 /// Read the XMP packet string out of PNG bytes (`XML:com.adobe.xmp` chunk,
 /// any of the three text-chunk forms). Ok(None) if no XMP chunk is present.
 pub fn read_xmp_packet_from_bytes(png_bytes: &[u8]) -> Result<Option<String>> {
-    let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
-    let reader = decoder.read_info().context("decode PNG for XMP read")?;
-    let info = reader.info();
-    for chunk in info.uncompressed_latin1_text.iter() {
-        if chunk.keyword == XMP_TEXT_KEY {
-            return Ok(Some(chunk.text.clone()));
+    crate::pngchunk::read_xmp(png_bytes)
+}
+
+/// Split an XMP packet into its top-level `<rdf:Description …>…</rdf:Description>`
+/// elements, verbatim. `pan_authored` says whether an element is Pan's own
+/// root block (it declares the pan namespace and carries `pan:image`), which
+/// Pan re-authors on every write; every OTHER Description is someone else's
+/// and is preserved exactly as found.
+pub fn split_descriptions(packet: &str) -> Vec<(bool, String)> {
+    let Some(start) = find_rdf_open(packet) else { return Vec::new() };
+    let Some(end) = packet.rfind("</rdf:RDF>") else { return Vec::new() };
+    let body = &packet[start..end];
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(off) = body[i..].find("<rdf:Description") {
+        let s0 = i + off;
+        // Find the matching close, allowing nested Descriptions (rare, but
+        // parseType="Resource" structs never use the element name so a plain
+        // depth count on the tag name is enough).
+        let mut depth = 0usize;
+        let mut j = s0;
+        let mut close = None;
+        while j < body.len() {
+            if body[j..].starts_with("<rdf:Description") {
+                // self-closing?
+                let gt = body[j..].find('>').map(|g| j + g);
+                match gt {
+                    Some(g) if body[..g].ends_with('/') => {
+                        if depth == 0 {
+                            close = Some(g + 1);
+                            break;
+                        }
+                        j = g + 1;
+                        continue;
+                    }
+                    Some(g) => {
+                        depth += 1;
+                        j = g + 1;
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+            if body[j..].starts_with("</rdf:Description>") {
+                depth -= 1;
+                j += "</rdf:Description>".len();
+                if depth == 0 {
+                    close = Some(j);
+                    break;
+                }
+                continue;
+            }
+            j += body[j..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        }
+        let Some(c) = close else { break };
+        let elem = &body[s0..c];
+        let pan_authored = elem.contains("<pan:image") && elem.contains(PAN_NS);
+        out.push((pan_authored, elem.to_string()));
+        i = c;
+    }
+    out
+}
+
+/// Assemble the packet Pan writes into the image: every Description that was
+/// already there and is not Pan's own (kept verbatim), then Pan's root
+/// Description, then any extra Descriptions delivered with the media (the
+/// producer's copia block, verbatim). Standard XMP wrapping.
+pub fn compose_packet(existing: Option<&str>, pan_description: &str, extra_descriptions: &[String]) -> String {
+    let mut out = String::with_capacity(2048);
+    out.push_str("<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n");
+    out.push_str("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n");
+    out.push_str("  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n");
+    if let Some(prev) = existing {
+        for (pan_authored, elem) in split_descriptions(prev) {
+            if !pan_authored {
+                out.push_str("    ");
+                out.push_str(elem.trim());
+                out.push('\n');
+            }
         }
     }
-    for chunk in info.utf8_text.iter() {
-        if chunk.keyword == XMP_TEXT_KEY {
-            return Ok(Some(chunk.get_text()?));
-        }
+    out.push_str(pan_description);
+    for d in extra_descriptions {
+        out.push_str("    ");
+        out.push_str(d.trim());
+        out.push('\n');
     }
-    for chunk in info.compressed_latin1_text.iter() {
-        if chunk.keyword == XMP_TEXT_KEY {
-            return Ok(Some(chunk.get_text()?));
-        }
+    out.push_str("  </rdf:RDF>\n");
+    out.push_str("</x:xmpmeta>\n");
+    out.push_str("<?xpacket end=\"w\"?>");
+    out
+}
+
+/// Validate a producer's metadata block and return its Descriptions verbatim.
+/// The block must be well-formed XML and parseable RDF/XML once wrapped in
+/// `<rdf:RDF>` — one or more `rdf:Description` elements (a whole `<rdf:RDF>`
+/// document is accepted too and unwrapped). Pan reads it only to CHECK it;
+/// the content is written as given. Returns (descriptions, triples) where
+/// the triples are what the block says, with `rdf:about=""` resolved to
+/// `media_iri`.
+pub fn validate_delivered_block(block: &str, media_iri: &str) -> Result<(Vec<String>, Vec<oxigraph::model::Quad>)> {
+    let trimmed = block.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("metadata block is empty"));
     }
-    Ok(None)
+    let inner: String = if let (Some(s), Some(e)) = (find_rdf_open(trimmed), trimmed.rfind("</rdf:RDF>")) {
+        trimmed[s..e].to_string()
+    } else {
+        trimmed.to_string()
+    };
+    // Wrap with every namespace the block itself declares hoisted to the root,
+    // then parse for real. Any XML or RDF/XML error is the caller's 400.
+    let wrapped = format!(
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">{inner}</rdf:RDF>"
+    );
+    let wrapped = hoist_namespaces(&wrapped);
+    let store = Store::new().context("scratch store")?;
+    store
+        .load_from_reader(
+            oxigraph::io::RdfParser::from_format(RdfFormat::RdfXml).with_base_iri(media_iri).map_err(|e| anyhow!("base IRI: {e}"))?,
+            wrapped.as_bytes(),
+        )
+        .map_err(|e| anyhow!("metadata block is not valid RDF/XML: {e}"))?;
+    let quads: Vec<oxigraph::model::Quad> = store.iter().collect::<std::result::Result<_, _>>().context("read block quads")?;
+    if quads.is_empty() {
+        return Err(anyhow!("metadata block carries no statements"));
+    }
+    let descs: Vec<String> = split_descriptions(&format!("<rdf:RDF>{inner}</rdf:RDF>"))
+        .into_iter()
+        .map(|(_, d)| d)
+        .collect();
+    if descs.is_empty() {
+        return Err(anyhow!("metadata block has no rdf:Description element"));
+    }
+    Ok((descs, quads))
 }
 
 // ── Packet reading — the REAL RDF parser (the change from Pool) ─────────────
@@ -824,11 +836,11 @@ mod tests {
     use super::*;
 
     /// Test helper: a packet with only the identity block filled in.
-    fn simple_packet(pan_id: &str, media: &str, created: &str) -> String {
+    fn simple_packet(id: &str, media: &str, created: &str) -> String {
         build_packet(&ImagePacket {
-            pan_id: pan_id.into(),
+            iri: format!("https://repolex.ai/pan/Image/{id}"),
             media_path: media.into(),
-            created_at: created.into(),
+            created_date: created.into(),
             ..Default::default()
         })
     }
@@ -876,72 +888,54 @@ mod tests {
 
     #[test]
     fn packet_round_trips_through_real_parser() {
-        const COPIA: &str = "https://repolex.ai/ontology/kit/copia/";
-        const DC: &str = "http://purl.org/dc/elements/1.1/";
-        let apps = vec![AppBlock {
-            prefix: "copia".to_string(),
-            ns_iri: COPIA.to_string(),
-            fields: vec![
-                ("sceneMood".to_string(), FieldValue::Scalar("calm & <bright>".to_string())),
-                (
-                    "sceneObjects".to_string(),
-                    FieldValue::Bag(vec!["wolf".to_string(), "forest".to_string()]),
-                ),
-            ],
-        }];
-        // A sub-subject spanning TWO namespaces — copia: AND dc: — to prove the
-        // multi-namespace fix: neither is dropped from the travel copy.
-        const SUBJ: &str = "https://repolex.ai/pan/Image/abc123xy";
-        let subs = vec![SubSubjectBlock {
-            about: format!("{SUBJ}/Region/wolf/01"),
-            rdf_type: format!("{COPIA}Sam3Region"),
-            namespaces: vec![("copia".to_string(), COPIA.to_string()), ("dc".to_string(), DC.to_string())],
-            fields: vec![
-                ("copia".to_string(), "regionDescriptor".to_string(), FieldValue::Scalar("wolf".to_string())),
-                ("dc".to_string(), "creator".to_string(), FieldValue::Scalar("w4r3z".to_string())),
-            ],
-        }];
-        let packet = build_packet(&ImagePacket {
-            pan_id: "abc123xy".into(),
-            media_path: "media/image/x.png".into(),
-            created_at: "2026-07-15T00:00:00Z".into(),
-            app_blocks: apps,
-            sub_subjects: subs,
+        // Pan's block plus a producer's copia Description composed verbatim:
+        // both must come back through the real parser, the copia one untouched.
+        const COPIA: &str = "https://repolex.ai/ontology/copia/";
+        let copia_block = format!(
+            "<rdf:Description rdf:about=\"https://repolex.ai/copia/Moment/3hyh7rwekpmq\" xmlns:copia=\"{COPIA}\">\n\
+               <copia:momentId>3hyh7rwekpmq</copia:momentId>\n\
+               <copia:sceneMood>calm &amp; &lt;bright&gt;</copia:sceneMood>\n\
+               <copia:sceneObjects><rdf:Bag><rdf:li>wolf</rdf:li><rdf:li>forest</rdf:li></rdf:Bag></copia:sceneObjects>\n\
+             </rdf:Description>"
+        );
+        let (descs, quads) = validate_delivered_block(&copia_block, "https://repolex.ai/pan/Image/abc123xy").unwrap();
+        assert_eq!(descs.len(), 1);
+        assert_eq!(descs[0], copia_block, "the block is carried verbatim");
+        assert!(quads.len() >= 3);
+
+        let pan_desc = build_pan_description(&ImagePacket {
+            iri: "https://repolex.ai/pan/Image/abc123xy".into(),
+            media_path: "image/2026/09/04/abc123xy.png".into(),
+            created_date: "2026-09-04T01:00:00-07:00".into(),
+            thumbnail: Some(("thumbnail/2026/09/04/abc123xy.jpg".into(), 341, 512)),
             ..Default::default()
         });
-
+        let packet = compose_packet(None, &pan_desc, &descs);
         let parsed = parse_packet(&packet).unwrap();
         let root = parsed.iter().find(|p| p.subject.is_none()).expect("root block");
-        // pan:id lives inside the pan:image struct in the packet; parse_packet
-        // HOISTS it onto the media subject, so a reader never has to know the
-        // wrapper exists (the wrapper is there for human-facing viewers).
-        assert_eq!(vals(&root.facts, "https://repolex.ai/ontology/pan/id"), vec!["abc123xy"]);
         assert_eq!(
-            vals(&root.facts, &format!("{COPIA}sceneMood")),
-            vec!["calm & <bright>"],
-            "escaping must round-trip through the real parser"
+            vals(&root.facts, "https://repolex.ai/ontology/pan/mediaPath"),
+            vec!["image/2026/09/04/abc123xy.png"]
         );
-        assert_eq!(
-            vals(&root.facts, &format!("{COPIA}sceneObjects")),
-            vec!["wolf", "forest"],
-            "Bag flattens to ordered members"
-        );
-
-        let region = parsed
+        let moment = parsed
             .iter()
-            .find(|p| p.subject.as_deref() == Some(format!("{SUBJ}/Region/wolf/01").as_str()))
-            .expect("region sub-subject scoped separately, not clobbering root");
-        assert_eq!(vals(&region.facts, &format!("{COPIA}regionDescriptor")), vec!["wolf"]);
-        assert_eq!(
-            vals(&region.facts, &format!("{DC}creator")),
-            vec!["w4r3z"],
-            "second-namespace field survives (multi-namespace sub-subject)"
-        );
-        // rdf:type survives as an IRI object, not a string literal.
-        let types = get(&region.facts, &format!("{RDF_NS}type"));
-        assert_eq!(types.len(), 1);
-        assert!(types[0].is_iri(), "rdf:type must ingest as an IRI, not a string");
-        assert_eq!(types[0].value(), format!("{COPIA}Sam3Region"));
+            .find(|p| p.subject.as_deref() == Some("https://repolex.ai/copia/Moment/3hyh7rwekpmq"))
+            .expect("copia Description is its own subject");
+        assert_eq!(vals(&moment.facts, &format!("{COPIA}sceneMood")), vec!["calm & <bright>"]);
+        assert_eq!(vals(&moment.facts, &format!("{COPIA}sceneObjects")), vec!["wolf", "forest"]);
+
+        // A restamp keeps the copia Description and re-authors only Pan's.
+        let again = compose_packet(Some(&packet), &pan_desc, &[]);
+        let parts = split_descriptions(&again);
+        assert_eq!(parts.iter().filter(|(pan, _)| *pan).count(), 1, "exactly one pan block");
+        assert_eq!(parts.iter().filter(|(pan, _)| !*pan).count(), 1, "the copia block survives");
+    }
+
+    #[test]
+    fn malformed_block_is_rejected() {
+        assert!(validate_delivered_block("<rdf:Description><unclosed>", "https://repolex.ai/pan/Image/x").is_err());
+        assert!(validate_delivered_block("not xml at all", "https://repolex.ai/pan/Image/x").is_err());
+        assert!(validate_delivered_block("", "https://repolex.ai/pan/Image/x").is_err());
     }
 
     #[test]
