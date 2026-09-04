@@ -46,9 +46,22 @@ fn main() -> Result<()> {
 }
 
 fn serve() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=info".into()))
+    use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+    // Every line goes two places: the terminal that started pand, and
+    // ~/.pan/logs/pand.log (appended across starts) — the file launchd used to
+    // fill, kept now that a terminal owns the process (Rob, 2026-09-04).
+    let log_dir = pan::daemon::config::default_store_dir().join("logs");
+    std::fs::create_dir_all(&log_dir)?;
+    let log_path = log_dir.join("pand.log");
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=info".into());
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(fmt::layer().with_ansi(false).with_writer(std::sync::Mutex::new(file)))
         .init();
+    tracing::info!(log = %log_path.display(), "pand logging here as well as to this terminal");
 
     let cfg = pan::daemon::config::DaemonConfig::load()?;
     tracing::info!(config = %cfg.path.display(), stores = cfg.stores.len(), stages = cfg.models.len(), "pand starting");
