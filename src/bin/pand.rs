@@ -35,9 +35,10 @@ fn main() -> Result<()> {
             stop_all();
             Ok(())
         }
+        ["status"] => status(),
         _ => {
             eprintln!(
-                "usage: pand | pand start | pand stop\n  (no flags; configure in {})",
+                "usage: pand | pand start | pand stop | pand status\n  (no flags; configure in {})",
                 pan::daemon::config::config_dir().join("config.yml").display()
             );
             std::process::exit(2);
@@ -70,6 +71,57 @@ fn serve() -> Result<()> {
         .enable_all()
         .build()?
         .block_on(pan::daemon::http::serve(daemon))
+}
+
+/// Is pand running, and is it making model calls? Plain words, exit 0 when it
+/// is running and answering, 1 otherwise — so a script can ask too.
+fn status() -> Result<()> {
+    let cfg = pan::daemon::config::DaemonConfig::load()?;
+    let url = format!("{}/health", cfg.base_url());
+    let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(3)).build()?;
+    let pids: Vec<String> = std::process::Command::new("pgrep")
+        .args(["-x", "pand"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).filter(|p| !p.is_empty() && *p != std::process::id().to_string()).collect())
+        .unwrap_or_default();
+    match client.get(&url).send().and_then(|r| r.error_for_status()).and_then(|r| r.json::<serde_json::Value>()) {
+        Ok(h) => {
+            let up = h["uptime_secs"].as_u64().unwrap_or(0);
+            let stages: Vec<String> = h["stages"].as_object().map(|m| m.iter().map(|(k, v)| format!("{k}: {}", v.as_str().unwrap_or("?"))).collect()).unwrap_or_default();
+            println!(
+                "pand is RUNNING — pid {}, up {}h {:02}m {:02}s, version {}",
+                h["pid"].as_u64().unwrap_or(0),
+                up / 3600,
+                (up % 3600) / 60,
+                up % 60,
+                h["version"].as_str().unwrap_or("?")
+            );
+            println!("  serving {} for {} store(s), default {}", cfg.base_url(), h["stores"].as_array().map(|a| a.len()).unwrap_or(0), h["default"].as_str().unwrap_or("?"));
+            println!("  since start: {} image(s) stored, {} model call(s) made", h["images_stored"].as_u64().unwrap_or(0), h["model_calls"].as_u64().unwrap_or(0));
+            if stages.is_empty() {
+                println!("  model stages: none configured (ingest only)");
+            } else {
+                println!("  model stages: {}", stages.join("; "));
+            }
+            println!("  log: {}", pan::daemon::config::default_store_dir().join("logs").join("pand.log").display());
+            if pids.len() > 1 {
+                println!("  WARNING: {} pand processes exist ({}); `pand stop` kills them all", pids.len(), pids.join(", "));
+            }
+            Ok(())
+        }
+        Err(_) if pids.is_empty() => {
+            println!("pand is NOT running (nothing answers on {} and no pand process exists). Start it with: pand start", cfg.base_url());
+            std::process::exit(1);
+        }
+        Err(e) => {
+            println!(
+                "pand is NOT answering on {} but a pand process exists (pid {}): {e}\n  `pand stop` kills it; then `pand start`",
+                cfg.base_url(),
+                pids.join(", ")
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Kill every other pand on this machine. Prints what it did, in plain words.

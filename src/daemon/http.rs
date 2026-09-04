@@ -51,6 +51,11 @@ pub struct HealthResponse {
     pub default: String,
     /// Configured stages (model names; endpoints are config, not disclosed).
     pub stages: HashMap<String, String>,
+    pub pid: u32,
+    /// Since this process started.
+    pub images_stored: u64,
+    /// Calls made to model endpoints since this process started.
+    pub model_calls: u64,
 }
 
 /// The receipt for one stored file.
@@ -187,6 +192,9 @@ async fn health(State(d): State<Shared>) -> Json<HealthResponse> {
             .iter()
             .map(|(k, v)| (k.clone(), if v.enabled { v.model.clone() } else { format!("{} (off)", v.model) }))
             .collect(),
+        pid: std::process::id(),
+        images_stored: d.counters.images_stored.load(std::sync::atomic::Ordering::Relaxed),
+        model_calls: d.counters.model_calls.load(std::sync::atomic::Ordering::Relaxed),
     })
 }
 
@@ -267,6 +275,7 @@ async fn ingest(d: &Daemon, store_id: Option<&str>, headers: &axum::http::Header
         .await
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(map_err)?;
+    d.counters.images_stored.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     tracing::info!(store = %store.entry.id, id = %res.id, statements = res.statements, "stored");
     Ok((
         StatusCode::CREATED,

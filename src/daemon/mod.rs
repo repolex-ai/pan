@@ -57,6 +57,16 @@ pub struct Daemon {
     /// (store id, media id, stage) → last failed attempt.
     pub attempts: Mutex<HashMap<(String, String, String), Attempt>>,
     pub started: Instant,
+    /// Since this process started — what `pand status` reports, so anyone
+    /// can see at a glance whether the thing that makes model calls is
+    /// making them (Rob, 2026-09-04).
+    pub counters: Counters,
+}
+
+#[derive(Default)]
+pub struct Counters {
+    pub images_stored: std::sync::atomic::AtomicU64,
+    pub model_calls: std::sync::atomic::AtomicU64,
 }
 
 impl Daemon {
@@ -93,6 +103,7 @@ impl Daemon {
             iris: iris::Iris::new(),
             funnels,
             attempts: Mutex::new(HashMap::new()),
+            counters: Counters::default(),
             started: Instant::now(),
         })
     }

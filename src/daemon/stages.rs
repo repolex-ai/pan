@@ -155,6 +155,7 @@ async fn run_one(
 
     match stage {
         STAGE_EMBED => {
+            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let r = d.iris.see_embed(&ep.url, &bytes, media_type).await?;
             let s = store.clone();
             let id = item.id.clone();
@@ -175,6 +176,7 @@ async fn run_one(
             .await??;
         }
         STAGE_CAPTION => {
+            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let r = d.iris.see(&ep.url, &bytes, media_type).await?;
             let Some(text) = r.caption.filter(|t| !t.trim().is_empty()) else {
                 return Err(CallError::Terminal("no caption returned".into()).into());
@@ -185,6 +187,7 @@ async fn run_one(
             tokio::task::spawn_blocking(move || write_caption(&s, &id, &model, &text)).await??;
         }
         STAGE_POSE => {
+            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let r = d.iris.see_pose(&ep.url, &bytes, media_type).await?;
             if r.keypoints.is_empty() {
                 // The eye reports "no people" and "I failed" the same way (200
