@@ -31,6 +31,12 @@ pub struct ModelEndpoint {
     /// it returns is recorded under the right `pan:model`. Absent = the
     /// caption is not recorded from this stage.
     pub caption_model: Option<String>,
+    /// Test mode (Rob, 2026-09-03): `enabled: false` keeps the stage declared
+    /// but pand never calls it — ingest still lands, `pan state` says "off",
+    /// and turning it back on later picks up every image missing this model's
+    /// record (the graph is the queue). Default true.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     /// How many calls to this endpoint may be in flight at once across ALL
     /// stores. pand is the one funnel for model traffic on the machine.
     #[serde(default = "default_concurrency")]
@@ -39,6 +45,10 @@ pub struct ModelEndpoint {
 
 fn default_concurrency() -> usize {
     1
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -141,6 +151,11 @@ impl DaemonConfig {
         })
     }
 
+    /// The stages pand will actually run: configured AND enabled.
+    pub fn active_models(&self) -> impl Iterator<Item = (&String, &ModelEndpoint)> {
+        self.models.iter().filter(|(_, m)| m.enabled)
+    }
+
     pub fn base_url(&self) -> String {
         format!("http://{}:{}", self.bind, self.port)
     }
@@ -174,6 +189,17 @@ mod tests {
         assert_eq!(cfg.default, Some(PathBuf::from("/souls/a")));
         assert_eq!(cfg.port, 7402);
         assert_eq!(cfg.models["embed"].concurrency, 2);
+        assert!(cfg.models["embed"].enabled, "enabled defaults to true");
+    }
+
+    #[test]
+    fn disabled_stage_is_declared_but_not_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        std::fs::write(&p, "models:\n  pose:\n    url: http://x/see_pose\n    model: rtmw\n    enabled: false\n").unwrap();
+        let cfg = DaemonConfig::load_from(&p).unwrap();
+        assert!(cfg.models.contains_key("pose"));
+        assert_eq!(cfg.active_models().count(), 0);
     }
 
     #[test]

@@ -223,7 +223,12 @@ async fn health(State(d): State<Shared>) -> Json<HealthResponse> {
         uptime_secs: d.started.elapsed().as_secs(),
         stores: d.stores.iter().map(|s| s.entry.id.clone()).collect(),
         default: d.default_id.clone(),
-        stages: d.cfg.models.iter().map(|(k, v)| (k.clone(), v.model.clone())).collect(),
+        stages: d
+            .cfg
+            .models
+            .iter()
+            .map(|(k, v)| (k.clone(), if v.enabled { v.model.clone() } else { format!("{} (off)", v.model) }))
+            .collect(),
     })
 }
 
@@ -416,6 +421,12 @@ async fn get_state(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Re
         let models = present(link);
         let status = match d.cfg.models.get(stage) {
             None => StageStatus { status: if models.is_empty() { "off".into() } else { "done".into() }, models, error: None, terminal: None },
+            Some(ep) if !ep.enabled => StageStatus {
+                status: if models.iter().any(|m| m == &ep.model) { "done".into() } else { "off".into() },
+                models,
+                error: None,
+                terminal: None,
+            },
             Some(ep) => {
                 if models.iter().any(|m| m == &ep.model) {
                     StageStatus { status: "done".into(), models, error: None, terminal: None }

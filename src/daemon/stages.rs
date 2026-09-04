@@ -60,7 +60,7 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
     let mut done = 0usize;
     for store in d.stores.clone() {
         for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE] {
-            if !d.cfg.models.contains_key(stage) {
+            if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
                 continue;
             }
             match run_stage(d.clone(), store.clone(), stage).await {
@@ -72,8 +72,7 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
         // configured; say when. With no stages configured, ingest IS ready.
         let required: Vec<(String, String)> = d
             .cfg
-            .models
-            .iter()
+            .active_models()
             .filter_map(|(stage, ep)| link_for(stage).map(|l| (l.to_string(), ep.model.clone())))
             .collect();
         let s = store.clone();
