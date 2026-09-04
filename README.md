@@ -55,7 +55,12 @@ models:                                  # every stage optional; pand ships zero
   pose:
     url: http://127.0.0.1:1215/see_pose
     model: rtmw-x-l
+    enabled: false                       # test mode: declared, never called; flip on later
 ```
+
+`enabled: false` is the test-mode switch: the stage stays declared, pand never
+calls it, ingest still lands, `pan state` reports it `off`. Because the graph is
+the queue, turning it back on picks up every image missing that model's record.
 
 A soul repo's `.pan/` must be gitignored (media is never git history); pand
 warns at start if it is not.
