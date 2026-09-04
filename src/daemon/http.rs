@@ -66,8 +66,11 @@ pub struct DeliveryBody {
     pub moment_id: Option<String>,
     #[serde(default)]
     pub prompt: Option<String>,
-    /// Predicate → value(s), named by the producer: full IRIs, `prefix:local`,
-    /// or bare names (default prefix). Unresolvable = 400, nothing written.
+    /// Pool's flat key→value bag. Accepted so Horae's body parses; NOT
+    /// recorded. A bare key here has no declared home — recording it under
+    /// Pan's prefix put `pan:mode`, `pan:origin`, `pan:inSetId` in the graph
+    /// with no ontology behind them (first live deliveries, 2026-09-04).
+    /// Everything a producer wants kept goes in `metadata_xml`, declared.
     #[serde(default)]
     pub fields: HashMap<String, serde_json::Value>,
     #[serde(default)]
@@ -274,18 +277,9 @@ async fn deliver(State(d): State<Shared>, Json(body): Json<DeliveryBody>) -> Res
     if let Some(m) = body.moment_id.as_deref().filter(|m| !m.trim().is_empty()) {
         facts.insert("copia:momentId", m.trim());
     }
-    for (pred, val) in &body.fields {
-        match val {
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    facts.insert(pred.clone(), json_scalar(item)?);
-                }
-            }
-            other => facts.insert(pred.clone(), json_scalar(other)?),
-        }
-    }
     let mut not_recorded = Vec::new();
     for (name, present) in [
+        ("fields", !body.fields.is_empty()),
         ("prompt", body.prompt.is_some()),
         ("provenance", body.provenance.is_some()),
         ("meta", body.meta.is_some()),
