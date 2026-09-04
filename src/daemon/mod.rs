@@ -159,17 +159,24 @@ impl Daemon {
     }
 }
 
-/// A soul repo's `.pan` must never enter git history. pand does not edit
-/// another repo's `.gitignore` (that is the kit's job); it says so loudly.
+/// A soul repo's `.pan/_ignore` (the pocket: graph, index, media) must never
+/// enter git history. pand does not edit another repo's `.gitignore` (git-lex
+/// manages the `.pan/_ignore/` line); it asks git and says so loudly if the
+/// answer is no. Asking git — not grepping for a spelling — means any pattern
+/// that covers the pocket counts (`.pan/`, `.pan/_ignore/`, a global excludes
+/// file, …).
 fn warn_if_not_ignored(repo: &Path) {
-    let gi = repo.join(".gitignore");
-    let ignored = std::fs::read_to_string(&gi)
-        .map(|s| s.lines().any(|l| matches!(l.trim(), ".pan" | ".pan/" | "/.pan" | "/.pan/")))
+    let ignored = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["check-ignore", "-q", ".pan/_ignore/oxigraph"])
+        .status()
+        .map(|s| s.success())
         .unwrap_or(false);
     if !ignored {
         tracing::warn!(
             repo = %repo.display(),
-            ".pan is not in this repo's .gitignore — media would enter git history; add a `.pan/` line"
+            ".pan/_ignore is not gitignored in this repo — the graph and media would enter git history; run `git lex kit-update` (it adds the `.pan/_ignore/` line)"
         );
     }
 }
