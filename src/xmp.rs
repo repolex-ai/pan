@@ -316,10 +316,17 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
             rebuilt.as_bytes(),
         )
         .map_err(|e| anyhow!("XMP in the file is not valid RDF/XML: {e}"))?;
+    // Pan's own Description is already out. What is left out here is only
+    // what must never travel between stores: pan: vocabulary (a previous
+    // store's paths and records) and git-lex:id (identity). A producer's
+    // git-lex:dateCreated on ITS subject is declared vocabulary and stays —
+    // dropping the whole git-lex namespace lost Horae's Moment dateCreated
+    // on the first media-only delivery (2026-09-04).
+    let git_lex_id = format!("{}id", crate::config::GIT_LEX_NS);
     let all: Vec<oxigraph::model::Quad> = store.iter().collect::<std::result::Result<_, _>>().context("read packet quads")?;
     let quads: Vec<oxigraph::model::Quad> = all
         .into_iter()
-        .filter(|q| !(q.predicate.as_str().starts_with(PAN_NS) || q.predicate.as_str().starts_with(crate::config::GIT_LEX_NS)))
+        .filter(|q| !(q.predicate.as_str().starts_with(PAN_NS) || q.predicate.as_str() == git_lex_id))
         .collect();
     Ok(quads)
 }
@@ -910,16 +917,21 @@ mod tests {
         // copia one untouched and typed.
         const COPIA: &str = "https://repolex.ai/ontology/copia/";
         let copia_block = format!(
-            "<rdf:Description rdf:about=\"https://repolex.ai/copia/Moment/3hyh7rwekpmq\" xmlns:copia=\"{COPIA}\">\n\
+            "<rdf:Description rdf:about=\"https://repolex.ai/copia/Moment/3hyh7rwekpmq\" xmlns:copia=\"{COPIA}\" xmlns:git-lex=\"https://repolex.ai/ontology/git-lex/\">\n\
                <copia:momentId>3hyh7rwekpmq</copia:momentId>\n\
                <copia:sceneMood>calm &amp; &lt;bright&gt;</copia:sceneMood>\n\
                <copia:genSteps rdf:datatype=\"http://www.w3.org/2001/XMLSchema#integer\">12</copia:genSteps>\n\
+               <git-lex:dateCreated rdf:datatype=\"http://www.w3.org/2001/XMLSchema#dateTime\">2026-09-03T23:54:18-07:00</git-lex:dateCreated>\n\
                <copia:sceneObjects><rdf:Bag><rdf:li>wolf</rdf:li><rdf:li>forest</rdf:li></rdf:Bag></copia:sceneObjects>\n\
              </rdf:Description>"
         );
         let arrived = producer_packet(&copia_block);
         let quads = load_packet_statements(&arrived, "https://repolex.ai/pan/Image/abc123xy").unwrap();
-        assert!(quads.len() >= 4);
+        assert!(quads.len() >= 5);
+        assert!(
+            quads.iter().any(|q| q.predicate.as_str() == "https://repolex.ai/ontology/git-lex/dateCreated"),
+            "a producer's git-lex:dateCreated on its own subject is declared vocabulary and must load"
+        );
         let steps = quads
             .iter()
             .find(|q| q.predicate.as_str() == format!("{COPIA}genSteps"))
