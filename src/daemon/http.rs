@@ -422,9 +422,83 @@ async fn get_state(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Re
 #[utoipa::path(post, path = "/query", tag = "query", request_body = QueryBody,
     responses((status = 200, description = "W3C sparql-results+json (SELECT/ASK) or N-Triples (CONSTRUCT/DESCRIBE)"), (status = 400, body = ErrorBody)))]
 async fn query(State(d): State<Shared>, Json(body): Json<QueryBody>) -> Result<Response, ApiError> {
-    use oxigraph::sparql::results::{QueryResultsFormat, QueryResultsSerializer};
     let store = d.store_for(body.store.as_deref()).map_err(map_err)?;
     let results = store.pan.query(&body.query).map_err(map_err)?;
+    serialize_results(results)
+}
+
+/// SPARQL 1.1 Protocol, per store — what git-lex and Syrinx federate to.
+/// GET `?query=` · POST `application/sparql-query` (raw) ·
+/// POST `application/x-www-form-urlencoded` (`query=`). Results as
+/// `application/sparql-results+json` (SELECT/ASK) or N-Triples.
+#[utoipa::path(post, path = "/stores/{id}/sparql", tag = "query",
+    params(("id" = String, Path, description = "store id: a soul's genesis SHA or a bare store id")),
+    request_body(content = String, content_type = "application/sparql-query"),
+    responses((status = 200, description = "W3C sparql-results+json or N-Triples"), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn store_sparql_post(
+    State(d): State<Shared>,
+    AxPath(id): AxPath<String>,
+    headers: axum::http::HeaderMap,
+    body: String,
+) -> Result<Response, ApiError> {
+    let ct = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let sparql = if ct.starts_with("application/x-www-form-urlencoded") {
+        form_query(&body).ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "form body has no query= field".into()))?
+    } else {
+        body
+    };
+    run_sparql(&d, &id, &sparql).await
+}
+
+#[utoipa::path(get, path = "/stores/{id}/sparql", tag = "query",
+    params(("id" = String, Path), ("query" = String, Query, description = "the SPARQL query")),
+    responses((status = 200, description = "W3C sparql-results+json or N-Triples"), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn store_sparql_get(
+    State(d): State<Shared>,
+    AxPath(id): AxPath<String>,
+    axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    let sparql = q.get("query").cloned().ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "missing ?query=".into()))?;
+    run_sparql(&d, &id, &sparql).await
+}
+
+fn form_query(body: &str) -> Option<String> {
+    for pair in body.split('&') {
+        let (k, v) = pair.split_once('=')?;
+        if k == "query" {
+            return urlencoding_decode(v);
+        }
+    }
+    None
+}
+
+fn urlencoding_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < bytes.len() => {
+                let h = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+                out.push(u8::from_str_radix(h, 16).ok()?);
+                i += 2;
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8(out).ok()
+}
+
+async fn run_sparql(d: &Daemon, id: &str, sparql: &str) -> Result<Response, ApiError> {
+    let store = d.store(id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown store: {id}")))?;
+    let results = store.pan.query(sparql).map_err(map_err)?;
+    serialize_results(results)
+}
+
+fn serialize_results(results: crate::QueryResults) -> Result<Response, ApiError> {
+    use oxigraph::sparql::results::{QueryResultsFormat, QueryResultsSerializer};
     let ser = QueryResultsSerializer::from_format(QueryResultsFormat::Json);
     let internal = |e: String| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e);
     match results {
@@ -484,7 +558,7 @@ async fn search(State(d): State<Shared>, Json(body): Json<SearchBody>) -> Result
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
-    paths(health, stores, deliver, get_media, get_thumbnail, delete_media, get_facts, get_state, query, search),
+    paths(health, stores, deliver, get_media, get_thumbnail, delete_media, get_facts, get_state, query, search, store_sparql_get, store_sparql_post),
     components(schemas(HealthResponse, StoreInfo, IndexInfo, DeliveryBody, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody)),
     tags(
         (name = "meta", description = "Daemon + store status"),
@@ -505,6 +579,7 @@ pub fn router(d: Shared) -> Router {
         .route("/media/{id}/state", get(get_state))
         .route("/query", post(query))
         .route("/search", post(search))
+        .route("/stores/{id}/sparql", get(store_sparql_get).post(store_sparql_post))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
         .layer(tower_http::trace::TraceLayer::new_for_http())
