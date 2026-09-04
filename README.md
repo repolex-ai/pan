@@ -12,7 +12,10 @@ Two binaries, one crate:
   machine: it is the only thing that touches a store's files or writes its
   graph, it makes every model call (one funnel, with a concurrency limit per
   model), and it keeps filesystem and graph in step in small atomic steps.
-  Zero arguments; everything is in `~/.config/pan/config.yml`.
+  `pand start` / `pand stop`, run from a terminal, no flags; everything is in
+  `~/.config/pan/config.yml`. No launchd, no supervisor: exactly one pand or
+  none, and the terminal that started it owns it (and lends it its file-access
+  grant, so no macOS consent dialog).
 - **`pan`** — the command line. A thin client of pand. Every answer it prints
   came from the graph; it never reads a store directly.
 
@@ -22,7 +25,8 @@ pand exactly as it delivered into Pool.
 ## Quick start
 
 ```sh
-pand                                   # foreground; ctrl-c stops it
+pand start                             # kills every pand on the machine, then runs in this terminal
+pand stop                              # kills every pand on the machine
 pan store  ~/Pictures/wolf.png         # → <pan/Image/k7m2p9x4>
 pan state  '<pan/Image/k7m2p9x4>'      # thumbnail, embed, caption, pose: done / pending / off
 pan info   '<pan/Image/k7m2p9x4>'      # every fact the graph holds about it

@@ -1,8 +1,12 @@
 //! pand — the Pan daemon.
 //!
-//!   pand          run in the foreground (what launchd runs); ctrl-c stops it
 //!   pand start    kill EVERY pand on this machine, then run in the foreground
 //!   pand stop     kill EVERY pand on this machine and exit
+//!   pand          run in the foreground without the kill-first step
+//!
+//! There is no launchd job any more (Rob removed it, 2026-09-04): a terminal
+//! starts pand and owns it. `stop` still boots out the old label in case a
+//! plist ever comes back.
 //!
 //! No flags. Everything else is in `~/.config/pan/config.yml` (stores,
 //! default, port, model endpoints); a missing file means one store at `~/.pan`
