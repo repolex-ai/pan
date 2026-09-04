@@ -22,7 +22,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use super::stages;
 use super::Daemon;
-use crate::{bare_id, bracket_iri, Facts, MediaState, PAN_NS};
+use crate::{bare_id, bracket_iri, MediaState, PAN_NS};
 
 type Shared = Arc<Daemon>;
 
@@ -53,51 +53,7 @@ pub struct HealthResponse {
     pub stages: HashMap<String, String>,
 }
 
-/// The delivery body. This is the shape Horae already sends to Pool
-/// (`horae/src/horae/deliver.py`), accepted unchanged; `pan store` sends the
-/// same shape. Exactly one of `png_b64` / `bytes_b64` carries the media.
-#[derive(Deserialize, ToSchema)]
-pub struct DeliveryBody {
-    /// Which store: a soul's genesis SHA or a bare store id. Absent = default.
-    #[serde(default, alias = "store")]
-    pub soul: Option<String>,
-    /// Recorded as `copia:momentId` on the image.
-    #[serde(default, rename = "momentId")]
-    pub moment_id: Option<String>,
-    #[serde(default)]
-    pub prompt: Option<String>,
-    /// Pool's flat key→value bag. Accepted so Horae's body parses; NOT
-    /// recorded. A bare key here has no declared home — recording it under
-    /// Pan's prefix put `pan:mode`, `pan:origin`, `pan:inSetId` in the graph
-    /// with no ontology behind them (first live deliveries, 2026-09-04).
-    /// Everything a producer wants kept goes in `metadata_xml`, declared.
-    #[serde(default)]
-    pub fields: HashMap<String, serde_json::Value>,
-    #[serde(default)]
-    pub provenance: Option<serde_json::Value>,
-    #[serde(default)]
-    pub meta: Option<serde_json::Value>,
-    #[serde(default)]
-    pub timestamps: Option<serde_json::Value>,
-    #[serde(default)]
-    pub render: Option<serde_json::Value>,
-    /// The producer's metadata block: well-formed RDF/XML in copia vocabulary
-    /// (one or more rdf:Description about the Moment). Written into the image
-    /// XMP verbatim and loaded into the graph unchanged. Malformed = 400.
-    #[serde(default)]
-    pub metadata_xml: Option<String>,
-    /// Who is delivering (horae). Logged; not recorded in the graph.
-    #[serde(default)]
-    pub producer: Option<String>,
-    #[serde(default)]
-    pub png_b64: Option<String>,
-    #[serde(default)]
-    pub bytes_b64: Option<String>,
-    /// MIME type of the bytes. Default: image/png.
-    #[serde(default)]
-    pub content_type: Option<String>,
-}
-
+/// The receipt for one stored file.
 #[derive(Serialize, ToSchema)]
 pub struct Delivered {
     /// `<pan/Image/k7m2p9x4>` — the identity, bracket form.
@@ -107,11 +63,10 @@ pub struct Delivered {
     pub media_path: String,
     pub created_date: String,
     pub thumbnail: bool,
-    /// Statements loaded from `metadata_xml`.
-    pub delivered_statements: usize,
-    /// Parts of the delivery that are not written anywhere: the producer
-    /// puts what it wants kept into `metadata_xml` (Rob, 2026-09-03).
-    pub not_recorded: Vec<String>,
+    /// Statements read from the XMP the file arrived with and loaded into
+    /// the graph. A producer that wrote a block into the image can assert
+    /// this is non-zero.
+    pub statements: usize,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -202,7 +157,7 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("index name")
         || msg.contains("empty")
         || msg.contains("search where-clause")
-        || msg.contains("metadata block")
+        || msg.contains("XMP")
         || msg.contains("ambiguous")
     {
         ApiError(StatusCode::BAD_REQUEST, msg)
@@ -255,55 +210,64 @@ async fn stores(State(d): State<Shared>) -> Json<Vec<StoreInfo>> {
     )
 }
 
-#[utoipa::path(post, path = "/media", tag = "media", request_body = DeliveryBody,
+/// Store a media file in the default store. The request body IS the file:
+/// raw bytes, media type in `Content-Type`. Nothing else is sent — whatever
+/// XMP the file carries is its metadata (a producer writes its block into the
+/// image before handing it over; Rob, 2026-09-04). Pan reads that XMP into
+/// the graph, appends its own block, and never touches the rest.
+#[utoipa::path(post, path = "/media", tag = "media",
+    request_body(content = Vec<u8>, content_type = "image/png", description = "The media file, raw bytes. Content-Type names the media type."),
     responses((status = 201, body = Delivered), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
-async fn deliver(State(d): State<Shared>, Json(body): Json<DeliveryBody>) -> Result<(StatusCode, Json<Delivered>), ApiError> {
-    use base64::Engine;
-    let store = d.store_for(body.soul.as_deref()).map_err(map_err)?;
-    let b64 = body
-        .png_b64
-        .as_deref()
-        .or(body.bytes_b64.as_deref())
-        .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "delivery carries no png_b64 / bytes_b64".into()))?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64.trim())
-        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, format!("media is not valid base64: {e}")))?;
-    if bytes.is_empty() {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "empty media".into()));
-    }
-    let content_type = body.content_type.clone().unwrap_or_else(|| "image/png".to_string());
+async fn deliver(State(d): State<Shared>, headers: axum::http::HeaderMap, body: axum::body::Bytes) -> Result<(StatusCode, Json<Delivered>), ApiError> {
+    ingest(&d, None, &headers, body).await
+}
 
-    let mut facts = Facts::new();
-    if let Some(m) = body.moment_id.as_deref().filter(|m| !m.trim().is_empty()) {
-        facts.insert("copia:momentId", m.trim());
-    }
-    let mut not_recorded = Vec::new();
-    for (name, present) in [
-        ("fields", !body.fields.is_empty()),
-        ("prompt", body.prompt.is_some()),
-        ("provenance", body.provenance.is_some()),
-        ("meta", body.meta.is_some()),
-        ("timestamps", body.timestamps.is_some()),
-        ("render", body.render.is_some()),
-    ] {
-        if present {
-            not_recorded.push(name.to_string());
-        }
-    }
+/// Store a media file in one named store (a soul's genesis SHA or a bare
+/// store id). Same body as `POST /media`.
+#[utoipa::path(post, path = "/stores/{id}/media", tag = "media", params(("id" = String, Path, description = "store id")),
+    request_body(content = Vec<u8>, content_type = "image/png", description = "The media file, raw bytes. Content-Type names the media type."),
+    responses((status = 201, body = Delivered), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn deliver_to(
+    State(d): State<Shared>,
+    AxPath(store_id): AxPath<String>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<Delivered>), ApiError> {
+    ingest(&d, Some(&store_id), &headers, body).await
+}
 
+async fn ingest(d: &Daemon, store_id: Option<&str>, headers: &axum::http::HeaderMap, body: axum::body::Bytes) -> Result<(StatusCode, Json<Delivered>), ApiError> {
+    let store = d.store_for(store_id).map_err(map_err)?;
+    if body.is_empty() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "empty body: the request body must be the media file's bytes".into()));
+    }
+    // Media type: the Content-Type header, parameters stripped. A PNG is
+    // recognisable without one; anything else must say what it is.
+    let declared = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty() && s != "application/octet-stream");
+    let content_type = match declared {
+        Some(ct) => ct,
+        None if crate::xmp::is_png(&body) => "image/png".to_string(),
+        None => return Err(ApiError(StatusCode::BAD_REQUEST, "Content-Type required: the bytes are not a PNG and no media type was given".into())),
+    };
+    // Pan stores media. A JSON or form body here is a caller still speaking
+    // Pool's wire; say so instead of filing its JSON as an image.
+    if !(content_type.starts_with("image/") || content_type.starts_with("video/") || content_type.starts_with("audio/")) {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            format!("Content-Type {content_type} is not media. The request body must be the file itself (raw bytes, Content-Type image/png etc.); metadata travels inside the file's XMP."),
+        ));
+    }
     let s = store.clone();
-    let block = body.metadata_xml.clone();
-    if let Some(b) = &block {
-        if b.trim().is_empty() {
-            return Err(ApiError(StatusCode::BAD_REQUEST, "metadata_xml is empty".into()));
-        }
-    }
-    let producer = body.producer.clone().unwrap_or_else(|| "unknown".into());
-    let res = tokio::task::spawn_blocking(move || s.pan.put(&bytes, Some(&content_type), block.as_deref(), facts))
+    let bytes = body.to_vec();
+    let res = tokio::task::spawn_blocking(move || s.pan.put(&bytes, Some(&content_type)))
         .await
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(map_err)?;
-    tracing::info!(store = %store.entry.id, id = %res.id, producer = %producer, statements = res.delivered_statements, "stored");
+    tracing::info!(store = %store.entry.id, id = %res.id, statements = res.statements, "stored");
     Ok((
         StatusCode::CREATED,
         Json(Delivered {
@@ -313,19 +277,9 @@ async fn deliver(State(d): State<Shared>, Json(body): Json<DeliveryBody>) -> Res
             media_path: res.media_path,
             created_date: res.created_date,
             thumbnail: res.thumbnail,
-            delivered_statements: res.delivered_statements,
-            not_recorded,
+            statements: res.statements,
         }),
     ))
-}
-
-fn json_scalar(v: &serde_json::Value) -> Result<String, ApiError> {
-    match v {
-        serde_json::Value::String(s) => Ok(s.clone()),
-        serde_json::Value::Number(n) => Ok(n.to_string()),
-        serde_json::Value::Bool(b) => Ok(b.to_string()),
-        other => Err(ApiError(StatusCode::BAD_REQUEST, format!("fact values must be scalars or arrays of scalars, got: {other}"))),
-    }
 }
 
 fn locate(d: &Daemon, given: &str) -> Result<(Arc<super::StoreHandle>, String), ApiError> {
@@ -584,8 +538,8 @@ async fn search(State(d): State<Shared>, Json(body): Json<SearchBody>) -> Result
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
-    paths(health, stores, deliver, get_media, get_thumbnail, delete_media, get_facts, get_state, query, search, store_sparql_get, store_sparql_post),
-    components(schemas(HealthResponse, StoreInfo, IndexInfo, DeliveryBody, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody)),
+    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, delete_media, get_facts, get_state, query, search, store_sparql_get, store_sparql_post),
+    components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody)),
     tags(
         (name = "meta", description = "Daemon + store status"),
         (name = "media", description = "Deliver, read, describe, delete"),
@@ -605,6 +559,7 @@ pub fn router(d: Shared) -> Router {
         .route("/media/{id}/state", get(get_state))
         .route("/query", post(query))
         .route("/search", post(search))
+        .route("/stores/{id}/media", post(deliver_to))
         .route("/stores/{id}/sparql", get(store_sparql_get).post(store_sparql_post))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))

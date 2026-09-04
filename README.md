@@ -67,12 +67,25 @@ warns at start if it is not.
 
 ## How an image gets in
 
-`POST /media` (Horae's delivery body, or `pan store`), in this order:
+`POST /media` (default store) or `POST /stores/{id}/media`. **The request body
+is the file** — raw bytes, media type in `Content-Type`, nothing else. `pan
+store` does exactly that. Whatever XMP the file already carries is its
+metadata: a producer (Horae) writes its copia block into the image before
+handing it over, and a file from anywhere else brings what it brings. In this
+order:
 
-1. bytes written to `media/image/YYYY/MM/DD/<id>.png`
-2. Pan's XMP packet written into the PNG (identity, thumbnail, enrichment references)
+1. the file's XMP read with a real RDF/XML parser — `rdf:about=""` is this
+   image, named subjects stay themselves, datatypes survive. Not valid RDF/XML
+   = 400, nothing stored.
+2. bytes written to `media/image/YYYY/MM/DD/<id>.png` with Pan's own block
+   APPENDED to that XMP (identity, thumbnail, enrichment references); every
+   other chunk and every other Description byte-for-byte as it arrived
 3. thumbnail made (512px JPEG) beside it
-4. graph node committed — ONE transaction. The image exists only after this.
+4. graph node committed — ONE transaction, the file's statements included.
+   The image exists only after this.
+
+The receipt says how many statements were read from the file, so a producer
+can assert its block landed.
 
 Then the **stage ladder**: every pass, per store, per configured stage, pand
 asks the graph *which images have no record from this model*, takes a bounded

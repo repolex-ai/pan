@@ -107,7 +107,7 @@ fn serialize_enrichment(local: &str, refs: &[crate::enrich::EnrichmentRef], inde
 /// own media's metadata. Self-contained `<?xpacket?>`-wrapped, and readable
 /// back through [`parse_packet`].
 pub fn build_packet(p: &ImagePacket) -> String {
-    compose_packet(None, &build_pan_description(p), &[])
+    compose_packet(None, &build_pan_description(p))
 }
 
 /// Pan's own root Description: the `pan:image` struct (identity, size,
@@ -245,10 +245,11 @@ pub fn split_descriptions(packet: &str) -> Vec<(bool, String)> {
 }
 
 /// Assemble the packet Pan writes into the image: every Description that was
-/// already there and is not Pan's own (kept verbatim), then Pan's root
-/// Description, then any extra Descriptions delivered with the media (the
-/// producer's copia block, verbatim). Standard XMP wrapping.
-pub fn compose_packet(existing: Option<&str>, pan_description: &str, extra_descriptions: &[String]) -> String {
+/// already there and is not Pan's own (kept verbatim — the producer's copia
+/// block, an Adobe block, anything), then Pan's root Description. Standard
+/// XMP wrapping. Pan never adds a third party's metadata; whatever is in the
+/// file when it arrives is what travels (Rob, 2026-09-04).
+pub fn compose_packet(existing: Option<&str>, pan_description: &str) -> String {
     let mut out = String::with_capacity(2048);
     out.push_str("<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n");
     out.push_str("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n");
@@ -263,59 +264,64 @@ pub fn compose_packet(existing: Option<&str>, pan_description: &str, extra_descr
         }
     }
     out.push_str(pan_description);
-    for d in extra_descriptions {
-        out.push_str("    ");
-        out.push_str(d.trim());
-        out.push('\n');
-    }
     out.push_str("  </rdf:RDF>\n");
     out.push_str("</x:xmpmeta>\n");
     out.push_str("<?xpacket end=\"w\"?>");
     out
 }
 
-/// Validate a producer's metadata block and return its Descriptions verbatim.
-/// The block must be well-formed XML and parseable RDF/XML once wrapped in
-/// `<rdf:RDF>` — one or more `rdf:Description` elements (a whole `<rdf:RDF>`
-/// document is accepted too and unwrapped). Pan reads it only to CHECK it;
-/// the content is written as given. Returns (descriptions, triples) where
-/// the triples are what the block says, with `rdf:about=""` resolved to
-/// `media_iri`.
-pub fn validate_delivered_block(block: &str, media_iri: &str) -> Result<(Vec<String>, Vec<oxigraph::model::Quad>)> {
-    let trimmed = block.trim();
-    if trimmed.is_empty() {
-        return Err(anyhow!("metadata block is empty"));
-    }
-    let inner: String = if let (Some(s), Some(e)) = (find_rdf_open(trimmed), trimmed.rfind("</rdf:RDF>")) {
-        trimmed[s..e].to_string()
-    } else {
-        trimmed.to_string()
+/// What the XMP a file ARRIVED with says, as typed quads, read with the real
+/// RDF/XML parser: `rdf:about=""` resolves to `media_iri` (facts about this
+/// object), named subjects (a producer's Moment, a region) stay themselves,
+/// `rdf:datatype` survives. Pan's own block from a previous store is left
+/// out (its identity is that store's, not this object's), and so is any
+/// stray pan:/git-lex: predicate.
+///
+/// A packet that is not well-formed RDF/XML is an error — the caller refuses
+/// the file (same rule Rob set for the copia block: reject malformed, never
+/// repair, never store what the graph cannot say). No `<rdf:RDF>` at all is
+/// also an error: an XMP chunk with no RDF is not XMP.
+pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigraph::model::Quad>> {
+    let (s, e) = match (find_rdf_open(packet), packet.rfind("</rdf:RDF>")) {
+        (Some(s), Some(e)) if e > s => (s, e + "</rdf:RDF>".len()),
+        _ => return Err(anyhow!("XMP packet has no rdf:RDF element")),
     };
-    // Wrap with every namespace the block itself declares hoisted to the root,
-    // then parse for real. Any XML or RDF/XML error is the caller's 400.
-    let wrapped = format!(
-        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">{inner}</rdf:RDF>"
-    );
-    let wrapped = hoist_namespaces(&wrapped);
+    // Root tag with every namespace declared anywhere in the element hoisted
+    // onto it, so a Description can be dropped without losing a binding.
+    let hoisted = hoist_namespaces(&packet[s..e]);
+    // First: is the WHOLE element valid RDF/XML? Asked of the full text, not
+    // of the Descriptions picked out of it — a Description that never closes
+    // would otherwise be picked out as "none" and pass in silence.
+    Store::new()
+        .context("scratch store")?
+        .load_from_reader(
+            oxigraph::io::RdfParser::from_format(RdfFormat::RdfXml).with_base_iri(media_iri).map_err(|e| anyhow!("base IRI: {e}"))?,
+            hoisted.as_bytes(),
+        )
+        .map_err(|e| anyhow!("XMP in the file is not valid RDF/XML: {e}"))?;
+    let Some(root_end) = hoisted.find('>') else { return Err(anyhow!("XMP packet: unterminated rdf:RDF tag")) };
+    let root_tag = &hoisted[..=root_end];
+    let mut body = String::new();
+    for (pan_authored, elem) in split_descriptions(&hoisted) {
+        if !pan_authored {
+            body.push_str(&elem);
+            body.push('\n');
+        }
+    }
+    let rebuilt = format!("{root_tag}{body}</rdf:RDF>");
     let store = Store::new().context("scratch store")?;
     store
         .load_from_reader(
             oxigraph::io::RdfParser::from_format(RdfFormat::RdfXml).with_base_iri(media_iri).map_err(|e| anyhow!("base IRI: {e}"))?,
-            wrapped.as_bytes(),
+            rebuilt.as_bytes(),
         )
-        .map_err(|e| anyhow!("metadata block is not valid RDF/XML: {e}"))?;
-    let quads: Vec<oxigraph::model::Quad> = store.iter().collect::<std::result::Result<_, _>>().context("read block quads")?;
-    if quads.is_empty() {
-        return Err(anyhow!("metadata block carries no statements"));
-    }
-    let descs: Vec<String> = split_descriptions(&format!("<rdf:RDF>{inner}</rdf:RDF>"))
+        .map_err(|e| anyhow!("XMP in the file is not valid RDF/XML: {e}"))?;
+    let all: Vec<oxigraph::model::Quad> = store.iter().collect::<std::result::Result<_, _>>().context("read packet quads")?;
+    let quads: Vec<oxigraph::model::Quad> = all
         .into_iter()
-        .map(|(_, d)| d)
+        .filter(|q| !(q.predicate.as_str().starts_with(PAN_NS) || q.predicate.as_str().starts_with(crate::config::GIT_LEX_NS)))
         .collect();
-    if descs.is_empty() {
-        return Err(anyhow!("metadata block has no rdf:Description element"));
-    }
-    Ok((descs, quads))
+    Ok(quads)
 }
 
 // ── Packet reading — the REAL RDF parser (the change from Pool) ─────────────
@@ -886,22 +892,43 @@ mod tests {
         get(facts, iri).into_iter().map(|t| t.value().to_string()).collect()
     }
 
+    /// A packet as a producer (Horae) writes it into the file before Pan ever
+    /// sees it: standard wrapping, one copia Description about the Moment.
+    fn producer_packet(descriptions: &str) -> String {
+        format!(
+            "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+             <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
+             <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n{descriptions}\n</rdf:RDF>\n\
+             </x:xmpmeta>\n<?xpacket end=\"w\"?>"
+        )
+    }
+
     #[test]
     fn packet_round_trips_through_real_parser() {
-        // Pan's block plus a producer's copia Description composed verbatim:
-        // both must come back through the real parser, the copia one untouched.
+        // The file arrives with a producer's copia Description; Pan appends
+        // its own block. Both must come back through the real parser, the
+        // copia one untouched and typed.
         const COPIA: &str = "https://repolex.ai/ontology/copia/";
         let copia_block = format!(
             "<rdf:Description rdf:about=\"https://repolex.ai/copia/Moment/3hyh7rwekpmq\" xmlns:copia=\"{COPIA}\">\n\
                <copia:momentId>3hyh7rwekpmq</copia:momentId>\n\
                <copia:sceneMood>calm &amp; &lt;bright&gt;</copia:sceneMood>\n\
+               <copia:genSteps rdf:datatype=\"http://www.w3.org/2001/XMLSchema#integer\">12</copia:genSteps>\n\
                <copia:sceneObjects><rdf:Bag><rdf:li>wolf</rdf:li><rdf:li>forest</rdf:li></rdf:Bag></copia:sceneObjects>\n\
              </rdf:Description>"
         );
-        let (descs, quads) = validate_delivered_block(&copia_block, "https://repolex.ai/pan/Image/abc123xy").unwrap();
-        assert_eq!(descs.len(), 1);
-        assert_eq!(descs[0], copia_block, "the block is carried verbatim");
-        assert!(quads.len() >= 3);
+        let arrived = producer_packet(&copia_block);
+        let quads = load_packet_statements(&arrived, "https://repolex.ai/pan/Image/abc123xy").unwrap();
+        assert!(quads.len() >= 4);
+        let steps = quads
+            .iter()
+            .find(|q| q.predicate.as_str() == format!("{COPIA}genSteps"))
+            .expect("genSteps loaded");
+        assert!(
+            steps.object.to_string().contains("XMLSchema#integer"),
+            "rdf:datatype survives the real parser: {}",
+            steps.object
+        );
 
         let pan_desc = build_pan_description(&ImagePacket {
             iri: "https://repolex.ai/pan/Image/abc123xy".into(),
@@ -910,7 +937,8 @@ mod tests {
             thumbnail: Some(("thumbnail/2026/09/04/abc123xy.jpg".into(), 341, 512)),
             ..Default::default()
         });
-        let packet = compose_packet(None, &pan_desc, &descs);
+        let packet = compose_packet(Some(&arrived), &pan_desc);
+        assert!(packet.contains(&copia_block), "the producer's Description is carried verbatim");
         let parsed = parse_packet(&packet).unwrap();
         let root = parsed.iter().find(|p| p.subject.is_none()).expect("root block");
         assert_eq!(
@@ -924,18 +952,27 @@ mod tests {
         assert_eq!(vals(&moment.facts, &format!("{COPIA}sceneMood")), vec!["calm & <bright>"]);
         assert_eq!(vals(&moment.facts, &format!("{COPIA}sceneObjects")), vec!["wolf", "forest"]);
 
-        // A restamp keeps the copia Description and re-authors only Pan's.
-        let again = compose_packet(Some(&packet), &pan_desc, &[]);
+        // A rewrite keeps the copia Description and re-authors only Pan's.
+        let again = compose_packet(Some(&packet), &pan_desc);
         let parts = split_descriptions(&again);
         assert_eq!(parts.iter().filter(|(pan, _)| *pan).count(), 1, "exactly one pan block");
         assert_eq!(parts.iter().filter(|(pan, _)| !*pan).count(), 1, "the copia block survives");
+
+        // Reading the rewritten packet back skips Pan's own block: a previous
+        // store's identity is not a fact about the next store's object.
+        let back = load_packet_statements(&again, "https://repolex.ai/pan/Image/next").unwrap();
+        assert!(back.iter().all(|q| !q.predicate.as_str().starts_with(PAN_NS)), "no pan: predicates read back");
+        assert!(back.iter().any(|q| q.predicate.as_str() == format!("{COPIA}momentId")), "copia facts read back");
     }
 
     #[test]
-    fn malformed_block_is_rejected() {
-        assert!(validate_delivered_block("<rdf:Description><unclosed>", "https://repolex.ai/pan/Image/x").is_err());
-        assert!(validate_delivered_block("not xml at all", "https://repolex.ai/pan/Image/x").is_err());
-        assert!(validate_delivered_block("", "https://repolex.ai/pan/Image/x").is_err());
+    fn malformed_packet_is_rejected() {
+        let iri = "https://repolex.ai/pan/Image/x";
+        assert!(load_packet_statements(&producer_packet("<rdf:Description><unclosed>"), iri).is_err());
+        assert!(load_packet_statements("not xml at all", iri).is_err());
+        assert!(load_packet_statements("", iri).is_err());
+        // Well-formed but empty RDF is not an error: nothing to say is allowed.
+        assert!(load_packet_statements(&producer_packet(""), iri).unwrap().is_empty());
     }
 
     #[test]

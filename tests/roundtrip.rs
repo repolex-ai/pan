@@ -23,6 +23,18 @@ fn make_png(w: u32, h: u32, seed: u8) -> Vec<u8> {
     out
 }
 
+/// A PNG as a producer hands it over: its metadata already written into its
+/// own XMP, standard wrapping, the given Descriptions inside.
+fn with_xmp(png: &[u8], descriptions: &str) -> Vec<u8> {
+    let packet = format!(
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+         <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
+         <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n{descriptions}\n</rdf:RDF>\n\
+         </x:xmpmeta>\n<?xpacket end=\"w\"?>"
+    );
+    pan::xmp::write_packet_into_png_bytes(png, &packet).unwrap()
+}
+
 /// A crude unit vector pointing mostly along one axis — distinguishable under
 /// cosine similarity.
 fn unit_vec(dim: usize, axis: usize) -> Vec<f32> {
@@ -43,25 +55,24 @@ fn full_store_describe_query_search_roundtrip() {
     let store = Pan::open(dir.path()).unwrap();
     assert_eq!(store.cfg.storage_id, "test-store");
 
-    // ── put two images with facts ──
-    let wolf_png = make_png(12, 12, 1);
-    let sea_png = make_png(12, 12, 99);
-    let wolf = store
-        .put(
-            &wolf_png,
-            Some("image/png"),
-            None,
-            Facts::new().with("dc:subject", "wolf").with("dc:title", "wolf in forest"),
-        )
-        .unwrap();
-    let sea = store
-        .put(
-            &sea_png,
-            Some("image/png"),
-            None,
-            Facts::new().with("dc:subject", "sea"),
-        )
-        .unwrap();
+    // ── put two images that arrive with facts in their own XMP ──
+    // (Pan receives a media file and nothing else; whatever the producer
+    // wrote into the file is the metadata.)
+    let wolf_png = with_xmp(
+        &make_png(12, 12, 1),
+        "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+           <dc:subject>wolf</dc:subject><dc:title>wolf in forest</dc:title>\
+         </rdf:Description>",
+    );
+    let sea_png = with_xmp(
+        &make_png(12, 12, 99),
+        "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+           <dc:subject>sea</dc:subject>\
+         </rdf:Description>",
+    );
+    let wolf = store.put(&wolf_png, Some("image/png")).unwrap();
+    let sea = store.put(&sea_png, Some("image/png")).unwrap();
+    assert_eq!(wolf.statements, 2, "both dc facts read out of the file's XMP");
     assert_ne!(wolf.id, sea.id);
     assert_eq!(wolf.id.len(), 8, "panId is a short assigned id");
     assert_eq!(
@@ -72,7 +83,7 @@ fn full_store_describe_query_search_roundtrip() {
 
     // The identity model: putting the SAME bytes again is a NEW media object —
     // panIds are assigned, never content-derived, and there is no dedup.
-    let wolf2 = store.put(&wolf_png, Some("image/png"), None, Facts::new()).unwrap();
+    let wolf2 = store.put(&wolf_png, Some("image/png")).unwrap();
     assert_ne!(wolf2.id, wolf.id, "same bytes, different object, different panId");
     store.delete(&wolf2.id).unwrap();
 
@@ -212,17 +223,17 @@ fn travel_copy_ingests_on_put_into_fresh_store() {
     )
     .unwrap();
     let store_a = Pan::open(dir_a.path()).unwrap();
-    let png = make_png(10, 10, 42);
-    let block = "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:subject>lighthouse</dc:subject></rdf:Description>";
-    let put_a = store_a
-        .put(&png, Some("image/png"), Some(block), Facts::new())
-        .unwrap();
+    let png = with_xmp(
+        &make_png(10, 10, 42),
+        "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:subject>lighthouse</dc:subject></rdf:Description>",
+    );
+    let put_a = store_a.put(&png, Some("image/png")).unwrap();
     let (stamped, _) = store_a.get(&put_a.id).unwrap();
 
     // New store, no shared config beyond defaults — the fact rides the file.
     let dir_b = tempfile::tempdir().unwrap();
     let store_b = Pan::open(dir_b.path()).unwrap();
-    let put_b = store_b.put(&stamped, Some("image/png"), None, Facts::new()).unwrap();
+    let put_b = store_b.put(&stamped, Some("image/png")).unwrap();
     assert_ne!(
         put_b.id, put_a.id,
         "identity never travels — the receiving store assigns its own panId"

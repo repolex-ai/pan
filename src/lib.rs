@@ -235,8 +235,9 @@ pub struct PutResult {
     pub height: Option<u32>,
     /// False = the bytes could not be decoded as an image (still stored).
     pub thumbnail: bool,
-    /// Statements loaded from the delivered metadata block.
-    pub delivered_statements: usize,
+    /// Statements read from the XMP the file arrived with (a producer's copia
+    /// block, an Adobe block, …) and loaded into the graph.
+    pub statements: usize,
 }
 
 /// What exists for one media object, read from the graph alone.
@@ -370,7 +371,7 @@ impl Pan {
     /// Order: bytes on disk (with Pan's XMP written in, nothing stripped) →
     /// thumbnail → ONE graph transaction. Failure before the commit removes
     /// the files written so far.
-    pub fn put(&self, bytes: &[u8], content_type: Option<&str>, delivered_block: Option<&str>, facts: Facts) -> Result<PutResult> {
+    pub fn put(&self, bytes: &[u8], content_type: Option<&str>) -> Result<PutResult> {
         let png = xmp::is_png(bytes);
         let media_type = content_type
             .map(|s| s.to_string())
@@ -390,12 +391,6 @@ impl Pan {
         let rel_path = PanLayout::media_rel_path(&shard, &id, ext);
         let abs_path = self.layout.abs(&rel_path);
 
-        // The producer's block: checked, never changed.
-        let (delivered_descs, delivered_quads) = match delivered_block {
-            Some(b) => xmp::validate_delivered_block(b, subject.as_str())?,
-            None => (Vec::new(), Vec::new()),
-        };
-
         let mut quads = vec![
             Quad::new(subject.clone(), rdf_type(), pan_iri(media_class(&media_type)), GraphName::DefaultGraph),
             enrich::self_id_quad(&subject)?,
@@ -404,54 +399,23 @@ impl Pan {
             self.quad(&subject, "mediaType", &media_type),
         ];
 
-        // Whatever XMP the image arrived with: its facts about the image
-        // (rdf:about="") attach to this object; named subjects stay as they
-        // are. Read with a real RDF parser; a malformed foreign packet is
-        // logged and the bytes still land (media-in is the job).
+        // Whatever XMP the file arrived with is THE metadata (Rob, 2026-09-04:
+        // a producer writes its block into the image before handing it over;
+        // Pan receives a media file and nothing else). Its facts about the
+        // image (rdf:about="") attach to this object; named subjects stay as
+        // they are; datatypes survive. Read with the real RDF/XML parser, and
+        // a packet that is not valid RDF/XML refuses the file — nothing is
+        // stored that the graph cannot say.
         let existing_packet = if png {
-            match xmp::read_xmp_packet_from_bytes(bytes) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!(id = %id, "unreadable existing XMP, kept in file as-is: {e:#}");
-                    None
-                }
-            }
+            xmp::read_xmp_packet_from_bytes(bytes).context("read the XMP chunk in the file")?
         } else {
             None
         };
-        if let Some(packet) = &existing_packet {
-            match xmp::parse_packet(packet) {
-                Ok(blocks) => {
-                    for block in &blocks {
-                        let subj = match &block.subject {
-                            None => subject.clone(),
-                            Some(iri) => match NamedNode::new(iri.as_str()) {
-                                Ok(n) => n,
-                                Err(_) => continue,
-                            },
-                        };
-                        for (pred, values) in &block.facts {
-                            if pred.starts_with(PAN_NS) || pred.starts_with(GIT_LEX_NS) {
-                                continue; // a previous store's pan facts are not facts about THIS object
-                            }
-                            let Ok(p) = NamedNode::new(pred.as_str()) else { continue };
-                            for v in values {
-                                let obj: Term = if v.is_iri() {
-                                    NamedNode::new(v.value()).map(Into::into).unwrap_or_else(|_| Literal::new_simple_literal(v.value()).into())
-                                } else {
-                                    Literal::new_simple_literal(v.value()).into()
-                                };
-                                quads.push(Quad::new(subj.clone(), p.clone(), obj, GraphName::DefaultGraph));
-                            }
-                        }
-                    }
-                }
-                Err(e) => tracing::warn!(id = %id, "existing XMP not parseable as RDF, kept in file as-is: {e:#}"),
-            }
-        }
-
-        quads.extend(delivered_quads.iter().cloned());
-        quads.extend(facts.into_quads(&subject, &self.cfg.prefixes, &self.cfg.default_prefix)?);
+        let arrived_statements = match &existing_packet {
+            Some(packet) => xmp::load_packet_statements(packet, subject.as_str())?,
+            None => Vec::new(),
+        };
+        quads.extend(arrived_statements.iter().cloned());
 
         // Thumbnail — declared as its own node; not decodable = no thumbnail,
         // still stored, `pan state` says so.
@@ -494,7 +458,7 @@ impl Pan {
                     scratch.insert(q.as_ref()).context("scratch insert")?;
                 }
                 let pan_desc = xmp::build_pan_description(&self.image_packet_from(&scratch, &subject)?);
-                let packet = xmp::compose_packet(existing_packet.as_deref(), &pan_desc, &delivered_descs);
+                let packet = xmp::compose_packet(existing_packet.as_deref(), &pan_desc);
                 let written = xmp::write_packet_into_png_bytes(bytes, &packet)?;
                 fs::write(&abs_path, &written).with_context(|| format!("write media {}", abs_path.display()))?;
             } else {
@@ -526,7 +490,7 @@ impl Pan {
             width,
             height,
             thumbnail: thumb.is_some(),
-            delivered_statements: delivered_quads.len(),
+            statements: arrived_statements.len(),
         })
     }
 
@@ -1012,7 +976,7 @@ impl Pan {
         }
         let existing = xmp::read_xmp_packet_from_bytes(&bytes).unwrap_or(None);
         let pan_desc = xmp::build_pan_description(&self.image_packet_from(&self.store, &subject)?);
-        let packet = xmp::compose_packet(existing.as_deref(), &pan_desc, &[]);
+        let packet = xmp::compose_packet(existing.as_deref(), &pan_desc);
         let written = xmp::write_packet_into_png_bytes(&bytes, &packet)?;
         fs::write(&abs, &written).with_context(|| format!("write media {}", abs.display()))?;
         Ok(())

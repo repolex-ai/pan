@@ -3,7 +3,7 @@
 //! fails loudly here. (Updated for the Day-50 identity model: assigned panId,
 //! standard https subject IRIs, no content-addressing.)
 
-use pan::{Facts, Pan};
+use pan::Pan;
 use std::collections::HashMap;
 
 fn make_png(seed: u8) -> Vec<u8> {
@@ -33,8 +33,8 @@ fn same_bytes_twice_are_independent_objects() {
     let store = Pan::open(dir.path()).unwrap();
     let png = make_png(1);
 
-    let a = store.put(&png, Some("image/png"), None, Facts::new()).unwrap();
-    let b = store.put(&png, Some("image/png"), None, Facts::new()).unwrap();
+    let a = store.put(&png, Some("image/png")).unwrap();
+    let b = store.put(&png, Some("image/png")).unwrap();
     assert_ne!(a.id, b.id, "assigned ids never collide on same bytes");
     assert_ne!(a.media_path, b.media_path, "each object owns its own media file");
 
@@ -59,7 +59,7 @@ fn wrong_dim_query_does_not_poison_index() {
     let dir = tempfile::tempdir().unwrap();
     let store = Pan::open(dir.path()).unwrap();
     let png = make_png(2);
-    let put = store.put(&png, Some("image/png"), None, Facts::new()).unwrap();
+    let put = store.put(&png, Some("image/png")).unwrap();
 
     let good: Vec<f32> = {
         let mut v = vec![0.1f32; 8];
@@ -89,7 +89,7 @@ fn traversal_index_name_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let store = Pan::open(dir.path()).unwrap();
     let png = make_png(3);
-    let put = store.put(&png, Some("image/png"), None, Facts::new()).unwrap();
+    let put = store.put(&png, Some("image/png")).unwrap();
     let v = vec![1.0f32; 4];
 
     for evil in ["../escape", "a/b", "..", "/abs/path", "with\0nul", "dir/../x"] {
@@ -116,9 +116,10 @@ fn traversal_index_name_is_rejected() {
 }
 
 /// #11/#14 — a standard Adobe-style PNG (root rdf:about="") must ingest, not
-/// fail the store. And an outright-garbage XMP must be skipped, not fatal.
+/// fail the store. An outright-garbage XMP is refused whole (Rob, 2026-09-04:
+/// the file's XMP IS its metadata; a lenient reader hides invalid data).
 #[test]
-fn standard_adobe_xmp_ingests_and_garbage_is_skipped() {
+fn standard_adobe_xmp_ingests_and_garbage_is_refused() {
     // Build a PNG carrying a hand-rolled standard-Adobe packet.
     let png = make_png(4);
     let packet = format!(
@@ -137,7 +138,7 @@ fn standard_adobe_xmp_ingests_and_garbage_is_skipped() {
     let store = Pan::open(dir.path()).unwrap();
 
     // Must NOT error — the whole point is real-world files ingest.
-    let put = store.put(&adobe_png, Some("image/png"), None, Facts::new()).unwrap();
+    let put = store.put(&adobe_png, Some("image/png")).unwrap();
     let f = facts_map(&store, &put.id);
     assert_eq!(
         f.get("http://purl.org/dc/elements/1.1/title").map(|v| v.as_slice()),
@@ -145,30 +146,43 @@ fn standard_adobe_xmp_ingests_and_garbage_is_skipped() {
         "standard-Adobe dc:title must ingest"
     );
 
-    // A PNG with a corrupt XMP chunk must store fine, just without facts.
+    // A PNG with a corrupt XMP chunk is refused, and leaves no file behind.
+    let before = walk_files(&store.layout.media_root).len();
     let garbage = pan::xmp::write_packet_into_png_bytes(&make_png(5), "<not xml at all <<<").unwrap();
-    let put2 = store.put(&garbage, Some("image/png"), None, Facts::new()).unwrap();
-    assert!(store.get(&put2.id).is_ok(), "garbage XMP must not fail the store");
+    let err = store.put(&garbage, Some("image/png")).unwrap_err();
+    assert!(err.to_string().contains("XMP"), "says what was wrong: {err}");
+    assert_eq!(walk_files(&store.layout.media_root).len(), before, "refused file left nothing on disk");
 }
 
-/// A producer's copia block (Rob, 2026-09-03): validated, written into the
-/// image XMP verbatim, loaded into the graph unchanged — and it TRAVELS: a
-/// second store receiving the same bytes reads the same copia facts, and the
-/// sdapi `parameters` chunk the image arrived with is still there.
+/// A producer's copia block (Rob, 2026-09-03/04): the producer writes it into
+/// the image's own XMP before handing the file over; Pan loads it into the
+/// graph unchanged and typed, keeps it verbatim beside its own block — and it
+/// TRAVELS: a second store receiving the same bytes reads the same copia facts.
 #[test]
-fn delivered_copia_block_rides_in_the_xmp_and_travels() {
+fn copia_block_in_the_files_xmp_is_loaded_kept_and_travels() {
     const COPIA: &str = "https://repolex.ai/ontology/copia/";
     let dir_a = tempfile::tempdir().unwrap();
     let store_a = Pan::open(dir_a.path()).unwrap();
-    let png = make_png(6);
     let block = format!(
         "<rdf:Description rdf:about=\"https://repolex.ai/copia/Moment/3hyh7rwekpmq\" xmlns:copia=\"{COPIA}\">\
            <copia:momentId>3hyh7rwekpmq</copia:momentId>\
            <copia:origin>smoke</copia:origin>\
+           <copia:genSteps rdf:datatype=\"http://www.w3.org/2001/XMLSchema#integer\">12</copia:genSteps>\
          </rdf:Description>"
     );
-    let put = store_a.put(&png, Some("image/png"), Some(&block), Facts::new()).unwrap();
-    assert!(put.delivered_statements >= 2);
+    let packet = format!(
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+         <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
+         <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n{block}\n</rdf:RDF>\n\
+         </x:xmpmeta>\n<?xpacket end=\"w\"?>"
+    );
+    let png = pan::xmp::write_packet_into_png_bytes(&make_png(6), &packet).unwrap();
+    let put = store_a.put(&png, Some("image/png")).unwrap();
+    assert_eq!(put.statements, 3, "every statement in the file's XMP is loaded");
+    let typed = store_a
+        .query(&format!("ASK {{ <https://repolex.ai/copia/Moment/3hyh7rwekpmq> <{COPIA}genSteps> 12 }}"))
+        .unwrap();
+    assert!(matches!(typed, pan::QueryResults::Boolean(true)), "rdf:datatype survives: genSteps is the integer 12");
     let ask_a = store_a
         .query(&format!("ASK {{ <https://repolex.ai/copia/Moment/3hyh7rwekpmq> <{COPIA}origin> \"smoke\" }}"))
         .unwrap();
@@ -182,16 +196,16 @@ fn delivered_copia_block_rides_in_the_xmp_and_travels() {
     // Travel: a fresh store reads the same copia facts back out of the bytes.
     let dir_b = tempfile::tempdir().unwrap();
     let store_b = Pan::open(dir_b.path()).unwrap();
-    let _put_b = store_b.put(&bytes, Some("image/png"), None, Facts::new()).unwrap();
+    let put_b = store_b.put(&bytes, Some("image/png")).unwrap();
+    assert_eq!(put_b.statements, 3, "the copia statements, and not the first store's pan block, are read back");
     let ask_b = store_b
         .query(&format!("ASK {{ <https://repolex.ai/copia/Moment/3hyh7rwekpmq> <{COPIA}origin> \"smoke\" }}"))
         .unwrap();
     assert!(matches!(ask_b, pan::QueryResults::Boolean(true)), "copia facts travel with the image");
-
-    // A malformed block is refused whole — nothing stored.
-    let before = walk_files(&store_a.layout.media_root).len();
-    assert!(store_a.put(&make_png(9), Some("image/png"), Some("<rdf:Description><oops>"), Facts::new()).is_err());
-    assert_eq!(walk_files(&store_a.layout.media_root).len(), before, "rejected delivery left no file");
+    let stray = store_b
+        .query(&format!("ASK {{ ?s <https://repolex.ai/ontology/git-lex/id> <{}> }}", put.iri))
+        .unwrap();
+    assert!(matches!(stray, pan::QueryResults::Boolean(false)), "the first store's identity did not travel");
 }
 
 fn walk_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {

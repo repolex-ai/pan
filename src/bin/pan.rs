@@ -11,7 +11,6 @@
 //! absent = pand's configured default. No flags.
 
 use anyhow::{anyhow, Context, Result};
-use base64::Engine;
 use std::path::Path;
 
 fn usage() -> ! {
@@ -94,16 +93,20 @@ fn main() -> Result<()> {
                 _ => usage(),
             };
             let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
-            let body = serde_json::json!({
-                "soul": user,
-                "content_type": media_type_for(file),
-                "bytes_b64": base64::engine::general_purpose::STANDARD.encode(&bytes),
-            });
-            let v = check(c.post(format!("{base}/media")).json(&body).send().map_err(not_running)?)?;
+            // The file IS the request: raw bytes, media type in the header.
+            // Whatever XMP it carries is its metadata; nothing else is sent.
+            let url = match &user {
+                Some(u) => format!("{base}/stores/{u}/media"),
+                None => format!("{base}/media"),
+            };
+            let v = check(
+                c.post(url)
+                    .header(reqwest::header::CONTENT_TYPE, media_type_for(file))
+                    .body(bytes)
+                    .send()
+                    .map_err(not_running)?,
+            )?;
             println!("{}", v.get("id").and_then(|i| i.as_str()).unwrap_or("?"));
-            if let Some(nr) = v.get("not_recorded").and_then(|n| n.as_array()).filter(|a| !a.is_empty()) {
-                eprintln!("not recorded (no vocabulary yet): {}", nr.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", "));
-            }
             Ok(())
         }
         "info" | "state" => {
