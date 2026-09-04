@@ -403,7 +403,8 @@ impl Pan {
         let subject = media_subject_iri(&media_type, &id)?;
         let created_date = now_local();
         let shard = created_date.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
-        let rel_path = PanLayout::media_rel_path(&shard, &id, ext);
+        let stem = PanLayout::file_stem(&created_date, &id);
+        let rel_path = PanLayout::media_rel_path(&shard, &stem, ext);
         let abs_path = self.layout.abs(&rel_path);
 
         let mut quads = vec![
@@ -445,7 +446,7 @@ impl Pan {
                     height = Some(t.source_height);
                     quads.push(self.quad(&subject, "width", &t.source_width.to_string()));
                     quads.push(self.quad(&subject, "height", &t.source_height.to_string()));
-                    let rel = PanLayout::thumbnail_rel_path(&shard, &id);
+                    let rel = PanLayout::thumbnail_rel_path(&shard, &stem);
                     let tnode = NamedNode::new(format!("{PAN_MEDIA_NS}Thumbnail/{}", gen_pan_id())).map_err(|e| anyhow!("thumbnail IRI: {e}"))?;
                     quads.push(Quad::new(subject.clone(), pan_iri("thumbnail"), tnode.clone(), GraphName::DefaultGraph));
                     quads.push(Quad::new(tnode.clone(), rdf_type(), pan_iri("Thumbnail"), GraphName::DefaultGraph));

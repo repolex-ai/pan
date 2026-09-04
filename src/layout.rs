@@ -74,14 +74,26 @@ impl PanLayout {
         }
     }
 
-    /// Media-root-relative path of the media bytes: `image/YYYY/MM/DD/<id>.<ext>`.
-    pub fn media_rel_path(shard: &str, id: &str, ext: &str) -> String {
-        format!("{}/{shard}/{id}.{ext}", Self::IMAGE_SUBDIR)
+    /// The file stem, Pool's shape with Pan's identity (Rob, 2026-09-04: "the
+    /// date and time, with your pan-id — NOT cid"): `YYYYMMDD-HHMMSS-<id>`,
+    /// the time being `createdDate` in system local time, as every Pan date.
+    /// Readers never parse it back — `pan:mediaPath` in the graph is the path.
+    pub fn file_stem(created_date: &str, id: &str) -> String {
+        // created_date is RFC 3339 with offset: 2026-09-04T03:49:53-07:00
+        let digits: String = created_date.chars().take(19).filter(|c| c.is_ascii_digit()).collect();
+        let (d, t) = digits.split_at(digits.len().min(8));
+        format!("{d}-{t}-{id}")
     }
 
-    /// Media-root-relative path of the thumbnail.
-    pub fn thumbnail_rel_path(shard: &str, id: &str) -> String {
-        format!("{}/{shard}/{id}.jpg", Self::THUMBNAIL_SUBDIR)
+    /// Media-root-relative path of the media bytes:
+    /// `image/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.<ext>`.
+    pub fn media_rel_path(shard: &str, stem: &str, ext: &str) -> String {
+        format!("{}/{shard}/{stem}.{ext}", Self::IMAGE_SUBDIR)
+    }
+
+    /// Media-root-relative path of the thumbnail, same stem as the media.
+    pub fn thumbnail_rel_path(shard: &str, stem: &str) -> String {
+        format!("{}/{shard}/{stem}.jpg", Self::THUMBNAIL_SUBDIR)
     }
 
     /// Media-root-relative path of a vector sidecar: `vectors/<index>/<id>.npy`.
@@ -132,8 +144,10 @@ mod tests {
 
     #[test]
     fn relative_paths_are_declared_shapes() {
-        assert_eq!(PanLayout::media_rel_path("2026/09/04", "k7m2p9x4", "png"), "image/2026/09/04/k7m2p9x4.png");
-        assert_eq!(PanLayout::thumbnail_rel_path("2026/09/04", "k7m2p9x4"), "thumbnail/2026/09/04/k7m2p9x4.jpg");
+        let stem = PanLayout::file_stem("2026-09-04T03:49:53-07:00", "k7m2p9x4");
+        assert_eq!(stem, "20260904-034953-k7m2p9x4", "Pool's shape, Pan's id, local time");
+        assert_eq!(PanLayout::media_rel_path("2026/09/04", &stem, "png"), "image/2026/09/04/20260904-034953-k7m2p9x4.png");
+        assert_eq!(PanLayout::thumbnail_rel_path("2026/09/04", &stem), "thumbnail/2026/09/04/20260904-034953-k7m2p9x4.jpg");
         assert_eq!(PanLayout::vector_rel_path("m", "k7m2p9x4"), "vectors/m/k7m2p9x4.npy");
     }
 }

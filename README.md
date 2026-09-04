@@ -77,7 +77,7 @@ order:
 1. the file's XMP read with a real RDF/XML parser — `rdf:about=""` is this
    image, named subjects stay themselves, datatypes survive. Not valid RDF/XML
    = 400, nothing stored.
-2. bytes written to `media/image/YYYY/MM/DD/<id>.png` with Pan's own block
+2. bytes written to `media/image/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.png` with Pan's own block
    APPENDED to that XMP (identity, thumbnail, enrichment references); every
    other chunk and every other Description byte-for-byte as it arrived
 3. thumbnail made (512px JPEG) beside it
@@ -104,8 +104,8 @@ record in the graph. `pan state` reads that record.
     oxigraph/                 the graph — always here, never relocated
     hnsw/<model>/             vector index per embedding model — always here
     media/                    the media root — HERE unless media_volume is set
-      image/YYYY/MM/DD/<id>.png
-      thumbnail/YYYY/MM/DD/<id>.jpg
+      image/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.png     Pool's shape, Pan's id, local time
+      thumbnail/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.jpg
       vectors/<model>/<id>.npy
       caption/YYYY/MM/DD/<id>.<model>.xml
       pose/YYYY/MM/DD/<id>.xml  (+ <id>.<model>.png skeleton overlay)
