@@ -1,6 +1,6 @@
 [package]
 name = "pan"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Pan — a standalone media store that speaks git-lex: stores media, describes it with a graph, searches by graph pattern AND vector similarity."
 license = "Apache-2.0"
