@@ -60,6 +60,21 @@ pub fn bracket_iri(iri: &str) -> String {
     }
 }
 
+/// The inverse of [`bracket_iri`]: the git-lex reference form `<ns/Class/id>`
+/// (how frontmatter — and a producer's XMP field — writes a reference) to the
+/// full IRI `https://repolex.ai/ns/Class/id`. None if the text is not that
+/// form: no brackets, fewer than three segments, or whitespace inside.
+pub fn iri_from_bracket(text: &str) -> Option<String> {
+    let inner = text.trim().strip_prefix('<')?.strip_suffix('>')?;
+    if inner.is_empty() || inner.chars().any(char::is_whitespace) || inner.starts_with('/') {
+        return None;
+    }
+    if inner.split('/').filter(|s| !s.is_empty()).count() < 3 {
+        return None;
+    }
+    Some(format!("https://repolex.ai/{inner}"))
+}
+
 /// Accept an identity in any form a caller hands over — `<pan/Image/x>`, the
 /// full IRI, or the bare id — and return the bare id.
 pub fn bare_id(given: &str) -> String {

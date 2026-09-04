@@ -323,10 +323,26 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
     // dropping the whole git-lex namespace lost Horae's Moment dateCreated
     // on the first media-only delivery (2026-09-04).
     let git_lex_id = format!("{}id", crate::config::GIT_LEX_NS);
+    let related_to = format!("{}relatedToId", crate::config::GIT_LEX_NS);
     let all: Vec<oxigraph::model::Quad> = store.iter().collect::<std::result::Result<_, _>>().context("read packet quads")?;
     let quads: Vec<oxigraph::model::Quad> = all
         .into_iter()
         .filter(|q| !(q.predicate.as_str().starts_with(PAN_NS) || q.predicate.as_str() == git_lex_id))
+        .map(|q| {
+            // A reference written the git-lex way — `<copia/Moment/x>` as a
+            // field value, exactly as frontmatter writes it (Rob, 2026-09-04:
+            // "store the momentId on the file … Media implements git-lex:Thing,
+            // which gives it relatedToId") — becomes the IRI in the graph, so
+            // the join is an edge, not a string. The file keeps the text.
+            if q.predicate.as_str() != related_to {
+                return q;
+            }
+            let Term::Literal(lit) = &q.object else { return q };
+            match crate::iri_from_bracket(lit.value()).and_then(|iri| oxigraph::model::NamedNode::new(iri).ok()) {
+                Some(node) => oxigraph::model::Quad::new(q.subject.clone(), q.predicate.clone(), node, q.graph_name.clone()),
+                None => q,
+            }
+        })
         .collect();
     Ok(quads)
 }
@@ -975,6 +991,33 @@ mod tests {
         let back = load_packet_statements(&again, "https://repolex.ai/pan/Image/next").unwrap();
         assert!(back.iter().all(|q| !q.predicate.as_str().starts_with(PAN_NS)), "no pan: predicates read back");
         assert!(back.iter().any(|q| q.predicate.as_str() == format!("{COPIA}momentId")), "copia facts read back");
+    }
+
+    #[test]
+    fn related_to_id_in_bracket_form_becomes_an_edge() {
+        // Horae's line, as ruled: on the "this file" Description, the
+        // reference to the Moment written the git-lex way.
+        let arrived = producer_packet(
+            "<rdf:Description rdf:about=\"\" xmlns:git-lex=\"https://repolex.ai/ontology/git-lex/\">\
+               <git-lex:relatedToId>&lt;copia/Moment/t8mjvhwszff9-3-4&gt;</git-lex:relatedToId>\
+             </rdf:Description>",
+        );
+        let image = "https://repolex.ai/pan/Image/pgtby2ft";
+        let quads = load_packet_statements(&arrived, image).unwrap();
+        let edge = quads
+            .iter()
+            .find(|q| q.predicate.as_str() == "https://repolex.ai/ontology/git-lex/relatedToId")
+            .expect("relatedToId loaded");
+        assert_eq!(edge.subject.to_string(), format!("<{image}>"), "about=\"\" is this image");
+        assert_eq!(
+            edge.object.to_string(),
+            "<https://repolex.ai/copia/Moment/t8mjvhwszff9-3-4>",
+            "the bracket form is resolved to the IRI: an edge, not a string"
+        );
+        // Something that only looks like a reference stays what it was.
+        assert_eq!(crate::iri_from_bracket("<not a ref>"), None);
+        assert_eq!(crate::iri_from_bracket("<copia/Moment>"), None);
+        assert_eq!(crate::iri_from_bracket("copia/Moment/x"), None);
     }
 
     #[test]
