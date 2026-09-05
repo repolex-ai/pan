@@ -54,6 +54,44 @@ pub struct ModelEndpoint {
     /// stores. pand is the one funnel for model traffic on the machine.
     #[serde(default = "default_concurrency")]
     pub concurrency: usize,
+    /// `Authorization` header value for `url` (e.g. `Bearer …`), when the
+    /// endpoint is a node reached directly rather than the door. Absent =
+    /// no header.
+    pub auth: Option<String>,
+    /// Where this stage goes while its primary is unreachable (connection
+    /// refused / reset / timeout / `503 backend_down`): the same model behind
+    /// a different address — a Salad node called directly when the Iris door
+    /// is down. Used ONLY during a primary hold; the primary is probed again
+    /// when the hold expires. Rob, 2026-09-05: the door stays primary because
+    /// it balances the two nodes; the direct node is what Pan runs on when
+    /// the door is down.
+    pub fallback: Option<Fallback>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Fallback {
+    pub url: String,
+    pub auth: Option<String>,
+}
+
+/// One address a stage's calls go to: a URL and, optionally, the
+/// `Authorization` header it wants.
+#[derive(Debug, Clone)]
+pub struct Target {
+    pub url: String,
+    pub auth: Option<String>,
+    /// `"primary"` or `"fallback"` — for the log line only.
+    pub via: &'static str,
+}
+
+impl ModelEndpoint {
+    pub fn primary(&self) -> Target {
+        Target { url: self.url.clone(), auth: self.auth.clone(), via: "primary" }
+    }
+    pub fn fallback_target(&self) -> Option<Target> {
+        self.fallback.as_ref().map(|f| Target { url: f.url.clone(), auth: f.auth.clone(), via: "fallback" })
+    }
 }
 
 fn default_concurrency() -> usize {
@@ -255,5 +293,25 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(&p, "stroes:\n  - /x\n").unwrap();
         assert!(DaemonConfig::load_from(&p).is_err());
+    }
+
+    #[test]
+    fn fallback_and_auth_parse_and_become_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        std::fs::write(
+            &p,
+            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n    fallback:\n      url: https://node.example/pose\n      auth: Bearer abc\n",
+        )
+        .unwrap();
+        let c = DaemonConfig::load_from(&p).unwrap();
+        let ep = &c.models["pose"];
+        let prim = ep.primary();
+        assert_eq!((prim.url.as_str(), prim.auth.as_deref(), prim.via), ("http://door/percept/pose", None, "primary"));
+        let fb = ep.fallback_target().unwrap();
+        assert_eq!((fb.url.as_str(), fb.auth.as_deref(), fb.via), ("https://node.example/pose", Some("Bearer abc"), "fallback"));
+        // Without a fallback there is no fallback target — the stage waits.
+        std::fs::write(&p, "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n").unwrap();
+        assert!(DaemonConfig::load_from(&p).unwrap().models["pose"].fallback_target().is_none());
     }
 }

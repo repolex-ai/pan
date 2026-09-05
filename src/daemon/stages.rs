@@ -110,12 +110,23 @@ const DOOR_DOWN_HOLD: Duration = Duration::from_secs(60);
 const BUSY_WAIT: Duration = Duration::from_secs(5);
 
 async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str) -> Result<usize> {
-    if let Some(until) = d.stage_hold.lock().unwrap().get(stage).copied() {
-        if until > Instant::now() {
-            return Ok(0);
-        }
-    }
     let ep = d.cfg.models.get(stage).cloned().ok_or_else(|| anyhow!("stage {stage} not configured"))?;
+    // Which address this pass calls. A hold on the primary sends the stage to
+    // its fallback (if it has one); a hold on both means wait. The primary is
+    // probed again the moment its hold expires, so the door gets the traffic
+    // back as soon as it is up.
+    let held = |key: &str| -> bool {
+        d.stage_hold.lock().unwrap().get(key).map(|u| *u > Instant::now()).unwrap_or(false)
+    };
+    let fallback_key = format!("{stage}/fallback");
+    let target = if !held(stage) {
+        ep.primary()
+    } else if let Some(fb) = ep.fallback_target().filter(|_| !held(&fallback_key)) {
+        fb
+    } else {
+        return Ok(0);
+    };
+    let hold_key: String = if target.via == "fallback" { fallback_key } else { stage.to_string() };
     let link = link_for(stage).ok_or_else(|| anyhow!("unknown stage {stage}"))?;
     let batch = d.cfg.batch;
     // Ask for more than the batch so items on hold do not starve the ones
@@ -135,12 +146,12 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
     for item in work {
         n += 1;
         let permit = d.funnels[stage].clone().acquire_owned().await?;
-        let result = run_one(&d, &store, stage, &ep, &item).await;
+        let result = run_one(&d, &store, stage, &ep, &target, &item).await;
         drop(permit);
         match result {
             Ok(()) => {
                 d.clear_attempt(&store.entry.id, &item.id, stage);
-                tracing::info!(store = %store.entry.id, id = %item.id, stage, model = %ep.model, "recorded");
+                tracing::info!(store = %store.entry.id, id = %item.id, stage, model = %ep.model, via = target.via, "recorded");
             }
             Err(e) => {
                 if let Some(CallError::Busy(m)) = e.downcast_ref::<CallError>() {
@@ -169,8 +180,9 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                         || msg.contains("backend_down"));
                 d.record_attempt(&store.entry.id, &item.id, stage, msg, terminal);
                 if door_down {
-                    d.stage_hold.lock().unwrap().insert(stage.to_string(), Instant::now() + DOOR_DOWN_HOLD);
-                    tracing::warn!(stage, url = %ep.url, "endpoint unreachable — holding this stage for {}s", DOOR_DOWN_HOLD.as_secs());
+                    d.stage_hold.lock().unwrap().insert(hold_key.clone(), Instant::now() + DOOR_DOWN_HOLD);
+                    let next = if target.via == "primary" && ep.fallback.is_some() { "switching to fallback" } else { "waiting" };
+                    tracing::warn!(stage, url = %target.url, via = target.via, "endpoint unreachable — holding it for {}s, {next}", DOOR_DOWN_HOLD.as_secs());
                     break;
                 }
             }
@@ -184,6 +196,7 @@ async fn run_one(
     store: &Arc<StoreHandle>,
     stage: &str,
     ep: &super::config::ModelEndpoint,
+    t: &super::config::Target,
     item: &PendingItem,
 ) -> Result<()> {
     // pand is the one thing allowed to read the media file.
@@ -194,7 +207,7 @@ async fn run_one(
     match stage {
         STAGE_EMBED => {
             d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.see_embed(&ep.url, &bytes, media_type).await?;
+            let r = d.iris.see_embed(t, &bytes, media_type).await?;
             let s = store.clone();
             let id = item.id.clone();
             let model = ep.model.clone();
@@ -233,7 +246,7 @@ async fn run_one(
                 tokio::task::spawn_blocking(move || crate::wire::caption_copy(&b)).await??
             };
             d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.vlm(&ep.url, &ep.model, &wire.bytes, wire.media_type, prompt, ep.extra_body.as_ref()).await?;
+            let r = d.iris.vlm(t, &ep.model, &wire.bytes, wire.media_type, prompt, ep.extra_body.as_ref()).await?;
             if r.text.trim().is_empty() {
                 return Err(CallError::Terminal("no caption text returned".into()).into());
             }
@@ -245,7 +258,7 @@ async fn run_one(
         }
         STAGE_POSE => {
             d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.see_pose(&ep.url, &bytes, media_type).await?;
+            let r = d.iris.see_pose(t, &bytes, media_type).await?;
             if r.keypoints.is_empty() {
                 // The eye reports "no people" and "I failed" the same way (200
                 // {}). Record a zero-count run so the image is not asked
