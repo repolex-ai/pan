@@ -335,7 +335,36 @@ impl Pan {
             .with_context(|| format!("open oxigraph at {}", layout.oxigraph_root.display()))?;
         let pan = Pan { cfg, layout, store_id: store_id.to_string(), store, indexes: Mutex::new(HashMap::new()) };
         pan.declare_store()?;
+        pan.migrate_created_date()?;
         Ok(pan)
+    }
+
+    /// pan.ttl 0.3.3 (Rob, 2026-09-05): the Image's creation time is the
+    /// universal `git-lex:dateCreated`, not `pan:createdDate`. Records written
+    /// under the old name are moved once, at open; idempotent, and a no-op on a
+    /// store that never had them. The XMP inside each file catches up the next
+    /// time a stage rewrites it.
+    fn migrate_created_date(&self) -> Result<()> {
+        let count_q = "SELECT (COUNT(?s) AS ?n) WHERE { ?s pan:createdDate ?d }";
+        let n: u64 = match self.query(count_q)? {
+            QueryResults::Solutions(mut sols) => sols
+                .next()
+                .and_then(|s| s.ok())
+                .and_then(|s| s.get("n").map(term_str))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            _ => 0,
+        };
+        if n == 0 {
+            return Ok(());
+        }
+        let up = format!(
+            "PREFIX pan: <{PAN_NS}>\nPREFIX git-lex: <{GIT_LEX_NS}>\n\
+             DELETE {{ ?s pan:createdDate ?d }} INSERT {{ ?s git-lex:dateCreated ?d }} WHERE {{ ?s pan:createdDate ?d }}"
+        );
+        self.store.update(&up).map_err(|e| anyhow!("migrate pan:createdDate → git-lex:dateCreated: {e}"))?;
+        tracing::info!(store = %self.store_id, moved = n, "pan:createdDate → git-lex:dateCreated (pan.ttl 0.3.3)");
+        Ok(())
     }
 
     /// The store node `<pan/Store/<id>>`: type, identity, media root. Replaces
@@ -428,7 +457,9 @@ impl Pan {
             Quad::new(subject.clone(), rdf_type(), pan_iri(media_class(&media_type)), GraphName::DefaultGraph),
             enrich::self_id_quad(&subject)?,
             self.quad(&subject, "mediaPath", &rel_path),
-            self.quad(&subject, "createdDate", &created_date),
+            // The Image is a git-lex Thing: when it came to be is the universal
+            // git-lex:dateCreated, not a Pan-private property (Rob, 2026-09-05).
+            Quad::new(subject.clone(), git_lex_iri("dateCreated"), Literal::new_simple_literal(&created_date), GraphName::DefaultGraph),
             self.quad(&subject, "mediaType", &media_type),
         ];
 
@@ -609,7 +640,11 @@ impl Pan {
             id: id.to_string(),
             iri: subject.into_string(),
             media_type: one("mediaType").unwrap_or_default(),
-            created_date: one("createdDate").unwrap_or_default(),
+            created_date: facts
+                .iter()
+                .find(|(p, _)| p == &format!("{GIT_LEX_NS}dateCreated"))
+                .and_then(|(_, v)| v.first().cloned())
+                .unwrap_or_default(),
             ready_date: one("readyDate"),
             thumbnail: facts.iter().any(|(p, _)| p == &format!("{PAN_NS}thumbnail")),
             enrichment,
@@ -626,7 +661,7 @@ impl Pan {
     /// the old. No second queue, no second process.
     ///
     /// `since` is the backfill floor: an RFC 3339 local-offset date-time, the
-    /// same shape `pan:createdDate` is written in, so a plain string compare
+    /// same shape `git-lex:dateCreated` is written in, so a plain string compare
     /// is a time compare. Images created before it are not pending.
     pub fn pending_for(&self, link_local: &str, model: &str, limit: usize, since: Option<&str>) -> Result<Vec<PendingItem>> {
         let model_lit = model.replace('\\', "\\\\").replace('"', "\\\"");
@@ -636,7 +671,7 @@ impl Pan {
         };
         let q = format!(
             "SELECT ?s ?path ?type ?d WHERE {{
-               ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; pan:createdDate ?d .
+               ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; git-lex:dateCreated ?d .
                FILTER NOT EXISTS {{ ?s pan:{link_local} ?e . ?e pan:model \"{model_lit}\" }}
                {floor}
              }} ORDER BY DESC(?d) ?s LIMIT {limit}"
@@ -705,7 +740,7 @@ impl Pan {
         Ok(self
             .facts_for(id)?
             .iter()
-            .find(|(p, _)| p == &format!("{PAN_NS}createdDate"))
+            .find(|(p, _)| p == &format!("{GIT_LEX_NS}dateCreated"))
             .and_then(|(_, v)| v.first().cloned())
             .unwrap_or_default())
     }
@@ -1053,6 +1088,9 @@ impl Pan {
         let pan_field = |local: &str| -> Option<String> {
             facts.iter().find(|(p, _)| p == &format!("{PAN_NS}{local}")).and_then(|(_, v)| v.first().cloned())
         };
+        let git_lex_field = |local: &str| -> Option<String> {
+            facts.iter().find(|(p, _)| p == &format!("{GIT_LEX_NS}{local}")).and_then(|(_, v)| v.first().cloned())
+        };
         let node_fields = |node_iri: &str| -> Result<HashMap<String, String>> {
             let node = NamedNode::new(node_iri).map_err(|e| anyhow!("node IRI: {e}"))?;
             let mut m = HashMap::new();
@@ -1103,7 +1141,7 @@ impl Pan {
         Ok(xmp::ImagePacket {
             iri: subject.as_str().to_string(),
             media_path: pan_field("mediaPath").unwrap_or_default(),
-            created_date: pan_field("createdDate").unwrap_or_default(),
+            created_date: git_lex_field("dateCreated").unwrap_or_default(),
             media_type: pan_field("mediaType").unwrap_or_default(),
             width: pan_field("width").and_then(|v| v.parse().ok()),
             height: pan_field("height").and_then(|v| v.parse().ok()),

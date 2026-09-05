@@ -141,9 +141,11 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
     out.push_str("    <rdf:Description rdf:about=\"\"");
     out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\" xmlns:git-lex=\"{}\">\n", crate::config::GIT_LEX_NS));
     out.push_str(&format!("      <git-lex:id>{}</git-lex:id>\n", xml_escape(&bracket_of_iri(&p.iri))));
+    // The Image is a git-lex Thing: its creation time is the universal
+    // git-lex:dateCreated (pan.ttl 0.3.3), beside its git-lex:id.
+    out.push_str(&format!("      <git-lex:dateCreated>{}</git-lex:dateCreated>\n", xml_escape(&p.created_date)));
     let mut ident: Vec<(String, FieldValue)> = vec![
         ("mediaPath".into(), FieldValue::Scalar(p.media_path.clone())),
-        ("createdDate".into(), FieldValue::Scalar(p.created_date.clone())),
     ];
     if !p.media_type.is_empty() {
         ident.push(("mediaType".into(), FieldValue::Scalar(p.media_type.clone())));
@@ -342,11 +344,17 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
         .map_err(|e| anyhow!("XMP in the file is not valid RDF/XML: {e}"))?;
     // Pan's own Description is already out. What is left out here is only
     // what must never travel between stores: pan: vocabulary (a previous
-    // store's paths and records) and git-lex:id (identity). A producer's
-    // git-lex:dateCreated on ITS subject is declared vocabulary and stays —
-    // dropping the whole git-lex namespace lost Horae's Moment dateCreated
-    // on the first media-only delivery (2026-09-04).
+    // store's paths and records) and, ABOUT THIS FILE, the Thing's own
+    // identity and timing — git-lex:id, dateCreated, dateUpdated — which are
+    // Pan's to say (Rob, 2026-09-05: the Image is a git-lex Thing and its
+    // dateCreated is Pan's). A producer's git-lex:dateCreated on ITS OWN
+    // subject (a Moment IRI) is declared vocabulary about that subject and
+    // stays — dropping the whole git-lex namespace lost Horae's Moment
+    // dateCreated on the first media-only delivery (2026-09-04).
     let git_lex_id = format!("{}id", crate::config::GIT_LEX_NS);
+    let git_lex_created = format!("{}dateCreated", crate::config::GIT_LEX_NS);
+    let git_lex_updated = format!("{}dateUpdated", crate::config::GIT_LEX_NS);
+    let media_subject = media_iri.to_string();
     // The ONE pan: field a producer may write (pan.ttl v0.3.1; Rob ruled on
     // 2026-09-04 that Horae sends pan:relatedToId=<copia/Moment/id>). Every other
     // pan: statement in an arriving file is a previous store's and stays out.
@@ -357,7 +365,14 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
         .into_iter()
         .filter(|q| {
             let p = q.predicate.as_str();
-            p == pan_related_to || !(p.starts_with(PAN_NS) || p == git_lex_id)
+            if p == pan_related_to {
+                return true;
+            }
+            if p.starts_with(PAN_NS) || p == git_lex_id {
+                return false;
+            }
+            let about_this_file = matches!(&q.subject, oxigraph::model::NamedOrBlankNode::NamedNode(n) if n.as_str() == media_subject);
+            !(about_this_file && (p == git_lex_created || p == git_lex_updated))
         })
         .map(|q| {
             // A reference written the git-lex way — `<copia/Moment/x>` as a

@@ -303,7 +303,7 @@ async fn run_one(
                         .pan
                         .facts_for(&id)?
                         .iter()
-                        .find(|(p, _)| p == &format!("{}createdDate", crate::PAN_NS))
+                        .find(|(p, _)| p == &format!("{}dateCreated", crate::GIT_LEX_NS))
                         .and_then(|(_, v)| v.first().cloned())
                         .unwrap_or_default();
                     let shard = created.get(0..10).unwrap_or("0000-00-00").replace('-', "/");

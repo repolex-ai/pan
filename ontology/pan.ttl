@@ -29,11 +29,25 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.3.2" .
+    owl:versionInfo "0.3.3" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.3.3 (2026-09-05, ruled by Rob looking at a stored file in a viewer):
+#   (1) pan:createdDate DELETED. A pan:Image is a git-lex:Thing, and when it
+#       came to be is the universal git-lex:dateCreated — Pan writes that, in
+#       the image and in the graph, the way every kit class inherits it. The
+#       cardinality-1 restriction moves onto the inherited property. A
+#       producer's git-lex:dateCreated about THE FILE (Horae wrote its Moment's
+#       date there) is no longer loaded onto the Image; about its own subject
+#       it still is. Stores migrate at open.
+#   (2) Identifiers in files are angle-bracket form, <pan/Image/id>, the same
+#       text every kit writes in frontmatter; the IRI exists only in the graph.
+#   Deliberately not done: renaming anything. No property here was ever
+#   prefixed "image" — the "Image Media Path" a viewer showed came from an XMP
+#   wrapper struct, removed the same day, not from this vocabulary.
+#
 # v0.3.2 (2026-09-05, ruled by Rob to m3rc and confirmed to w4r3z: one embedding
 #         index for the Mac and the Salad node, named qwen3-vl-embedding-2b;
 #         precision and provider are data on the record, not part of the name):
@@ -42,8 +56,8 @@
 #       pan:model stays the functional label = the index name; two runs of
 #       the same network at different precisions share it (cosine 0.998).
 #
-# v0.3.1 (2026-09-04, RULED by Rob to nomia and confirmed to w4r3z in his own
-#         words: "I asked Nomia to send pan:relatedToId=<copia/Moment/id>"):
+# v0.3.1 (2026-09-04, ruled by Rob to nomia and confirmed to w4r3z: Horae
+#         sends pan:relatedToId=<copia/Moment/id>):
 #   (1) pan:relatedToId — the one field a PRODUCER writes in Pan's namespace:
 #       the Moment (or any Thing) this stored media relates to, written the
 #       git-lex way as a reference <ns/Class/id> in the file's XMP; Pan
@@ -148,12 +162,6 @@ pan:mediaType a owl:DatatypeProperty ;
     rdfs:comment "MIME type of the stored bytes, e.g. image/png." ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:string .
-
-pan:createdDate a owl:DatatypeProperty ;
-    rdfs:label "created date" ;
-    rdfs:comment "When Pan created this record and its id, RFC3339 in system local time." ;
-    rdfs:domain pan:Media ;
-    rdfs:range xsd:dateTime .
 
 pan:readyDate a owl:DatatypeProperty ;
     rdfs:label "ready date" ;
@@ -386,7 +394,9 @@ pan:Store rdfs:subClassOf
 pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:mediaPath  ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:mediaType  ; owl:cardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:createdDate ; owl:cardinality 1 ] ,
+    # When Pan created this record and its id (RFC3339, system local time):
+    # the universal git-lex:dateCreated, inherited from git-lex:Thing.
+    [ a owl:Restriction ; owl:onProperty git-lex:dateCreated ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:readyDate    ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
