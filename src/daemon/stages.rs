@@ -176,14 +176,22 @@ async fn run_one(
             .await??;
         }
         STAGE_CAPTION => {
-            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.see(&ep.url, &bytes, media_type).await?;
-            let Some(text) = r.caption.filter(|t| !t.trim().is_empty()) else {
-                return Err(CallError::Terminal("no caption returned".into()).into());
+            // `/percept/vlm` (m3rc, 2026-09-05): image + prompt → text. The
+            // prompt is config and required (Rob: "you need to provide prompt
+            // for iris as well"); the model recorded is the one the SERVER
+            // names in its answer, falling back to config only if it is silent.
+            let Some(prompt) = ep.prompt.as_deref().filter(|p| !p.trim().is_empty()) else {
+                return Err(CallError::Terminal(format!("caption stage {} has no `prompt` in config; nothing was sent", ep.url)).into());
             };
+            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let r = d.iris.vlm(&ep.url, &bytes, media_type, prompt).await?;
+            if r.text.trim().is_empty() {
+                return Err(CallError::Terminal("no caption text returned".into()).into());
+            }
             let s = store.clone();
             let id = item.id.clone();
-            let model = ep.model.clone();
+            let model = r.model.clone().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| ep.model.clone());
+            let text = r.text.clone();
             tokio::task::spawn_blocking(move || write_caption(&s, &id, &model, &text)).await??;
         }
         STAGE_POSE => {

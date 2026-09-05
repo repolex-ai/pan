@@ -26,6 +26,12 @@ pub const DEFAULT_BIND: &str = "127.0.0.1";
 pub struct ModelEndpoint {
     pub url: String,
     pub model: String,
+    /// The instruction sent with the image to a captioning endpoint
+    /// (`/percept/vlm` takes `prompt`). Required for the caption stage; Rob,
+    /// 2026-09-05: "you need to provide prompt for iris as well." Several
+    /// questions in ONE prompt is the cheap way (m3rc: every prompt resends
+    /// the image).
+    pub prompt: Option<String>,
     /// For an `embed` endpoint that is really `/see_embed` (one image load
     /// gives caption AND vector): the captioning model's name, so the caption
     /// it returns is recorded under the right `pan:model`. Absent = the

@@ -52,6 +52,19 @@ pub struct SeeEmbed {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+/// `/percept/vlm` (m3rc, 2026-09-05): image + prompt → `text`, and the
+/// `model` / `provider` that answered. Unknown fields are kept, never dropped.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Vlm {
+    pub text: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
 /// `/see_pose`: one skeleton per detected person, 133 COCO-WholeBody
 /// keypoints each as `[x, y, confidence]`, plus the drawn skeleton as PNG.
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -156,6 +169,18 @@ impl Iris {
             .text("resident", "true");
         let v = self.post(url, form).await?;
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see shape: {e}")))
+    }
+
+    /// `POST /percept/vlm`: `image` + `prompt`, thinking off (m3rc: minutes
+    /// when on; several questions in ONE prompt is the cheap way, since every
+    /// prompt resends the image).
+    pub async fn vlm(&self, url: &str, bytes: &[u8], media_type: &str, prompt: &str) -> std::result::Result<Vlm, CallError> {
+        let form = Form::new()
+            .part("image", Self::image_part(bytes, media_type).map_err(|e| CallError::Terminal(e.to_string()))?)
+            .text("prompt", prompt.to_string())
+            .text("thinking", "false");
+        let v = self.post(url, form).await?;
+        serde_json::from_value(v).map_err(|e| CallError::Transient(format!("vlm shape: {e}")))
     }
 
     pub async fn see_pose(&self, url: &str, bytes: &[u8], media_type: &str) -> std::result::Result<SeePose, CallError> {
