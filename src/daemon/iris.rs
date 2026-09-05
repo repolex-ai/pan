@@ -17,8 +17,12 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(900);
 
 #[derive(Debug)]
 pub enum CallError {
-    /// Retry later: the eye is down, busy, or timed out.
+    /// Retry later: the eye is down or timed out.
     Transient(String),
+    /// Retry in SECONDS, not minutes: every node's queue is full right now
+    /// (m3rc's door, 2026-09-05: `503 {"reason":"busy"}` — max_queue 2 per
+    /// node per model). Nothing is wrong with the image or the door.
+    Busy(String),
     /// Never retry these bytes with this stage: the eye said no for cause.
     Terminal(String),
 }
@@ -27,6 +31,7 @@ impl std::fmt::Display for CallError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CallError::Transient(m) => write!(f, "transient: {m}"),
+            CallError::Busy(m) => write!(f, "busy: {m}"),
             CallError::Terminal(m) => write!(f, "terminal: {m}"),
         }
     }
@@ -136,6 +141,21 @@ impl Iris {
             .map_err(|e| CallError::Transient(format!("{url}: read body: {e}")))?;
         if status.as_u16() == 422 {
             return Err(CallError::Terminal(format!("{url}: {}", body.chars().take(300).collect::<String>())));
+        }
+        if status.as_u16() == 503 {
+            // m3rc's door says WHY in the body: `busy` = every node's queue is
+            // full (retry in seconds); `backend_down` = no node is up at all
+            // (a fact about the door, not the image — the stage holds).
+            let reason = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(str::to_owned))
+                .unwrap_or_default();
+            let short = body.chars().take(300).collect::<String>();
+            return Err(match reason.as_str() {
+                "busy" => CallError::Busy(format!("{url}: 503 busy: {short}")),
+                "backend_down" => CallError::Transient(format!("{url}: 503 backend_down (no node up): {short}")),
+                _ => CallError::Transient(format!("{url}: {status}: {short}")),
+            });
         }
         if status.is_server_error() || status.as_u16() == 429 {
             return Err(CallError::Transient(format!("{url}: {status}: {}", body.chars().take(300).collect::<String>())));

@@ -105,6 +105,10 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
 /// down is not a fact about the image.
 const DOOR_DOWN_HOLD: Duration = Duration::from_secs(60);
 
+/// How long a stage breathes after `503 busy` (every node's queue full) before
+/// its next pass. Seconds, not minutes: the door asked for a retry "in seconds".
+const BUSY_WAIT: Duration = Duration::from_secs(5);
+
 async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str) -> Result<usize> {
     if let Some(until) = d.stage_hold.lock().unwrap().get(stage).copied() {
         if until > Instant::now() {
@@ -139,15 +143,30 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                 tracing::info!(store = %store.entry.id, id = %item.id, stage, model = %ep.model, "recorded");
             }
             Err(e) => {
+                if let Some(CallError::Busy(m)) = e.downcast_ref::<CallError>() {
+                    // Every node's queue is full. No attempt is recorded — the
+                    // image stays pending and is simply asked again after a
+                    // short breath. Stop walking this batch; the next pass
+                    // starts from the top of the ladder again.
+                    tracing::info!(store = %store.entry.id, id = %item.id, stage, "door busy, backing off {}s: {m}", BUSY_WAIT.as_secs());
+                    tokio::time::sleep(BUSY_WAIT).await;
+                    break;
+                }
                 let (msg, terminal) = match e.downcast_ref::<CallError>() {
                     Some(CallError::Terminal(m)) => (m.clone(), true),
                     Some(CallError::Transient(m)) => (m.clone(), false),
+                    Some(CallError::Busy(m)) => (m.clone(), false),
                     None => (format!("{e:#}"), false),
                 };
                 tracing::warn!(store = %store.entry.id, id = %item.id, stage, terminal, "stage failed: {msg}");
                 // Failed before reaching the model: the DOOR is down, not the
                 // image. Hold the whole stage and stop walking this batch.
-                let door_down = !terminal && (msg.contains("error sending request") || msg.contains("connection") || msg.contains("timed out"));
+                // `backend_down` (m3rc, 2026-09-05) means NO node is up — same thing.
+                let door_down = !terminal
+                    && (msg.contains("error sending request")
+                        || msg.contains("connection")
+                        || msg.contains("timed out")
+                        || msg.contains("backend_down"));
                 d.record_attempt(&store.entry.id, &item.id, stage, msg, terminal);
                 if door_down {
                     d.stage_hold.lock().unwrap().insert(stage.to_string(), Instant::now() + DOOR_DOWN_HOLD);
