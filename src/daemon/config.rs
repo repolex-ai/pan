@@ -75,6 +75,7 @@ struct ConfigYml {
     /// How many images one stage handles per pass per store. Bounded so one
     /// store with a backlog cannot starve the others.
     batch: Option<usize>,
+    backfill_since: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +92,12 @@ pub struct DaemonConfig {
     pub models: BTreeMap<String, ModelEndpoint>,
     pub interval_secs: u64,
     pub batch: usize,
+    /// The backfill floor: images created BEFORE this (RFC 3339, local offset,
+    /// same shape as pan:createdDate) are never handed to a stage. Newest
+    /// first still applies above it. Absent = no floor, walk everything.
+    /// (Rob, 2026-09-05: a reasonable floor is mine to pick; picked midnight
+    /// of the day the remote stages first came on.)
+    pub backfill_since: Option<String>,
 }
 
 pub fn config_dir() -> PathBuf {
@@ -168,6 +175,7 @@ impl DaemonConfig {
             models: yml.models,
             interval_secs: yml.interval_secs.unwrap_or(5),
             batch: yml.batch.unwrap_or(8),
+            backfill_since: yml.backfill_since.filter(|s| !s.trim().is_empty()),
         })
     }
 

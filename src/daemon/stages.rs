@@ -109,7 +109,8 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
     let pending: Vec<PendingItem> = {
         let s = store.clone();
         let model = ep.model.clone();
-        tokio::task::spawn_blocking(move || s.pan.pending_for(link, &model, batch * 4)).await??
+        let since = d.cfg.backfill_since.clone();
+        tokio::task::spawn_blocking(move || s.pan.pending_for(link, &model, batch * 4, since.as_deref())).await??
     };
     let work: Vec<PendingItem> = pending
         .into_iter()

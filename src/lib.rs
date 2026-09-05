@@ -623,12 +623,21 @@ impl Pan {
     /// chance"). Because pending means absent, the same query IS the backfill:
     /// once nothing new is waiting, the next batch is simply the newest of
     /// the old. No second queue, no second process.
-    pub fn pending_for(&self, link_local: &str, model: &str, limit: usize) -> Result<Vec<PendingItem>> {
+    ///
+    /// `since` is the backfill floor: an RFC 3339 local-offset date-time, the
+    /// same shape `pan:createdDate` is written in, so a plain string compare
+    /// is a time compare. Images created before it are not pending.
+    pub fn pending_for(&self, link_local: &str, model: &str, limit: usize, since: Option<&str>) -> Result<Vec<PendingItem>> {
         let model_lit = model.replace('\\', "\\\\").replace('"', "\\\"");
+        let floor = match since {
+            Some(s) => format!("FILTER(STR(?d) >= \"{}\")", s.replace('\\', "\\\\").replace('"', "\\\"")),
+            None => String::new(),
+        };
         let q = format!(
             "SELECT ?s ?path ?type ?d WHERE {{
                ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; pan:createdDate ?d .
                FILTER NOT EXISTS {{ ?s pan:{link_local} ?e . ?e pan:model \"{model_lit}\" }}
+               {floor}
              }} ORDER BY DESC(?d) ?s LIMIT {limit}"
         );
         let mut out = Vec::new();
