@@ -142,26 +142,43 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
         .filter(|p| d.holding(&store.entry.id, &p.id, stage).is_none())
         .take(batch)
         .collect();
-    let mut n = 0usize;
+    // Every item in the batch is spawned at once; the stage's Limiter decides
+    // how many are actually in flight. Results are handled as they land.
+    let n = work.len();
+    let mut set = tokio::task::JoinSet::new();
     for item in work {
-        n += 1;
-        let permit = d.funnels[stage].clone().acquire_owned().await?;
-        let result = run_one(&d, &store, stage, &ep, &target, &item).await;
-        drop(permit);
+        let (d, store, ep, target) = (d.clone(), store.clone(), ep.clone(), target.clone());
+        set.spawn(async move {
+            let permit = d.funnels[stage].acquire().await;
+            let result = run_one(&d, &store, stage, &ep, &target, &item).await;
+            drop(permit);
+            (item, result)
+        });
+    }
+    let mut saw_busy = false;
+    while let Some(joined) = set.join_next().await {
+        let (item, result) = match joined {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(stage, "stage task join: {e}");
+                continue;
+            }
+        };
         match result {
             Ok(()) => {
                 d.clear_attempt(&store.entry.id, &item.id, stage);
-                tracing::info!(store = %store.entry.id, id = %item.id, stage, model = %ep.model, via = target.via, "recorded");
+                d.funnels[stage].on_success();
+                tracing::info!(store = %store.entry.id, id = %item.id, stage, model = %ep.model, via = target.via, window = d.funnels[stage].window(), "recorded");
             }
             Err(e) => {
                 if let Some(CallError::Busy(m)) = e.downcast_ref::<CallError>() {
-                    // Every node's queue is full. No attempt is recorded — the
-                    // image stays pending and is simply asked again after a
-                    // short breath. Stop walking this batch; the next pass
-                    // starts from the top of the ladder again.
-                    tracing::info!(store = %store.entry.id, id = %item.id, stage, "door busy, backing off {}s: {m}", BUSY_WAIT.as_secs());
-                    tokio::time::sleep(BUSY_WAIT).await;
-                    break;
+                    // Every node's queue is full: the window was too wide.
+                    // Narrow it; no attempt is recorded, the image stays
+                    // pending and is asked again next pass.
+                    saw_busy = true;
+                    d.funnels[stage].on_busy();
+                    tracing::info!(store = %store.entry.id, id = %item.id, stage, window = d.funnels[stage].window(), "door busy: {m}");
+                    continue;
                 }
                 let (msg, terminal) = match e.downcast_ref::<CallError>() {
                     Some(CallError::Terminal(m)) => (m.clone(), true),
@@ -171,7 +188,7 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                 };
                 tracing::warn!(store = %store.entry.id, id = %item.id, stage, terminal, "stage failed: {msg}");
                 // Failed before reaching the model: the DOOR is down, not the
-                // image. Hold the whole stage and stop walking this batch.
+                // image. Hold the address and drop the rest of this batch.
                 // `backend_down` (m3rc, 2026-09-05) means NO node is up — same thing.
                 let door_down = !terminal
                     && (msg.contains("error sending request")
@@ -183,10 +200,13 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                     d.stage_hold.lock().unwrap().insert(hold_key.clone(), Instant::now() + DOOR_DOWN_HOLD);
                     let next = if target.via == "primary" && ep.fallback.is_some() { "switching to fallback" } else { "waiting" };
                     tracing::warn!(stage, url = %target.url, via = target.via, "endpoint unreachable — holding it for {}s, {next}", DOOR_DOWN_HOLD.as_secs());
-                    break;
+                    set.abort_all();
                 }
             }
         }
+    }
+    if saw_busy {
+        tokio::time::sleep(BUSY_WAIT).await;
     }
     Ok(n)
 }

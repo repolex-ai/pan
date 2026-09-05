@@ -52,8 +52,9 @@ pub struct Daemon {
     pub stores: Vec<Arc<StoreHandle>>,
     pub default_id: String,
     pub iris: iris::Iris,
-    /// stage name → the funnel: at most `concurrency` calls in flight.
-    pub funnels: HashMap<String, Arc<Semaphore>>,
+    /// stage name → the funnel: an adaptive window of calls in flight, never
+    /// more than the stage's configured `concurrency`.
+    pub funnels: HashMap<String, Arc<Limiter>>,
     /// (store id, media id, stage) → last failed attempt.
     pub attempts: Mutex<HashMap<(String, String, String), Attempt>>,
     pub started: Instant,
@@ -67,6 +68,90 @@ pub struct Daemon {
     /// way, image after image (2026-09-05: 42 failed calls in 90 s against a
     /// dark :1215). One try per stage per hold, then the batch resumes.
     pub stage_hold: Mutex<HashMap<String, Instant>>,
+}
+
+/// How many calls a stage keeps in flight, decided by the answers it gets —
+/// additive increase, multiplicative decrease, the shape TCP and every
+/// adaptive-concurrency limiter use. Pan does not know how many nodes stand
+/// behind the door and must not need to (Rob, 2026-09-05: Salad is flaky by
+/// design; when two nodes are up, use both; stay standard and self-contained).
+/// The door's `503 busy` IS the count of nodes, read live:
+///
+/// - start at 1 in flight;
+/// - after [`RAMP_AFTER`] consecutive successes at the current window, +1,
+///   up to the configured `concurrency` (the ceiling, never exceeded);
+/// - on any `busy`, halve (floor 1) and start the streak over.
+///
+/// With one node up the window settles at 1 (the second call gets `busy`);
+/// with two it climbs to 2 and stays; a node dropping out pulls it back within
+/// one answer. Nothing is configured but the ceiling.
+pub struct Limiter {
+    stage: String,
+    sem: Arc<Semaphore>,
+    max: usize,
+    limit: std::sync::atomic::AtomicUsize,
+    streak: std::sync::atomic::AtomicUsize,
+}
+
+pub const RAMP_AFTER: usize = 4;
+
+impl Limiter {
+    pub fn new(stage: &str, max: usize) -> Self {
+        let max = max.max(1);
+        Limiter {
+            stage: stage.to_string(),
+            sem: Arc::new(Semaphore::new(1)),
+            max,
+            limit: std::sync::atomic::AtomicUsize::new(1),
+            streak: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    pub async fn acquire(&self) -> tokio::sync::OwnedSemaphorePermit {
+        self.sem.clone().acquire_owned().await.expect("limiter semaphore never closes")
+    }
+
+    /// The window right now.
+    pub fn window(&self) -> usize {
+        self.limit.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn ceiling(&self) -> usize {
+        self.max
+    }
+
+    pub fn on_success(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let streak = self.streak.fetch_add(1, Relaxed) + 1;
+        let cur = self.limit.load(Relaxed);
+        if streak >= RAMP_AFTER && cur < self.max {
+            self.limit.store(cur + 1, Relaxed);
+            self.streak.store(0, Relaxed);
+            self.sem.add_permits(1);
+            tracing::info!(stage = %self.stage, window = cur + 1, ceiling = self.max, "widening: {streak} answers in a row at {cur}");
+        }
+    }
+
+    pub fn on_busy(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.streak.store(0, Relaxed);
+        let cur = self.limit.load(Relaxed);
+        let next = (cur / 2).max(1);
+        if next < cur {
+            self.limit.store(next, Relaxed);
+            // Permits already in flight are returned by their holders; take
+            // that many back as they come free and drop them on the floor.
+            for _ in 0..(cur - next) {
+                let sem = self.sem.clone();
+                tokio::spawn(async move {
+                    if let Ok(p) = sem.acquire_owned().await {
+                        p.forget();
+                    }
+                });
+            }
+            tracing::info!(stage = %self.stage, window = next, ceiling = self.max, "narrowing: door said busy at {cur}");
+        }
+    }
 }
 
 #[derive(Default)]
@@ -100,7 +185,7 @@ impl Daemon {
         let funnels = cfg
             .models
             .iter()
-            .map(|(name, m)| (name.clone(), Arc::new(Semaphore::new(m.concurrency))))
+            .map(|(name, m)| (name.clone(), Arc::new(Limiter::new(name, m.concurrency))))
             .collect();
         Ok(Daemon {
             cfg,
@@ -196,5 +281,41 @@ fn warn_if_not_ignored(repo: &Path) {
             repo = %repo.display(),
             ".pan/_ignore is not gitignored in this repo — the graph and media would enter git history; run `git lex kit-update` (it adds the `.pan/_ignore/` line)"
         );
+    }
+}
+
+#[cfg(test)]
+mod limiter_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn window_widens_on_a_streak_and_halves_on_busy() {
+        let l = Arc::new(Limiter::new("embed", 4));
+        assert_eq!((l.window(), l.ceiling()), (1, 4));
+        // One permit available at the start; a second waits.
+        let p1 = l.acquire().await;
+        assert!(l.sem.try_acquire().is_err(), "window 1 = one in flight");
+        drop(p1);
+        for _ in 0..RAMP_AFTER {
+            l.on_success();
+        }
+        assert_eq!(l.window(), 2);
+        let _a = l.acquire().await;
+        let _b = l.acquire().await;
+        assert!(l.sem.try_acquire().is_err(), "window 2 = two in flight");
+        for _ in 0..(RAMP_AFTER * 2) {
+            l.on_success();
+        }
+        assert_eq!(l.window(), 4);
+        l.on_busy();
+        assert_eq!(l.window(), 2);
+        l.on_busy();
+        l.on_busy();
+        assert_eq!(l.window(), 1, "never below one");
+        // Never above the ceiling.
+        for _ in 0..(RAMP_AFTER * 10) {
+            l.on_success();
+        }
+        assert_eq!(l.window(), 4);
     }
 }
