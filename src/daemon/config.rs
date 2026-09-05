@@ -27,8 +27,8 @@ pub struct ModelEndpoint {
     pub url: String,
     pub model: String,
     /// The instruction sent with the image to a captioning endpoint
-    /// (`/percept/vlm` takes `prompt`). Required for the caption stage; Rob,
-    /// 2026-09-05: "you need to provide prompt for iris as well." Several
+    /// (`/percept/vlm` takes `prompt`). Required for the caption stage: the
+    /// prompt is Pan's to supply, never the door's (Rob, 2026-09-05). Several
     /// questions in ONE prompt is the cheap way (m3rc: every prompt resends
     /// the image).
     pub prompt: Option<String>,

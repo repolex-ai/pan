@@ -9,8 +9,8 @@
 # =============================================================================
 # Pan stores media, describes it with a graph, and searches it by graph pattern
 # and vector similarity. This file is the WHOLE of what Pan may say about a
-# stored object. Code implements this; it never adds to it (Rob, 2026-09-03:
-# "everything in Pan must be expressed in an ontology FIRST").
+# stored object. Code implements this; it never adds to it — Rob ruled on
+# 2026-09-03 that the ontology comes first and every fact Pan emits is declared here.
 #
 # Published to git-lex as the kit `repolex-ai/git-lex-kit-pan` so a soul that
 # installs it can query its own media graph through git-lex and Syrinx.
@@ -34,9 +34,9 @@
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
-# v0.3.2 (2026-09-05, RULED by Rob to m3rc and confirmed to w4r3z: "ONE index for
-#         both, named qwen3-vl-embedding-2b … Keep the precision / provider
-#         fields in the record as data; they are not part of the index name"):
+# v0.3.2 (2026-09-05, ruled by Rob to m3rc and confirmed to w4r3z: one embedding
+#         index for the Mac and the Salad node, named qwen3-vl-embedding-2b;
+#         precision and provider are data on the record, not part of the name):
 #   (1) pan:precision, pan:provider — data on a model-produced record saying
 #       how (bf16-cuda, 8-bit) and where (salad, phala, mac) the model ran.
 #       pan:model stays the functional label = the index name; two runs of

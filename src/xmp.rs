@@ -323,8 +323,8 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
     // dropping the whole git-lex namespace lost Horae's Moment dateCreated
     // on the first media-only delivery (2026-09-04).
     let git_lex_id = format!("{}id", crate::config::GIT_LEX_NS);
-    // The ONE pan: field a producer may write (pan.ttl v0.3.1; Rob, 2026-09-04:
-    // "I asked Nomia to send pan:relatedToId=<copia/Moment/id>"). Every other
+    // The ONE pan: field a producer may write (pan.ttl v0.3.1; Rob ruled on
+    // 2026-09-04 that Horae sends pan:relatedToId=<copia/Moment/id>). Every other
     // pan: statement in an arriving file is a previous store's and stays out.
     let pan_related_to = format!("{PAN_NS}relatedToId");
     let git_lex_related_to = format!("{}relatedToId", crate::config::GIT_LEX_NS);

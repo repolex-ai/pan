@@ -9,9 +9,9 @@
 //! re-encoded as a same-size, high-quality JPEG. No metadata survives a
 //! decode-to-pixels round trip — there is no "strip" step to get wrong.
 //!
-//! This is Pan's job, not the door's: "you should be handling this; it's the
-//! only way to ensure standard and make sure extra data is not leaking. m3rc
-//! should not be massaging the data en-route."
+//! This is Pan's job, not the door's (Rob, 2026-09-05): the only way to
+//! guarantee one standard and no leak is for the producer of the wire bytes
+//! to be the one that makes them. Nothing en route may massage the data.
 //!
 //! Embed, pose and segment keep receiving the stored PNG byte for byte:
 //! their geometry comes back in the pixel space of the image sent, and that

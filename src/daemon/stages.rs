@@ -231,8 +231,8 @@ async fn run_one(
         }
         STAGE_CAPTION => {
             // `/percept/vlm` (m3rc, 2026-09-05): image + prompt → text. The
-            // prompt is config and required (Rob: "you need to provide prompt
-            // for iris as well"); the model recorded is the one the SERVER
+            // prompt is config and required — Pan supplies it, the door never
+            // does (Rob, 2026-09-05); the model recorded is the one the SERVER
             // names in its answer, falling back to config only if it is silent.
             let Some(prompt) = ep.prompt.as_deref().filter(|p| !p.trim().is_empty()) else {
                 return Err(CallError::Terminal(format!("caption stage {} has no `prompt` in config; nothing was sent", ep.url)).into());

@@ -74,8 +74,8 @@ impl PanLayout {
         }
     }
 
-    /// The file stem, Pool's shape with Pan's identity (Rob, 2026-09-04: "the
-    /// date and time, with your pan-id — NOT cid"): `YYYYMMDD-HHMMSS-<id>`,
+    /// The file stem, Pool's shape with Pan's identity — the date and time
+    /// plus the pan id, never the cid (Rob, 2026-09-04): `YYYYMMDD-HHMMSS-<id>`,
     /// the time being `createdDate` in system local time, as every Pan date.
     /// Readers never parse it back — `pan:mediaPath` in the graph is the path.
     pub fn file_stem(created_date: &str, id: &str) -> String {
