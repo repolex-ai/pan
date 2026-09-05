@@ -38,6 +38,7 @@ pub mod layout;
 pub mod npy;
 pub mod pngchunk;
 pub mod thumbnail;
+pub mod wire;
 pub mod xmp;
 
 pub use config::{now_local, PanConfig, GIT_LEX_NS, PAN_MEDIA_NS, PAN_NS};

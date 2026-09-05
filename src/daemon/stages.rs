@@ -224,8 +224,16 @@ async fn run_one(
             let Some(prompt) = ep.prompt.as_deref().filter(|p| !p.trim().is_empty()) else {
                 return Err(CallError::Terminal(format!("caption stage {} has no `prompt` in config; nothing was sent", ep.url)).into());
             };
+            // The caption provider gets PIXELS ONLY: a same-size, high-quality
+            // JPEG re-encoded from the stored image, so neither Horae's copia
+            // block nor Pan's own XMP reaches a third-party model (Rob,
+            // 2026-09-05; see `wire.rs`). This is Pan's job, not the door's.
+            let wire = {
+                let b = bytes.clone();
+                tokio::task::spawn_blocking(move || crate::wire::caption_copy(&b)).await??
+            };
             d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.vlm(&ep.url, &bytes, media_type, prompt).await?;
+            let r = d.iris.vlm(&ep.url, &wire.bytes, wire.media_type, prompt).await?;
             if r.text.trim().is_empty() {
                 return Err(CallError::Terminal("no caption text returned".into()).into());
             }
