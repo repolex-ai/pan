@@ -908,7 +908,7 @@ pub fn is_png(bytes: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Test helper: a packet with only the identity block filled in.

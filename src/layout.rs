@@ -16,13 +16,19 @@
 //!   │                              configured with a media volume it is
 //!   │                              <volume>/<store id>/media instead — big media
 //!   │                              off the system drive while the graph stays put
-//!   ├── image/YYYY/MM/DD/<id>.png
-//!   ├── thumbnail/YYYY/MM/DD/<id>.jpg
-//!   ├── vectors/<model>/<id>.npy
-//!   ├── caption/YYYY/MM/DD/<id>.<model>.xml
-//!   ├── pose/YYYY/MM/DD/<id>.xml (+ <id>.<model>.png overlay)
-//!   └── sam3/YYYY/MM/DD/<id>.xml
+//!   └── <kind>/                    image | video | audio — the media type first
+//!       ├── source/YYYY/MM/DD/<stem>.png     the stored bytes, the thing itself
+//!       ├── thumbnail/YYYY/MM/DD/<stem>.jpg  everything below is DERIVED from source
+//!       ├── vectors/<model>/<id>.npy (+ .json)
+//!       ├── caption/YYYY/MM/DD/<id>.<model>.xml
+//!       ├── pose/YYYY/MM/DD/<id>.xml (+ <id>.<model>.png overlay)
+//!       └── sam3/YYYY/MM/DD/<id>.xml
 //! ```
+//!
+//! Type first, `source` for the bytes, derived folders beside it (Rob,
+//! 2026-09-05): five siblings where one was the thing and four were about it
+//! told nobody whose they were once a second media type arrived. The search
+//! index (`hnsw/`) stays at the top: one per model, across every type.
 //!
 //! Every `pan:mediaPath` / `pan:path` in the graph is relative to the media
 //! root, and the media root itself is a fact on the store's `pan:Store` node
@@ -51,9 +57,48 @@ impl PanLayout {
     pub const OXIGRAPH_SUBDIR: &'static str = "oxigraph";
     pub const HNSW_SUBDIR: &'static str = "hnsw";
     pub const MEDIA_SUBDIR: &'static str = "media";
-    pub const IMAGE_SUBDIR: &'static str = "image";
+    pub const SOURCE_SUBDIR: &'static str = "source";
     pub const THUMBNAIL_SUBDIR: &'static str = "thumbnail";
     pub const VECTORS_SUBDIR: &'static str = "vectors";
+
+    /// The top folder for a media type: `image`, `video`, `audio` — from the
+    /// media type's major part; anything else lands under `other`.
+    pub fn media_kind(media_type: &str) -> &'static str {
+        match media_type.split('/').next().unwrap_or("") {
+            "image" => "image",
+            "video" => "video",
+            "audio" => "audio",
+            _ => "other",
+        }
+    }
+
+    /// The media kind a stored path belongs to: its first segment.
+    pub fn kind_of_path(rel: &str) -> &str {
+        rel.split('/').next().unwrap_or("other")
+    }
+
+    /// Where a derived file of `kind` (thumbnail, caption, pose, …) for a
+    /// media object of `media_kind` lives: `<media_kind>/<kind>/<tail>`.
+    pub fn derived_rel_path(media_kind: &str, kind: &str, tail: &str) -> String {
+        format!("{media_kind}/{kind}/{tail}")
+    }
+
+    /// The pre-2026-09-05 layout had the media kind and every derived kind as
+    /// siblings (`image/YYYY/…`, `thumbnail/…`, `caption/…`, `vectors/…`).
+    /// For a path in that shape, the path it has now; `None` if it already is
+    /// where it belongs. Every stored object then was an image.
+    pub fn relocated(rel: &str) -> Option<String> {
+        let (first, rest) = rel.split_once('/')?;
+        match first {
+            "image" => {
+                let seg = rest.split('/').next()?;
+                let is_year = seg.len() == 4 && seg.chars().all(|c| c.is_ascii_digit());
+                is_year.then(|| format!("image/{}/{rest}", Self::SOURCE_SUBDIR))
+            }
+            "thumbnail" | "caption" | "pose" | "sam3" | "region" | "vectors" | "embedding" => Some(format!("image/{first}/{rest}")),
+            _ => None,
+        }
+    }
 
     /// Resolve every root. `media_root_override` is the fully-resolved media
     /// root pand computed from its config (volume + store id); `None` = the
@@ -86,33 +131,34 @@ impl PanLayout {
     }
 
     /// Media-root-relative path of the media bytes:
-    /// `image/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.<ext>`.
-    pub fn media_rel_path(shard: &str, stem: &str, ext: &str) -> String {
-        format!("{}/{shard}/{stem}.{ext}", Self::IMAGE_SUBDIR)
+    /// `<kind>/source/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.<ext>`.
+    pub fn media_rel_path(media_kind: &str, shard: &str, stem: &str, ext: &str) -> String {
+        Self::derived_rel_path(media_kind, Self::SOURCE_SUBDIR, &format!("{shard}/{stem}.{ext}"))
     }
 
     /// Media-root-relative path of the thumbnail, same stem as the media.
-    pub fn thumbnail_rel_path(shard: &str, stem: &str) -> String {
-        format!("{}/{shard}/{stem}.jpg", Self::THUMBNAIL_SUBDIR)
+    pub fn thumbnail_rel_path(media_kind: &str, shard: &str, stem: &str) -> String {
+        Self::derived_rel_path(media_kind, Self::THUMBNAIL_SUBDIR, &format!("{shard}/{stem}.jpg"))
     }
 
-    /// Media-root-relative path of a vector sidecar: `vectors/<index>/<id>.npy`.
-    pub fn vector_rel_path(index_name: &str, id: &str) -> String {
-        format!("{}/{index_name}/{id}.npy", Self::VECTORS_SUBDIR)
+    /// Media-root-relative path of a vector sidecar: `<kind>/vectors/<index>/<id>.npy`.
+    pub fn vector_rel_path(media_kind: &str, index_name: &str, id: &str) -> String {
+        Self::derived_rel_path(media_kind, Self::VECTORS_SUBDIR, &format!("{index_name}/{id}.npy"))
     }
 
     /// Absolute path of a vector sidecar.
-    pub fn vector_sidecar_path(&self, index_name: &str, id: &str) -> PathBuf {
-        self.media_root.join(Self::vector_rel_path(index_name, id))
+    pub fn vector_sidecar_path(&self, media_kind: &str, index_name: &str, id: &str) -> PathBuf {
+        self.media_root.join(Self::vector_rel_path(media_kind, index_name, id))
     }
 
     /// Media-root-relative path of an enricher's data file:
-    /// `<kind>/YYYY/MM/DD/<id>[.<variant>].xml`.
-    pub fn enrichment_rel_path(kind: &str, shard: &str, id: &str, variant: Option<&str>) -> String {
-        match variant {
-            Some(v) => format!("{kind}/{shard}/{id}.{v}.xml"),
-            None => format!("{kind}/{shard}/{id}.xml"),
-        }
+    /// `<media kind>/<kind>/YYYY/MM/DD/<id>[.<variant>].xml`.
+    pub fn enrichment_rel_path(media_kind: &str, kind: &str, shard: &str, id: &str, variant: Option<&str>) -> String {
+        let file = match variant {
+            Some(v) => format!("{shard}/{id}.{v}.xml"),
+            None => format!("{shard}/{id}.xml"),
+        };
+        Self::derived_rel_path(media_kind, kind, &file)
     }
 
     /// Absolute path for a media-root-relative path.
@@ -146,8 +192,24 @@ mod tests {
     fn relative_paths_are_declared_shapes() {
         let stem = PanLayout::file_stem("2026-09-04T03:49:53-07:00", "k7m2p9x4");
         assert_eq!(stem, "20260904-034953-k7m2p9x4", "Pool's shape, Pan's id, local time");
-        assert_eq!(PanLayout::media_rel_path("2026/09/04", &stem, "png"), "image/2026/09/04/20260904-034953-k7m2p9x4.png");
-        assert_eq!(PanLayout::thumbnail_rel_path("2026/09/04", &stem), "thumbnail/2026/09/04/20260904-034953-k7m2p9x4.jpg");
-        assert_eq!(PanLayout::vector_rel_path("m", "k7m2p9x4"), "vectors/m/k7m2p9x4.npy");
+        assert_eq!(PanLayout::media_rel_path("image", "2026/09/04", &stem, "png"), "image/source/2026/09/04/20260904-034953-k7m2p9x4.png");
+        assert_eq!(PanLayout::thumbnail_rel_path("image", "2026/09/04", &stem), "image/thumbnail/2026/09/04/20260904-034953-k7m2p9x4.jpg");
+        assert_eq!(PanLayout::vector_rel_path("image", "m", "k7m2p9x4"), "image/vectors/m/k7m2p9x4.npy");
+        assert_eq!(PanLayout::media_rel_path("image", "2026/09/04", &stem, "png"), "image/source/2026/09/04/20260904-034953-k7m2p9x4.png");
+        assert_eq!(PanLayout::enrichment_rel_path("image", "caption", "2026/09/04", "k7m2p9x4", Some("m")), "image/caption/2026/09/04/k7m2p9x4.m.xml");
+        assert_eq!(PanLayout::media_kind("video/mp4"), "video");
+    }
+
+    #[test]
+    fn old_sibling_layout_relocates_under_the_media_kind() {
+        assert_eq!(PanLayout::relocated("image/2026/09/05/20260905-100234-y77p4v36.png").as_deref(), Some("image/source/2026/09/05/20260905-100234-y77p4v36.png"));
+        assert_eq!(PanLayout::relocated("thumbnail/2026/09/05/x.jpg").as_deref(), Some("image/thumbnail/2026/09/05/x.jpg"));
+        assert_eq!(PanLayout::relocated("caption/2026/09/05/x.qwen/qwen3.8-27b.xml").as_deref(), Some("image/caption/2026/09/05/x.qwen/qwen3.8-27b.xml"));
+        assert_eq!(PanLayout::relocated("pose/2026/09/05/x.rtmw-x-l.png").as_deref(), Some("image/pose/2026/09/05/x.rtmw-x-l.png"));
+        assert_eq!(PanLayout::relocated("vectors/qwen3-vl-embedding-2b/x.npy").as_deref(), Some("image/vectors/qwen3-vl-embedding-2b/x.npy"));
+        // Already home: nothing to do.
+        assert_eq!(PanLayout::relocated("image/source/2026/09/05/x.png"), None);
+        assert_eq!(PanLayout::relocated("image/thumbnail/2026/09/05/x.jpg"), None);
+        assert_eq!(PanLayout::relocated("video/source/2026/09/05/x.mp4"), None);
     }
 }

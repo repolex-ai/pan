@@ -296,6 +296,7 @@ async fn run_one(
             let s = store.clone();
             let id = item.id.clone();
             let model = ep.model.clone();
+            let media_type_owned = media_type.to_string();
             tokio::task::spawn_blocking(move || -> Result<()> {
                 let mut overlay_rel: Option<String> = None;
                 if let Some(png) = overlay {
@@ -307,7 +308,11 @@ async fn run_one(
                         .and_then(|(_, v)| v.first().cloned())
                         .unwrap_or_default();
                     let shard = created.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
-                    let rel = format!("pose/{shard}/{id}.{model}.png");
+                    let rel = crate::layout::PanLayout::derived_rel_path(
+                        crate::layout::PanLayout::media_kind(&media_type_owned),
+                        "pose",
+                        &format!("{shard}/{id}.{model}.png"),
+                    );
                     let abs = s.pan.layout.abs(&rel);
                     if let Some(p) = abs.parent() {
                         std::fs::create_dir_all(p)?;

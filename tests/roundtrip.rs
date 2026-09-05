@@ -168,7 +168,7 @@ fn full_store_describe_query_search_roundtrip() {
     );
 
     // Raw sidecars landed (reembed source of truth).
-    let sidecar = store.layout.vector_sidecar_path("test-idx", &wolf.id);
+    let sidecar = store.layout.vector_sidecar_path("image", "test-idx", &wolf.id);
     assert!(sidecar.exists(), "npy sidecar written at {}", sidecar.display());
     assert_eq!(pan::npy::read_f32_1d(&sidecar).unwrap().len(), dim);
 
