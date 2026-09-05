@@ -61,6 +61,12 @@ pub struct Daemon {
     /// can see at a glance whether the thing that makes model calls is
     /// making them (Rob, 2026-09-04).
     pub counters: Counters,
+    /// stage name → until when the WHOLE stage is held. Set when a call fails
+    /// before reaching the model (connection refused/reset/timeout): the door
+    /// is down, so walking the rest of the batch would only fail the same
+    /// way, image after image (2026-09-05: 42 failed calls in 90 s against a
+    /// dark :1215). One try per stage per hold, then the batch resumes.
+    pub stage_hold: Mutex<HashMap<String, Instant>>,
 }
 
 #[derive(Default)]
@@ -104,6 +110,7 @@ impl Daemon {
             funnels,
             attempts: Mutex::new(HashMap::new()),
             counters: Counters::default(),
+            stage_hold: Mutex::new(HashMap::new()),
             started: Instant::now(),
         })
     }

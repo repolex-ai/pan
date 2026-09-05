@@ -19,7 +19,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::iris::{self, CallError};
 use super::{Daemon, StoreHandle};
@@ -100,7 +100,17 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
     done
 }
 
+/// How long a whole stage waits after a call failed before reaching the model
+/// (connection refused / reset / timeout). One try per hold; the door being
+/// down is not a fact about the image.
+const DOOR_DOWN_HOLD: Duration = Duration::from_secs(60);
+
 async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str) -> Result<usize> {
+    if let Some(until) = d.stage_hold.lock().unwrap().get(stage).copied() {
+        if until > Instant::now() {
+            return Ok(0);
+        }
+    }
     let ep = d.cfg.models.get(stage).cloned().ok_or_else(|| anyhow!("stage {stage} not configured"))?;
     let link = link_for(stage).ok_or_else(|| anyhow!("unknown stage {stage}"))?;
     let batch = d.cfg.batch;
@@ -135,7 +145,15 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                     None => (format!("{e:#}"), false),
                 };
                 tracing::warn!(store = %store.entry.id, id = %item.id, stage, terminal, "stage failed: {msg}");
+                // Failed before reaching the model: the DOOR is down, not the
+                // image. Hold the whole stage and stop walking this batch.
+                let door_down = !terminal && (msg.contains("error sending request") || msg.contains("connection") || msg.contains("timed out"));
                 d.record_attempt(&store.entry.id, &item.id, stage, msg, terminal);
+                if door_down {
+                    d.stage_hold.lock().unwrap().insert(stage.to_string(), Instant::now() + DOOR_DOWN_HOLD);
+                    tracing::warn!(stage, url = %ep.url, "endpoint unreachable — holding this stage for {}s", DOOR_DOWN_HOLD.as_secs());
+                    break;
+                }
             }
         }
     }
