@@ -323,18 +323,26 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
     // dropping the whole git-lex namespace lost Horae's Moment dateCreated
     // on the first media-only delivery (2026-09-04).
     let git_lex_id = format!("{}id", crate::config::GIT_LEX_NS);
-    let related_to = format!("{}relatedToId", crate::config::GIT_LEX_NS);
+    // The ONE pan: field a producer may write (pan.ttl v0.3.1; Rob, 2026-09-04:
+    // "I asked Nomia to send pan:relatedToId=<copia/Moment/id>"). Every other
+    // pan: statement in an arriving file is a previous store's and stays out.
+    let pan_related_to = format!("{PAN_NS}relatedToId");
+    let git_lex_related_to = format!("{}relatedToId", crate::config::GIT_LEX_NS);
     let all: Vec<oxigraph::model::Quad> = store.iter().collect::<std::result::Result<_, _>>().context("read packet quads")?;
     let quads: Vec<oxigraph::model::Quad> = all
         .into_iter()
-        .filter(|q| !(q.predicate.as_str().starts_with(PAN_NS) || q.predicate.as_str() == git_lex_id))
+        .filter(|q| {
+            let p = q.predicate.as_str();
+            p == pan_related_to || !(p.starts_with(PAN_NS) || p == git_lex_id)
+        })
         .map(|q| {
             // A reference written the git-lex way — `<copia/Moment/x>` as a
-            // field value, exactly as frontmatter writes it (Rob, 2026-09-04:
-            // "store the momentId on the file … Media implements git-lex:Thing,
-            // which gives it relatedToId") — becomes the IRI in the graph, so
-            // the join is an edge, not a string. The file keeps the text.
-            if q.predicate.as_str() != related_to {
+            // field value, exactly as frontmatter writes it — becomes the IRI
+            // in the graph, so the join is an edge, not a string. The file
+            // keeps the text. Applies to pan:relatedToId (the ruled field) and
+            // to git-lex:relatedToId (the universal one) alike.
+            let p = q.predicate.as_str();
+            if p != pan_related_to && p != git_lex_related_to {
                 return q;
             }
             let Term::Literal(lit) = &q.object else { return q };
@@ -994,9 +1002,33 @@ mod tests {
     }
 
     #[test]
+    fn pan_related_to_id_from_a_producer_is_the_one_pan_field_let_through() {
+        // Horae's line, as Rob ruled it ("pan:relatedToId=<copia/Moment/id>"):
+        // on the "this file" Description, in Pan's namespace. Every other pan:
+        // statement from a producer still stays out.
+        let arrived = producer_packet(
+            "<rdf:Description rdf:about=\"\" xmlns:pan=\"https://repolex.ai/ontology/pan/\">\
+               <pan:relatedToId>&lt;copia/Moment/t8mjvhwszff9-3-4&gt;</pan:relatedToId>\
+               <pan:mediaPath>somewhere/else.png</pan:mediaPath>\
+             </rdf:Description>",
+        );
+        let image = "https://repolex.ai/pan/Image/pgtby2ft";
+        let quads = load_packet_statements(&arrived, image).unwrap();
+        let edge = quads
+            .iter()
+            .find(|q| q.predicate.as_str() == "https://repolex.ai/ontology/pan/relatedToId")
+            .expect("pan:relatedToId loaded");
+        assert_eq!(edge.subject.to_string(), format!("<{image}>"));
+        assert_eq!(edge.object.to_string(), "<https://repolex.ai/copia/Moment/t8mjvhwszff9-3-4>", "resolved to the IRI");
+        assert!(
+            !quads.iter().any(|q| q.predicate.as_str() == "https://repolex.ai/ontology/pan/mediaPath"),
+            "a producer's pan:mediaPath is NOT a fact about this copy and stays out"
+        );
+    }
+
+    #[test]
     fn related_to_id_in_bracket_form_becomes_an_edge() {
-        // Horae's line, as ruled: on the "this file" Description, the
-        // reference to the Moment written the git-lex way.
+        // The universal form is resolved the same way.
         let arrived = producer_packet(
             "<rdf:Description rdf:about=\"\" xmlns:git-lex=\"https://repolex.ai/ontology/git-lex/\">\
                <git-lex:relatedToId>&lt;copia/Moment/t8mjvhwszff9-3-4&gt;</git-lex:relatedToId>\

@@ -29,11 +29,24 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.3.0" .
+    owl:versionInfo "0.3.1" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.3.1 (2026-09-04, RULED by Rob to nomia and confirmed to w4r3z in his own
+#         words: "I asked Nomia to send pan:relatedToId=<copia/Moment/id>"):
+#   (1) pan:relatedToId — the one field a PRODUCER writes in Pan's namespace:
+#       the Moment (or any Thing) this stored media relates to, written the
+#       git-lex way as a reference <ns/Class/id> in the file's XMP; Pan
+#       resolves it to the IRI in the graph. It is the transitional link that
+#       keeps an image joined to its Moment until the CoPIA store exists.
+#       Every other pan: statement arriving in a file is still held back (a
+#       previous store's paths and records are not facts about this copy).
+#   NOT done: git-lex:relatedToId as the edge. w4r3z shipped it for a few hours
+#       on a reading of Rob's words that Rob did not make; reverted the same
+#       night. The relay lesson is recorded, not the property.
+#
 # v0.3.0 (2026-09-03, DRAFT for Rob's ruling — nothing below is implemented
 #         until he rules; Rob's directions of the same evening, w4r3z-pan):
 #   (1) PAN IS A KIT. Every class now `rdfs:subClassOf git-lex:Thing`, so the
@@ -252,6 +265,11 @@ pan:thumbnail a owl:ObjectProperty ;
     rdfs:label "thumbnail" ;
     rdfs:comment "The Thumbnail Pan made of this media." ;
     rdfs:domain pan:Media ; rdfs:range pan:Thumbnail .
+
+pan:relatedToId a owl:ObjectProperty ;
+    rdfs:label "relatedToId" ;
+    rdfs:comment "The Thing this media relates to (its Moment), written <ns/Class/id> — never the bare token." ;
+    rdfs:domain pan:Media ; rdfs:range git-lex:Thing .
 
 # --- shared fields -------------------------------------------------------------
 # These apply to several pan classes (Enrichment, Region, Pose, Caption, …);
