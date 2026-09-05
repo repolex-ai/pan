@@ -32,6 +32,13 @@ pub struct ModelEndpoint {
     /// questions in ONE prompt is the cheap way (m3rc: every prompt resends
     /// the image).
     pub prompt: Option<String>,
+    /// Provider-side request fields for a captioning endpoint, sent VERBATIM
+    /// as the `extra_body` form field; the door merges them into the
+    /// provider's request body untouched (m3rc, 2026-09-05). Qwen's thinking
+    /// switch lives here — `chat_template_kwargs: {enable_thinking: false}` —
+    /// and so do `max_tokens` / `temperature`. Pan has no opinion about the
+    /// contents and the door has none either. Absent = nothing sent.
+    pub extra_body: Option<serde_json::Value>,
     /// For an `embed` endpoint that is really `/see_embed` (one image load
     /// gives caption AND vector): the captioning model's name, so the caption
     /// it returns is recorded under the right `pan:model`. Absent = the

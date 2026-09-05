@@ -191,14 +191,29 @@ impl Iris {
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see shape: {e}")))
     }
 
-    /// `POST /percept/vlm`: `image` + `prompt`, thinking off (m3rc: minutes
-    /// when on; several questions in ONE prompt is the cheap way, since every
-    /// prompt resends the image).
-    pub async fn vlm(&self, url: &str, bytes: &[u8], media_type: &str, prompt: &str) -> std::result::Result<Vlm, CallError> {
-        let form = Form::new()
+    /// `POST /percept/vlm`: `image` + `prompt`, plus `extra_body` — a JSON
+    /// object the door merges into the provider's request body verbatim
+    /// (m3rc, 2026-09-05). Thinking on/off, max_tokens, temperature all live
+    /// there and come from config; Pan sends what it is given and nothing
+    /// else. Several questions in ONE prompt is the cheap way, since every
+    /// prompt resends the image.
+    pub async fn vlm(
+        &self,
+        url: &str,
+        bytes: &[u8],
+        media_type: &str,
+        prompt: &str,
+        extra_body: Option<&serde_json::Value>,
+    ) -> std::result::Result<Vlm, CallError> {
+        let mut form = Form::new()
             .part("image", Self::image_part(bytes, media_type).map_err(|e| CallError::Terminal(e.to_string()))?)
-            .text("prompt", prompt.to_string())
-            .text("thinking", "false");
+            .text("prompt", prompt.to_string());
+        if let Some(eb) = extra_body {
+            if !eb.is_object() {
+                return Err(CallError::Terminal(format!("caption extra_body must be a JSON object, got: {eb}")));
+            }
+            form = form.text("extra_body", eb.to_string());
+        }
         let v = self.post(url, form).await?;
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("vlm shape: {e}")))
     }
