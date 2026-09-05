@@ -233,7 +233,7 @@ async fn run_one(
                 tokio::task::spawn_blocking(move || crate::wire::caption_copy(&b)).await??
             };
             d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.vlm(&ep.url, &wire.bytes, wire.media_type, prompt, ep.extra_body.as_ref()).await?;
+            let r = d.iris.vlm(&ep.url, &ep.model, &wire.bytes, wire.media_type, prompt, ep.extra_body.as_ref()).await?;
             if r.text.trim().is_empty() {
                 return Err(CallError::Terminal("no caption text returned".into()).into());
             }

@@ -134,6 +134,23 @@ impl Iris {
             .send()
             .await
             .map_err(|e| CallError::Transient(format!("{url}: {e}")))?;
+        self.finish(url, resp).await
+    }
+
+    /// `POST` a JSON body. Used where the door forwards Pan's bytes to a
+    /// provider untouched and hands back the provider's own status + body.
+    async fn post_json(&self, url: &str, body: &serde_json::Value) -> std::result::Result<serde_json::Value, CallError> {
+        let resp = self
+            .client
+            .post(url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| CallError::Transient(format!("{url}: {e}")))?;
+        self.finish(url, resp).await
+    }
+
+    async fn finish(&self, url: &str, resp: reqwest::Response) -> std::result::Result<serde_json::Value, CallError> {
         let status = resp.status();
         let body = resp
             .text()
@@ -191,31 +208,33 @@ impl Iris {
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see shape: {e}")))
     }
 
-    /// `POST /percept/vlm`: `image` + `prompt`, plus `extra_body` — a JSON
-    /// object the door merges into the provider's request body verbatim
-    /// (m3rc, 2026-09-05). Thinking on/off, max_tokens, temperature all live
-    /// there and come from config; Pan sends what it is given and nothing
-    /// else. Several questions in ONE prompt is the cheap way, since every
-    /// prompt resends the image.
+    /// `POST /percept/vlm` (m3rc's door, 2026-09-05, third and final shape —
+    /// Rob: the door must not massage anything): the body IS the OpenAI
+    /// chat-completions request the provider should see. Pan builds it, the
+    /// door adds the Authorization header, forwards the bytes, and returns
+    /// the provider's response body and status as-is. Pan reads
+    /// `choices[0].message.content` itself. `extra_body` (config) is merged
+    /// into the top level verbatim — that is where `provider`,
+    /// `chat_template_kwargs.enable_thinking`, `max_tokens` live.
     pub async fn vlm(
         &self,
         url: &str,
+        model: &str,
         bytes: &[u8],
         media_type: &str,
         prompt: &str,
         extra_body: Option<&serde_json::Value>,
     ) -> std::result::Result<Vlm, CallError> {
-        let mut form = Form::new()
-            .part("image", Self::image_part(bytes, media_type).map_err(|e| CallError::Terminal(e.to_string()))?)
-            .text("prompt", prompt.to_string());
-        if let Some(eb) = extra_body {
-            if !eb.is_object() {
-                return Err(CallError::Terminal(format!("caption extra_body must be a JSON object, got: {eb}")));
-            }
-            form = form.text("extra_body", eb.to_string());
-        }
-        let v = self.post(url, form).await?;
-        serde_json::from_value(v).map_err(|e| CallError::Transient(format!("vlm shape: {e}")))
+        let body = build_chat_request(model, media_type, bytes, prompt, extra_body).map_err(CallError::Terminal)?;
+        let v = self.post_json(url, &body).await?;
+        let text = text_from_chat_response(&v)
+            .ok_or_else(|| CallError::Transient(format!("vlm: no choices[0].message.content in: {}", v.to_string().chars().take(300).collect::<String>())))?;
+        let model = v.get("model").and_then(|m| m.as_str()).map(str::to_owned);
+        let extra = match v {
+            serde_json::Value::Object(m) => m,
+            _ => serde_json::Map::new(),
+        };
+        Ok(Vlm { text, model, provider: None, extra })
     }
 
     pub async fn see_pose(&self, url: &str, bytes: &[u8], media_type: &str) -> std::result::Result<SeePose, CallError> {
@@ -310,5 +329,94 @@ mod tests {
         let p: SeePose = serde_json::from_str("{}").unwrap();
         assert!(p.keypoints.is_empty());
         assert!(p.skeleton_png().unwrap().is_none());
+    }
+}
+
+/// The OpenAI chat-completions request a caption provider sees, built by Pan
+/// and forwarded by the door byte for byte. One user message: the image as a
+/// data URL, then the prompt. `extra_body` keys land at the top level as
+/// given; they may not override `model` or `messages`.
+pub fn build_chat_request(
+    model: &str,
+    media_type: &str,
+    bytes: &[u8],
+    prompt: &str,
+    extra_body: Option<&serde_json::Value>,
+) -> std::result::Result<serde_json::Value, String> {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": format!("data:{media_type};base64,{b64}")}},
+                {"type": "text", "text": prompt}
+            ]
+        }]
+    });
+    if let Some(eb) = extra_body {
+        let serde_json::Value::Object(m) = eb else {
+            return Err(format!("caption extra_body must be a JSON object, got: {eb}"));
+        };
+        let out = body.as_object_mut().expect("object");
+        for (k, v) in m {
+            if k == "model" || k == "messages" {
+                return Err(format!("caption extra_body may not set `{k}`; that comes from the stage"));
+            }
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    Ok(body)
+}
+
+/// `choices[0].message.content` from a chat-completions response. Content is
+/// a string, or (some servers) a list of parts whose `text` fields are joined.
+pub fn text_from_chat_response(v: &serde_json::Value) -> Option<String> {
+    let content = v.get("choices")?.get(0)?.get("message")?.get("content")?;
+    match content {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(parts) => {
+            let s: Vec<&str> = parts.iter().filter_map(|p| p.get("text").and_then(|t| t.as_str())).collect();
+            if s.is_empty() { None } else { Some(s.join("")) }
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod chat_tests {
+    use super::*;
+
+    #[test]
+    fn request_is_the_openai_shape_with_extra_body_at_top_level() {
+        let eb = serde_json::json!({"provider": {"aci_verified": true}, "chat_template_kwargs": {"enable_thinking": false}, "max_tokens": 512});
+        let b = build_chat_request("qwen/qwen3.8-27b", "image/jpeg", b"\xFF\xD8\xFF", "Describe.", Some(&eb)).unwrap();
+        assert_eq!(b["model"], "qwen/qwen3.8-27b");
+        assert_eq!(b["messages"][0]["role"], "user");
+        assert_eq!(b["messages"][0]["content"][0]["type"], "image_url");
+        assert!(b["messages"][0]["content"][0]["image_url"]["url"].as_str().unwrap().starts_with("data:image/jpeg;base64,/9j/"));
+        assert_eq!(b["messages"][0]["content"][1]["text"], "Describe.");
+        assert_eq!(b["provider"]["aci_verified"], true);
+        assert_eq!(b["chat_template_kwargs"]["enable_thinking"], false);
+        assert_eq!(b["max_tokens"], 512);
+        assert!(b.get("prompt").is_none() && b.get("extra_body").is_none(), "no door-era fields");
+    }
+
+    #[test]
+    fn extra_body_cannot_hijack_model_or_messages() {
+        let eb = serde_json::json!({"model": "other"});
+        assert!(build_chat_request("m", "image/jpeg", b"x", "p", Some(&eb)).is_err());
+        let eb = serde_json::json!(["not", "an", "object"]);
+        assert!(build_chat_request("m", "image/jpeg", b"x", "p", Some(&eb)).is_err());
+    }
+
+    #[test]
+    fn text_comes_from_choices_zero() {
+        let v = serde_json::json!({"model": "qwen/qwen3.8-27b", "choices": [{"message": {"role": "assistant", "content": "A woman reads."}}]});
+        assert_eq!(text_from_chat_response(&v).as_deref(), Some("A woman reads."));
+        let v = serde_json::json!({"choices": [{"message": {"content": [{"type": "text", "text": "A "}, {"type": "text", "text": "man."}]}}]});
+        assert_eq!(text_from_chat_response(&v).as_deref(), Some("A man."));
+        assert!(text_from_chat_response(&serde_json::json!({"error": "nope"})).is_none());
     }
 }
