@@ -617,13 +617,19 @@ impl Pan {
 
     /// Images with NO record from `model` under `link_local` — the stage
     /// engine's work list. The graph is the queue: pending means absent.
+    ///
+    /// Newest first (Rob, 2026-09-05: "processes new files as priority, then
+    /// goes back and starts filling in old missing data whenever it gets a
+    /// chance"). Because pending means absent, the same query IS the backfill:
+    /// once nothing new is waiting, the next batch is simply the newest of
+    /// the old. No second queue, no second process.
     pub fn pending_for(&self, link_local: &str, model: &str, limit: usize) -> Result<Vec<PendingItem>> {
         let model_lit = model.replace('\\', "\\\\").replace('"', "\\\"");
         let q = format!(
-            "SELECT ?s ?path ?type WHERE {{
-               ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type .
+            "SELECT ?s ?path ?type ?d WHERE {{
+               ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; pan:createdDate ?d .
                FILTER NOT EXISTS {{ ?s pan:{link_local} ?e . ?e pan:model \"{model_lit}\" }}
-             }} ORDER BY ?s LIMIT {limit}"
+             }} ORDER BY DESC(?d) ?s LIMIT {limit}"
         );
         let mut out = Vec::new();
         if let QueryResults::Solutions(sols) = self.query(&q)? {
