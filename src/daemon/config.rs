@@ -173,6 +173,14 @@ fn expand_home(p: &Path) -> PathBuf {
 /// (2026-09-04).
 pub const MEDIA_FOLDER_CHARS: usize = 6;
 
+/// Pan's folder inside a soul's directory on the media volume:
+/// `<volume>/<6-char id>/pan/`. The soul comes first — that directory is
+/// everything the soul keeps on the drive, the way its repo root is everything
+/// it keeps in git — and Pan is one room in it, a sibling for any other tool.
+/// No dot: a data drive has no documents to hide it from, and whoever opens the
+/// drive should see it (Rob, 2026-09-05).
+pub const MEDIA_DIR_ON_VOLUME: &str = "pan";
+
 /// The folder name on the media volume for one store id.
 pub fn media_folder_name(store_id: &str) -> String {
     store_id.chars().take(MEDIA_FOLDER_CHARS).collect()
@@ -184,7 +192,7 @@ impl DaemonConfig {
     /// is declared in the store's graph as `pan:mediaRoot`; nothing reads it by
     /// convention.
     pub fn media_root_for(&self, store_id: &str) -> Option<PathBuf> {
-        self.media_volume.as_ref().map(|v| v.join(media_folder_name(store_id)).join("media"))
+        self.media_volume.as_ref().map(|v| v.join(media_folder_name(store_id)).join(MEDIA_DIR_ON_VOLUME))
     }
 
     pub fn load() -> Result<Self> {
@@ -279,10 +287,10 @@ mod tests {
     fn media_folder_is_the_short_prefix_of_the_full_id() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("config.yml");
-        std::fs::write(&p, "media_volume: /Volumes/p02/_pan\n").unwrap();
+        std::fs::write(&p, "media_volume: /Volumes/p02\n").unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
         let root = cfg.media_root_for("700c5bd4a969723107c1b92b83c0f1ec1497d9d4").unwrap();
-        assert_eq!(root, PathBuf::from("/Volumes/p02/_pan/700c5b/media"));
+        assert_eq!(root, PathBuf::from("/Volumes/p02/700c5b/pan"));
         // The all-zeros bare store id shortens the same way.
         assert_eq!(media_folder_name("0000000000000000000000000000000000000000"), "000000");
     }

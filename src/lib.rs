@@ -334,6 +334,7 @@ impl Pan {
         let store = Store::open(&layout.oxigraph_root)
             .with_context(|| format!("open oxigraph at {}", layout.oxigraph_root.display()))?;
         let pan = Pan { cfg, layout, store_id: store_id.to_string(), store, indexes: Mutex::new(HashMap::new()) };
+        pan.relocate_media_root()?;
         pan.declare_store()?;
         pan.migrate_created_date()?;
         pan.migrate_layout()?;
@@ -440,6 +441,56 @@ impl Pan {
             }
         }
         tracing::info!(store = %self.store_id, moved, missing, vector_json = jsons, restamped, "type-first layout in place");
+        Ok(())
+    }
+
+    /// The media root moved (2026-09-05: `<volume>/_pan/<id>/media` became
+    /// `<volume>/<id>/pan`, the soul's folder first). If the graph remembers a
+    /// different media root than the one configured now, and that old
+    /// directory still exists while the new one does not, move the whole
+    /// directory once — every path inside is relative, so nothing else
+    /// changes — and drop the emptied parents. Then `declare_store` records
+    /// the new root. A store whose remembered root matches does nothing.
+    fn relocate_media_root(&self) -> Result<()> {
+        let node = NamedNode::new(format!("{PAN_MEDIA_NS}Store/{}", self.store_id)).map_err(|e| anyhow!("store IRI: {e}"))?;
+        let remembered: Option<PathBuf> = self
+            .store
+            .quads_for_pattern(Some((&node).into()), Some(pan_iri("mediaRoot").as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+            .filter_map(|q| q.ok())
+            .find_map(|q| match q.object {
+                Term::Literal(l) => Some(PathBuf::from(l.value())),
+                _ => None,
+            });
+        let Some(old) = remembered else { return Ok(()) };
+        let new = &self.layout.media_root;
+        if &old == new || !old.is_dir() {
+            return Ok(());
+        }
+        let new_is_empty = !new.exists() || fs::read_dir(new).map(|mut d| d.next().is_none()).unwrap_or(false);
+        if !new_is_empty {
+            return Err(anyhow!(
+                "media root moved from {} to {}, but the new location already has files; move or empty it by hand and start again",
+                old.display(),
+                new.display()
+            ));
+        }
+        if new.exists() {
+            fs::remove_dir(new).ok();
+        }
+        if let Some(parent) = new.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        }
+        fs::rename(&old, new).with_context(|| format!("move media root {} → {}", old.display(), new.display()))?;
+        // Tidy the emptied parents (`<volume>/_pan/<id>`, then `<volume>/_pan`).
+        let mut p = old.parent();
+        for _ in 0..2 {
+            let Some(dir) = p else { break };
+            if fs::read_dir(dir).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                fs::remove_dir(dir).ok();
+            }
+            p = dir.parent();
+        }
+        tracing::info!(store = %self.store_id, from = %old.display(), to = %new.display(), "media root moved");
         Ok(())
     }
 
@@ -1328,5 +1379,36 @@ mod layout_migration_tests {
         // Idempotent: a third open moves nothing (would fail on a missing source otherwise).
         drop(pan);
         Pan::open(dir.path()).unwrap();
+    }
+
+    /// The media root moved on the volume: `<volume>/_pan/<id>/media` →
+    /// `<volume>/<id>/pan`. The whole directory is moved once, the store node
+    /// remembers the new root, and the old parents are tidied away.
+    #[test]
+    fn media_root_moves_with_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let vol = tempfile::tempdir().unwrap();
+        let old_root = vol.path().join("_pan").join("abc123").join("media");
+        let new_root = vol.path().join("abc123").join("pan");
+        let (id, media_path) = {
+            let pan = Pan::open_with(dir.path(), "abc123", Some(&old_root)).unwrap();
+            let put = pan.put(&crate::xmp::tests::make_test_png(32, 32, 9), Some("image/png")).unwrap();
+            assert!(old_root.join(&put.media_path).exists());
+            (put.id.clone(), put.media_path.clone())
+        };
+        let pan = Pan::open_with(dir.path(), "abc123", Some(&new_root)).unwrap();
+        assert!(new_root.join(&media_path).exists(), "bytes moved with the root");
+        assert!(!old_root.exists(), "old media dir gone");
+        assert!(!vol.path().join("_pan").exists(), "emptied _pan parent tidied away");
+        assert!(pan.state_for(&id).unwrap().is_some());
+        let node = format!("{PAN_MEDIA_NS}Store/abc123");
+        let root_fact = match pan.query(&format!("SELECT ?r WHERE {{ <{node}> pan:mediaRoot ?r }}")).unwrap() {
+            QueryResults::Solutions(mut sols) => sols.next().and_then(|s| s.ok()).and_then(|s| s.get("r").map(term_str)).unwrap(),
+            _ => panic!(),
+        };
+        assert_eq!(PathBuf::from(root_fact), new_root, "the store node remembers the new root");
+        // Same root again: nothing happens.
+        drop(pan);
+        Pan::open_with(dir.path(), "abc123", Some(&new_root)).unwrap();
     }
 }

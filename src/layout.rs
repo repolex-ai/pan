@@ -14,8 +14,10 @@
 //!
 //! <media root>/                    default <root>/_ignore/media; when pand is
 //!   │                              configured with a media volume it is
-//!   │                              <volume>/<store id>/media instead — big media
-//!   │                              off the system drive while the graph stays put
+//!   │                              <volume>/<6-char store id>/pan instead — big
+//!   │                              media off the system drive while the graph
+//!   │                              stays put; the soul's folder first, Pan's
+//!   │                              room inside it (Rob, 2026-09-05)
 //!   └── <kind>/                    image | video | audio — the media type first
 //!       ├── source/YYYY/MM/DD/<stem>.png     the stored bytes, the thing itself
 //!       ├── thumbnail/YYYY/MM/DD/<stem>.jpg  everything below is DERIVED from source
