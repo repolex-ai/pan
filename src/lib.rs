@@ -737,14 +737,29 @@ impl Pan {
 
     /// Record an embedding: vector into the index + `.npy` sidecar, an
     /// Embedding node and a vectorData reference, XMP refreshed.
-    pub fn write_embedding(&self, id: &str, model: &str, index_name: &str, vec: &[f32]) -> Result<()> {
+    /// `details` is everything the server said besides the vector (its own
+    /// model id, precision, provider, …). Two things happen with it, per Rob
+    /// 2026-09-05: `precision` and `provider` become data on the Embedding
+    /// record (declared, pan.ttl 0.3.2), and the WHOLE of it is written
+    /// verbatim to `<vector>.json` beside the `.npy` — "save all the data".
+    /// `model` stays the functional label = the index name.
+    pub fn write_embedding(&self, id: &str, model: &str, index_name: &str, vec: &[f32], details: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
         let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
         self.add_vector(id, index_name, vec)?;
         self.flush()?;
         let rel = PanLayout::vector_rel_path(index_name, id);
-        let rec = enrich::EnrichmentRecord::new(gen_pan_id(), "Embedding", model)
+        if !details.is_empty() {
+            let side = self.layout.abs(&rel).with_extension("json");
+            write_atomic(&side, serde_json::to_string_pretty(details)?.as_bytes()).with_context(|| format!("write {}", side.display()))?;
+        }
+        let mut rec = enrich::EnrichmentRecord::new(gen_pan_id(), "Embedding", model)
             .field("dim", vec.len().to_string())
             .field("vectorPath", &rel);
+        for key in ["precision", "provider"] {
+            if let Some(v) = details.get(key).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+                rec = rec.field(key, v);
+            }
+        }
         let mut quads = enrich::record_quads(subject.as_str(), "embedding", std::slice::from_ref(&rec))?;
         quads.extend(enrich::ref_quads(subject.as_str(), "vectorData", &enrich::EnrichmentRef::new(model, &rel, 1))?);
         self.insert_quads(&quads)?;

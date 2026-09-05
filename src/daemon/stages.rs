@@ -165,7 +165,10 @@ async fn run_one(
                 // One index per embedding model: the model name IS the index
                 // name, so a second embedder never lands in the first one's
                 // space and search defaults to whatever pand embeds with.
-                s.pan.write_embedding(&id, &model, &model, &r.vector)?;
+                // Everything the server said besides the vector rides along:
+                // its HF model id, precision, provider … (m3rc's Salad answers
+                // label themselves). precision/provider land on the record.
+                s.pan.write_embedding(&id, &model, &model, &r.vector, &r.extra)?;
                 if let (Some(cm), Some(text)) = (caption_model, r.caption.as_deref()) {
                     if !text.trim().is_empty() {
                         write_caption(&s, &id, &cm, text)?;

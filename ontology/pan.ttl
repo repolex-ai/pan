@@ -29,11 +29,19 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.3.1" .
+    owl:versionInfo "0.3.2" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.3.2 (2026-09-05, RULED by Rob to m3rc and confirmed to w4r3z: "ONE index for
+#         both, named qwen3-vl-embedding-2b … Keep the precision / provider
+#         fields in the record as data; they are not part of the index name"):
+#   (1) pan:precision, pan:provider — data on a model-produced record saying
+#       how (bf16-cuda, 8-bit) and where (salad, phala, mac) the model ran.
+#       pan:model stays the functional label = the index name; two runs of
+#       the same network at different precisions share it (cosine 0.998).
+#
 # v0.3.1 (2026-09-04, RULED by Rob to nomia and confirmed to w4r3z in his own
 #         words: "I asked Nomia to send pan:relatedToId=<copia/Moment/id>"):
 #   (1) pan:relatedToId — the one field a PRODUCER writes in Pan's namespace:
@@ -279,6 +287,18 @@ pan:relatedToId a owl:ObjectProperty ;
 pan:model a owl:DatatypeProperty ;
     rdfs:label "model" ;
     rdfs:comment "The model that produced this record, as configured for the endpoint that ran. Data, not identity." ;
+    rdfs:domain git-lex:Thing ;
+    rdfs:range xsd:string .
+
+pan:precision a owl:DatatypeProperty ;
+    rdfs:label "precision" ;
+    rdfs:comment "Numeric precision the model ran at (bf16-cuda, 8-bit), as the server reported it. Data; never part of the index name." ;
+    rdfs:domain git-lex:Thing ;
+    rdfs:range xsd:string .
+
+pan:provider a owl:DatatypeProperty ;
+    rdfs:label "provider" ;
+    rdfs:comment "Where the model ran (salad, phala, mac), as the server reported it. Data; never part of the index name." ;
     rdfs:domain git-lex:Thing ;
     rdfs:range xsd:string .
 
