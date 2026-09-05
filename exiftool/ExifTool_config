@@ -1,37 +1,50 @@
 # ExifTool user config — teaches ExifTool (and every viewer that embeds it:
-# Xee³, XnView, digiKam …) the Pan and Copia XMP vocabularies, each with its
-# own family-0 group, so they show as "pan:Image properties" / "copia:Moment properties" (the class each block is about)
-# beside "XMP properties". The image files are untouched; only the reader
-# learns. Install: cp exiftool/ExifTool_config ~/.ExifTool_config, then
-# restart the viewer (ExifTool reads this once per process).
+# Xee³, XnView, digiKam …) the Pan, Copia and git-lex XMP vocabularies, each
+# with its own family-0 group, so they show as "pan:Image properties",
+# "copia:Moment properties" and "git-lex properties" beside "XMP properties".
+# The image files are untouched; only the reader learns. Install:
+#   cp exiftool/ExifTool_config ~/.ExifTool_config
+# then restart the viewer (ExifTool reads this once per process).
 # See subtexture/docs/pan/2026_09_04_EXIFTOOL_SECTIONS_AND_THE_IMAGE_DATA_STRUCTURE.md
+#
+# 2026-09-05: Pan's block is FLAT (no `pan:image` wrapper struct), the same
+# shape as copia's, so fields label as "Media Path", not "Image Media Path".
+# Only the two nested shapes Pan still writes are declared as structs: the
+# thumbnail, and the per-stage reference bags (captionData, poseData, …).
 
-# pan — Pan's block about the stored file. The image struct is declared so
-# nested fields are understood.
+%panRef = (
+    NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
+    STRUCT_NAME => 'PanRef',
+    model => { }, path => { }, count => { }, producedDate => { },
+);
+
+# pan — Pan's block about the stored file.
 %Image::ExifTool::UserDefined::pan = (
     GROUPS    => { 0 => 'pan:Image', 1 => 'pan:Image', 2 => 'Image' },
     NAMESPACE => { 'pan' => 'https://repolex.ai/ontology/pan/' },
     WRITABLE  => 'string',
-    image => {
+    thumbnail => {
         Struct => {
             NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
-            STRUCT_NAME => 'PanImage',
-            id          => { },
-            mediaPath   => { },
-            createdDate => { },
-            mediaType   => { },
-            width       => { },
-            height      => { },
-            readyDate   => { },
-            thumbnail   => {
-                Struct => {
-                    NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
-                    STRUCT_NAME => 'PanThumb',
-                    path => { }, width => { }, height => { },
-                },
-            },
+            STRUCT_NAME => 'PanThumb',
+            path => { }, width => { }, height => { },
         },
     },
+    # One entry per model run of a stage: where its data file is, how many
+    # items it holds, when it was produced.
+    captionData => { List => 'Bag', Struct => \%panRef },
+    poseData    => { List => 'Bag', Struct => \%panRef },
+    embedding   => { List => 'Bag', Struct => \%panRef },
+    regionData  => { List => 'Bag', Struct => \%panRef },
+);
+
+# git-lex — the universal identity and dating vocabulary every kit shares.
+# `id` is written in angle-bracket form, `<pan/Image/abc>`, the same text a
+# soul writes in frontmatter.
+%Image::ExifTool::UserDefined::gitlex = (
+    GROUPS    => { 0 => 'git-lex', 1 => 'git-lex', 2 => 'Image' },
+    NAMESPACE => { 'git-lex' => 'https://repolex.ai/ontology/git-lex/' },
+    WRITABLE  => 'string',
 );
 
 # copia — Horae's Moment block. Namespace and group ONLY: ExifTool picks up
@@ -45,8 +58,9 @@
 
 %Image::ExifTool::UserDefined = (
     'Image::ExifTool::XMP::Main' => {
-        pan   => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::pan' } },
-        copia => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::copia' } },
+        pan       => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::pan' } },
+        'git-lex' => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::gitlex' } },
+        copia     => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::copia' } },
     },
 );
 1;

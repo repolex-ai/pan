@@ -125,7 +125,7 @@ pub fn build_data_file(image_iri: &str, link_local: &str, records: &[EnrichmentR
             "    <rdf:type rdf:resource=\"{PAN_NS}{}\"/>\n",
             esc(&r.class)
         ));
-        out.push_str(&format!("    <git-lex:id rdf:resource=\"{}\"/>\n", esc(&r.iri())));
+        out.push_str(&format!("    <git-lex:id>{}</git-lex:id>\n", esc(&crate::xmp::bracket_of_iri(&r.iri()))));
         if !r.model.is_empty() {
             out.push_str(&format!("    <pan:model>{}</pan:model>\n", esc(&r.model)));
         }

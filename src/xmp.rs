@@ -85,12 +85,26 @@ pub struct ImagePacket {
     pub enrichment: Vec<(String, Vec<crate::enrich::EnrichmentRef>)>,
 }
 
-/// Serialize one enrichment reference bag inside the `pan:image` struct.
+/// git-lex's angle-bracket form of one of Pan's IRIs: `<pan/Image/abc>` for
+/// `https://repolex.ai/pan/Image/abc`. The kit namespace base is dropped and
+/// the `pan/Class/id` tail is kept — exactly what a soul writes in
+/// frontmatter, and what `iri_from_bracket` turns back into the IRI.
+pub fn bracket_of_iri(iri: &str) -> String {
+    match iri.strip_prefix(crate::config::PAN_MEDIA_NS) {
+        Some(tail) => format!("<pan/{tail}>"),
+        None => match iri.strip_prefix("https://repolex.ai/") {
+            Some(tail) => format!("<{tail}>"),
+            None => iri.to_string(),
+        },
+    }
+}
+
+/// Serialize one enrichment reference bag as a flat property of the media object.
 fn serialize_enrichment(local: &str, refs: &[crate::enrich::EnrichmentRef], indent: &str) -> String {
     let mut out = format!("{indent}<pan:{local}>\n{indent} <rdf:Bag>\n");
     for r in refs {
         out.push_str(&format!("{indent}  <rdf:li rdf:parseType=\"Resource\">\n"));
-        out.push_str(&format!("{indent}   <git-lex:id rdf:resource=\"{}Enrichment/{}\"/>\n", crate::config::PAN_MEDIA_NS, xml_escape(&r.id)));
+        out.push_str(&format!("{indent}   <git-lex:id>&lt;pan/Enrichment/{}&gt;</git-lex:id>\n", xml_escape(&r.id)));
         if !r.model.is_empty() {
             out.push_str(&format!("{indent}   <pan:model>{}</pan:model>\n", xml_escape(&r.model)));
         }
@@ -110,17 +124,23 @@ pub fn build_packet(p: &ImagePacket) -> String {
     compose_packet(None, &build_pan_description(p))
 }
 
-/// Pan's own root Description: the `pan:image` struct (identity, size,
-/// caption, thumbnail, enrichment references). `rdf:about=""` is the standard
-/// Adobe form — it resolves to the parser's base IRI, i.e. the media object.
-/// Nothing but pan: vocabulary lives here; other namespaces ride in their own
-/// Descriptions, untouched.
+/// Pan's own root Description: identity, size, caption, thumbnail and
+/// enrichment references as FLAT properties of the media object — the same
+/// shape the graph has and the same shape Horae's copia block uses, so a
+/// viewer labels them "Media Path", not "Image Media Path" (Rob, 2026-09-05:
+/// no wrapper struct). `rdf:about=""` is the standard Adobe form — it
+/// resolves to the parser's base IRI, i.e. the media object. Nothing but pan:
+/// vocabulary (plus the universal `git-lex:id`) lives here; other namespaces
+/// ride in their own Descriptions, untouched.
+///
+/// Every identity in the file is written in git-lex's angle-bracket form,
+/// `<pan/Image/id>` — the same text a soul writes in frontmatter — never the
+/// expanded IRI (Rob, 2026-09-05).
 pub fn build_pan_description(p: &ImagePacket) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str("    <rdf:Description rdf:about=\"\"");
     out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\" xmlns:git-lex=\"{}\">\n", crate::config::GIT_LEX_NS));
-    out.push_str("      <pan:image rdf:parseType=\"Resource\">\n");
-    out.push_str(&format!("       <git-lex:id rdf:resource=\"{}\"/>\n", xml_escape(&p.iri)));
+    out.push_str(&format!("      <git-lex:id>{}</git-lex:id>\n", xml_escape(&bracket_of_iri(&p.iri))));
     let mut ident: Vec<(String, FieldValue)> = vec![
         ("mediaPath".into(), FieldValue::Scalar(p.media_path.clone())),
         ("createdDate".into(), FieldValue::Scalar(p.created_date.clone())),
@@ -141,22 +161,21 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
         ident.push(("readyDate".into(), FieldValue::Scalar(r.clone())));
     }
     for (local, value) in &ident {
-        out.push_str(&serialize_field("pan", local, value, "       "));
+        out.push_str(&serialize_field("pan", local, value, "      "));
     }
     if let Some((path, w, h)) = &p.thumbnail {
-        out.push_str("       <pan:thumbnail rdf:parseType=\"Resource\">\n");
-        out.push_str(&format!("        <pan:path>{}</pan:path>\n", xml_escape(path)));
-        out.push_str(&format!("        <pan:width>{w}</pan:width>\n"));
-        out.push_str(&format!("        <pan:height>{h}</pan:height>\n"));
-        out.push_str("       </pan:thumbnail>\n");
+        out.push_str("      <pan:thumbnail rdf:parseType=\"Resource\">\n");
+        out.push_str(&format!("       <pan:path>{}</pan:path>\n", xml_escape(path)));
+        out.push_str(&format!("       <pan:width>{w}</pan:width>\n"));
+        out.push_str(&format!("       <pan:height>{h}</pan:height>\n"));
+        out.push_str("      </pan:thumbnail>\n");
     }
     for (local, refs) in &p.enrichment {
         if refs.is_empty() {
             continue;
         }
-        out.push_str(&serialize_enrichment(local, refs, "       "));
+        out.push_str(&serialize_enrichment(local, refs, "      "));
     }
-    out.push_str("      </pan:image>\n");
     out.push_str("    </rdf:Description>\n");
     out
 }
@@ -186,7 +205,7 @@ pub fn read_xmp_packet_from_bytes(png_bytes: &[u8]) -> Result<Option<String>> {
 
 /// Split an XMP packet into its top-level `<rdf:Description …>…</rdf:Description>`
 /// elements, verbatim. `pan_authored` says whether an element is Pan's own
-/// root block (it declares the pan namespace and carries `pan:image`), which
+/// root block (it declares the pan namespace and carries `pan:mediaPath`), which
 /// Pan re-authors on every write; every OTHER Description is someone else's
 /// and is preserved exactly as found.
 pub fn split_descriptions(packet: &str) -> Vec<(bool, String)> {
@@ -237,7 +256,12 @@ pub fn split_descriptions(packet: &str) -> Vec<(bool, String)> {
         }
         let Some(c) = close else { break };
         let elem = &body[s0..c];
-        let pan_authored = elem.contains("<pan:image") && elem.contains(PAN_NS);
+        // Pan's own block is the one that names a pan Image as its identity
+        // (`<git-lex:id>&lt;pan/Image/…&gt;`); files written before the block
+        // went flat carry the old `<pan:image` wrapper instead. A producer's
+        // block never has either, whatever pan: fields it tries to write.
+        let pan_authored = elem.contains(PAN_NS)
+            && (elem.contains("<git-lex:id>&lt;pan/Image/") || elem.contains("<pan:image"));
         out.push((pan_authored, elem.to_string()));
         i = c;
     }
@@ -1163,3 +1187,91 @@ mod legacy_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod flat_block_tests {
+    use super::*;
+
+    #[test]
+    fn pan_block_is_flat_and_every_id_is_in_bracket_form() {
+        let desc = build_pan_description(&ImagePacket {
+            iri: "https://repolex.ai/pan/Image/altocnif".into(),
+            media_path: "image/2026/09/05/20260905-000009-altocnif.png".into(),
+            created_date: "2026-09-05T00:00:09-07:00".into(),
+            thumbnail: Some(("thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), 341, 512)),
+            enrichment: vec![(
+                "captionData".into(),
+                vec![crate::enrich::EnrichmentRef {
+                    id: "jz55pu47".into(),
+                    model: "qwen/qwen3.8-27b".into(),
+                    path: "caption/2026/09/05/altocnif.xml".into(),
+                    count: 1,
+                    produced_date: "2026-09-05T10:02:40-07:00".into(),
+                }],
+            )],
+            ..Default::default()
+        });
+        assert!(!desc.contains("<pan:image"), "no wrapper struct: {desc}");
+        assert!(desc.contains("<git-lex:id>&lt;pan/Image/altocnif&gt;</git-lex:id>"), "image id in bracket form: {desc}");
+        assert!(desc.contains("<git-lex:id>&lt;pan/Enrichment/jz55pu47&gt;</git-lex:id>"), "enrichment id in bracket form: {desc}");
+        assert!(!desc.contains("https://repolex.ai/pan/"), "no expanded IRI anywhere in the block: {desc}");
+        // Flat fields sit directly on the Description.
+        assert!(desc.contains("      <pan:mediaPath>image/2026/09/05/20260905-000009-altocnif.png</pan:mediaPath>"));
+        // And the whole thing still parses, with mediaPath on the root subject.
+        let packet = compose_packet(None, &desc);
+        let parsed = parse_packet(&packet).unwrap();
+        let root = parsed.iter().find(|p| p.subject.is_none()).expect("root");
+        let mp: Vec<String> = root
+            .facts
+            .iter()
+            .filter(|(p, _)| p == &format!("{PAN_NS}mediaPath"))
+            .flat_map(|(_, v)| v.iter().map(|t| t.value().to_string()))
+            .collect();
+        assert_eq!(mp, vec!["image/2026/09/05/20260905-000009-altocnif.png"]);
+    }
+
+    #[test]
+    fn bracket_of_iri_covers_pan_and_other_kit_iris() {
+        assert_eq!(bracket_of_iri("https://repolex.ai/pan/Image/abc"), "<pan/Image/abc>");
+        assert_eq!(bracket_of_iri("https://repolex.ai/pan/Enrichment/x1"), "<pan/Enrichment/x1>");
+        assert_eq!(bracket_of_iri("https://repolex.ai/copia/Moment/m1"), "<copia/Moment/m1>");
+        assert_eq!(bracket_of_iri("urn:other"), "urn:other");
+    }
+
+    /// Dev aid, not a check: with `PAN_SAMPLE_PNG=/path/out.png` set, write a
+    /// tiny PNG carrying a full new-shape packet so `exiftool` can be pointed
+    /// at the real bytes. Does nothing otherwise.
+    #[test]
+    fn write_sample_png_when_asked() {
+        let Ok(out) = std::env::var("PAN_SAMPLE_PNG") else { return };
+        let desc = build_pan_description(&ImagePacket {
+            iri: "https://repolex.ai/pan/Image/altocnif".into(),
+            media_path: "image/2026/09/05/20260905-000009-altocnif.png".into(),
+            created_date: "2026-09-05T00:00:09-07:00".into(),
+            media_type: "image/png".into(),
+            width: Some(1280),
+            height: Some(1920),
+            caption: Some("A sample caption.".into()),
+            thumbnail: Some(("thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), 341, 512)),
+            enrichment: vec![(
+                "captionData".into(),
+                vec![crate::enrich::EnrichmentRef {
+                    id: "jz55pu47".into(),
+                    model: "qwen/qwen3.8-27b".into(),
+                    path: "caption/2026/09/05/altocnif.xml".into(),
+                    count: 1,
+                    produced_date: "2026-09-05T10:02:40-07:00".into(),
+                }],
+            )],
+            ..Default::default()
+        });
+        let copia = "<rdf:Description rdf:about=\"\" xmlns:copia=\"https://repolex.ai/ontology/copia/\" xmlns:pan=\"https://repolex.ai/ontology/pan/\" xmlns:git-lex=\"https://repolex.ai/ontology/git-lex/\">\n  <copia:momentId>296pm7ygm6np-1-4</copia:momentId>\n  <copia:seed>4123927538</copia:seed>\n  <git-lex:dateCreated>2026-09-04T21:31:34-07:00</git-lex:dateCreated>\n  <pan:relatedToId>&lt;copia/Moment/296pm7ygm6np-1-4&gt;</pan:relatedToId>\n</rdf:Description>";
+        let arrived = format!(
+            "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n{copia}\n</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+        );
+        let packet = compose_packet(Some(&arrived), &desc);
+        let png = write_packet_into_png_bytes(&super::tests::make_test_png(8, 8, 1), &packet).unwrap();
+        std::fs::write(&out, png).unwrap();
+    }
+}
+

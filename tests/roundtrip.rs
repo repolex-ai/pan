@@ -110,7 +110,11 @@ fn full_store_describe_query_search_roundtrip() {
 
     // ── Pan's block is in the image XMP ──
     let packet = pan::xmp::read_xmp_packet_from_bytes(&bytes).unwrap().expect("XMP written");
-    assert!(packet.contains(&wolf.iri), "pan: identity block present");
+    assert!(
+        packet.contains(&format!("&lt;pan/Image/{}&gt;", wolf.id)),
+        "pan: identity block present, id in angle-bracket form"
+    );
+    assert!(!packet.contains(&wolf.iri), "the expanded IRI is never written into the file");
     assert!(packet.contains("pan:createdDate"), "createdDate in the packet");
 
     // ── describe: merge facts, loud failure on unknown prefix ──
