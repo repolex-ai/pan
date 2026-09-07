@@ -45,44 +45,70 @@ pub fn link_for(stage: &str) -> Option<&'static str> {
     }
 }
 
-/// Run the ladder forever. One pass touches every store and every stage;
-/// then it sleeps `interval_secs`. Never exits on a failed item.
+/// Run the ladder forever: ONE independent loop per enabled stage, plus one
+/// for the ready mark. A stage that is slow (captions with thinking on), held
+/// (its door down), or breathing (busy) delays nobody else — every other
+/// stage keeps walking its own pending list (Rob, 2026-09-07). They share the
+/// one writer: model calls are async and hold no lock; only the short write
+/// after each answer touches the graph, and oxigraph serializes those.
 pub async fn run(d: Arc<Daemon>) {
     let every = Duration::from_secs(d.cfg.interval_secs);
-    loop {
-        let did = run_pass(d.clone()).await;
-        if did == 0 {
-            tokio::time::sleep(every).await;
+    let mut loops = tokio::task::JoinSet::new();
+    for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE, STAGE_SAM3] {
+        if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
+            continue;
         }
+        let d = d.clone();
+        loops.spawn(async move {
+            loop {
+                let mut did = 0usize;
+                for store in d.stores.clone() {
+                    match run_stage(d.clone(), store.clone(), stage).await {
+                        Ok(n) => did += n,
+                        Err(e) => tracing::error!(store = %store.entry.id, stage, "stage pass failed: {e:#}"),
+                    }
+                }
+                if did == 0 {
+                    tokio::time::sleep(every).await;
+                }
+            }
+        });
+    }
+    {
+        let d = d.clone();
+        loops.spawn(async move {
+            loop {
+                let did = mark_ready_pass(d.clone()).await;
+                if did == 0 {
+                    tokio::time::sleep(every).await;
+                }
+            }
+        });
+    }
+    // These loops never return; if one ever does (a panic inside it), say so
+    // loudly rather than run with a stage silently missing.
+    while let Some(r) = loops.join_next().await {
+        tracing::error!("a stage loop ended: {r:?} — pand should be restarted");
     }
 }
 
-/// One pass. Returns how many items were processed (success or failure), so
-/// the caller can go straight into the next pass while there is work.
-pub async fn run_pass(d: Arc<Daemon>) -> usize {
+/// One pass of the ready mark over every store: an object whose every
+/// configured stage has a record is ready as configured; say when. With no
+/// stages configured, ingest IS ready. Returns how many were marked.
+pub async fn mark_ready_pass(d: Arc<Daemon>) -> usize {
     let mut done = 0usize;
+    let required: Vec<(String, String)> = d
+        .cfg
+        .active_models()
+        .filter_map(|(stage, ep)| link_for(stage).map(|l| (l.to_string(), ep.model.clone())))
+        .collect();
     for store in d.stores.clone() {
-        for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE, STAGE_SAM3] {
-            if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
-                continue;
-            }
-            match run_stage(d.clone(), store.clone(), stage).await {
-                Ok(n) => done += n,
-                Err(e) => tracing::error!(store = %store.entry.id, stage, "stage pass failed: {e:#}"),
-            }
-        }
-        // Everything configured has a record → the object is ready as
-        // configured; say when. With no stages configured, ingest IS ready.
-        let required: Vec<(String, String)> = d
-            .cfg
-            .active_models()
-            .filter_map(|(stage, ep)| link_for(stage).map(|l| (l.to_string(), ep.model.clone())))
-            .collect();
         let s = store.clone();
+        let req = required.clone();
         let batch = d.cfg.batch * 4;
         match tokio::task::spawn_blocking(move || -> Result<usize> {
             let mut n = 0;
-            for id in s.pan.ready_candidates(&required, batch)? {
+            for id in s.pan.ready_candidates(&req, batch)? {
                 if s.pan.mark_ready(&id)? {
                     n += 1;
                 }
@@ -101,6 +127,24 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
         }
     }
     done
+}
+
+/// One pass of every stage over every store, in sequence. Kept for tests and
+/// one-shot tools; the daemon runs [`run`], where stages are independent.
+pub async fn run_pass(d: Arc<Daemon>) -> usize {
+    let mut done = 0usize;
+    for store in d.stores.clone() {
+        for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE, STAGE_SAM3] {
+            if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
+                continue;
+            }
+            match run_stage(d.clone(), store.clone(), stage).await {
+                Ok(n) => done += n,
+                Err(e) => tracing::error!(store = %store.entry.id, stage, "stage pass failed: {e:#}"),
+            }
+        }
+    }
+    done + mark_ready_pass(d).await
 }
 
 /// How long a whole stage waits after a call failed before reaching the model
