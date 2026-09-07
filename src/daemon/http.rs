@@ -56,6 +56,21 @@ pub struct HealthResponse {
     pub images_stored: u64,
     /// Calls made to model endpoints since this process started.
     pub model_calls: u64,
+    /// Per store: images and how many of them have each derived record.
+    pub counts: Vec<StoreCountsOut>,
+    /// Per stage: calls in flight allowed right now / the configured ceiling.
+    pub windows: HashMap<String, String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct StoreCountsOut {
+    pub store: String,
+    pub images: u64,
+    pub thumbnails: u64,
+    pub captions: u64,
+    pub embeddings: u64,
+    pub poses: u64,
+    pub regions: u64,
 }
 
 /// The receipt for one stored file.
@@ -180,6 +195,34 @@ fn media_iri_bracket(iri: &str) -> String {
 
 #[utoipa::path(get, path = "/health", tag = "meta", responses((status = 200, body = HealthResponse)))]
 async fn health(State(d): State<Shared>) -> Json<HealthResponse> {
+    let counts: Vec<StoreCountsOut> = {
+        let stores = d.stores.clone();
+        tokio::task::spawn_blocking(move || {
+            stores
+                .iter()
+                .map(|s| {
+                    let c = s.pan.counts().unwrap_or_default();
+                    StoreCountsOut {
+                        store: s.entry.id.clone(),
+                        images: c.images,
+                        thumbnails: c.thumbnails,
+                        captions: c.captions,
+                        embeddings: c.embeddings,
+                        poses: c.poses,
+                        regions: c.regions,
+                    }
+                })
+                .collect()
+        })
+        .await
+        .unwrap_or_default()
+    };
+    let windows: HashMap<String, String> = d
+        .funnels
+        .iter()
+        .filter(|(k, _)| d.cfg.models.get(*k).map(|m| m.enabled).unwrap_or(false))
+        .map(|(k, l)| (k.clone(), format!("{}/{}", l.window(), l.ceiling())))
+        .collect();
     Json(HealthResponse {
         ok: true,
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -195,6 +238,8 @@ async fn health(State(d): State<Shared>) -> Json<HealthResponse> {
         pid: std::process::id(),
         images_stored: d.counters.images_stored.load(std::sync::atomic::Ordering::Relaxed),
         model_calls: d.counters.model_calls.load(std::sync::atomic::Ordering::Relaxed),
+        counts,
+        windows,
     })
 }
 

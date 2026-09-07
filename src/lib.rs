@@ -272,6 +272,19 @@ pub struct PutResult {
     pub statements: usize,
 }
 
+/// How much of each kind a store holds, read from the graph alone: the
+/// number of images, and for each derived kind the number of images that
+/// have at least one record of it. `pending_*` is images minus that.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct StoreCounts {
+    pub images: u64,
+    pub thumbnails: u64,
+    pub captions: u64,
+    pub embeddings: u64,
+    pub poses: u64,
+    pub regions: u64,
+}
+
 /// What exists for one media object, read from the graph alone.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MediaState {
@@ -915,6 +928,31 @@ impl Pan {
             .and_then(|(_, v)| v.first().cloned())
             .unwrap_or_default();
         Ok(PanLayout::kind_of_path(&path).to_string())
+    }
+
+    /// Per-kind counts for `pand status` (Rob, 2026-09-07): how many images,
+    /// and how many of them have each derived record.
+    pub fn counts(&self) -> Result<StoreCounts> {
+        let count = |pattern: &str| -> Result<u64> {
+            let q = format!("SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ ?s a pan:Image . {pattern} }}");
+            Ok(match self.query(&q)? {
+                QueryResults::Solutions(mut sols) => sols
+                    .next()
+                    .and_then(|r| r.ok())
+                    .and_then(|r| r.get("n").map(term_str))
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
+                _ => 0,
+            })
+        };
+        Ok(StoreCounts {
+            images: count("")?,
+            thumbnails: count("?s pan:thumbnail ?t .")?,
+            captions: count("?s pan:captionItem ?c .")?,
+            embeddings: count("?s pan:embedding ?e .")?,
+            poses: count("?s pan:pose ?p .")?,
+            regions: count("?s pan:region ?r .")?,
+        })
     }
 
     /// The image's current caption text, if any.

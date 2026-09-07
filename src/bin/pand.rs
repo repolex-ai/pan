@@ -98,6 +98,22 @@ fn status() -> Result<()> {
             );
             println!("  serving {} for {} store(s), default {}", cfg.base_url(), h["stores"].as_array().map(|a| a.len()).unwrap_or(0), h["default"].as_str().unwrap_or("?"));
             println!("  since start: {} image(s) stored, {} model call(s) made", h["images_stored"].as_u64().unwrap_or(0), h["model_calls"].as_u64().unwrap_or(0));
+            if let Some(w) = h["windows"].as_object() {
+                let mut ws: Vec<String> = w.iter().map(|(k, v)| format!("{k} {}", v.as_str().unwrap_or("?"))).collect();
+                ws.sort();
+                println!("  in flight (window/ceiling): {}", ws.join(", "));
+            }
+            if let Some(rows) = h["counts"].as_array() {
+                println!("  {:<8} {:>7} {:>7} {:>8} {:>7} {:>6} {:>7}", "store", "images", "thumbs", "captions", "embeds", "poses", "regions");
+                for r in rows {
+                    let g = |k: &str| r[k].as_u64().unwrap_or(0);
+                    println!(
+                        "  {:<8} {:>7} {:>7} {:>8} {:>7} {:>6} {:>7}",
+                        r["store"].as_str().unwrap_or("?").chars().take(6).collect::<String>(),
+                        g("images"), g("thumbnails"), g("captions"), g("embeddings"), g("poses"), g("regions")
+                    );
+                }
+            }
             if stages.is_empty() {
                 println!("  model stages: none configured (ingest only)");
             } else {
