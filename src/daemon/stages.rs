@@ -153,12 +153,15 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
 }
 
 /// How long a whole stage waits after a call failed before reaching the model
-/// (connection refused / reset / timeout). One try per hold; the door being
-/// down is not a fact about the image.
-const DOOR_DOWN_HOLD: Duration = Duration::from_secs(60);
+/// (connection refused / reset / timeout, or Iris on :1215 answering
+/// `backend_down`). One try per hold; the server being down is not a fact
+/// about the image. 5 s matches Iris's own roster refresh (`percept.refresh_s`,
+/// 20 s -> 5 s, goodlux 2026-09-07): a failed call marks a Salad node down at
+/// Iris until its next refresh, so that interval is the whole gap Pan sees.
+const SERVER_DOWN_HOLD: Duration = Duration::from_secs(5);
 
 /// How long a stage breathes after `503 busy` (every node's queue full) before
-/// its next pass. Seconds, not minutes: the door asked for a retry "in seconds".
+/// its next pass. Seconds, not minutes: Iris asks for a retry in seconds.
 const BUSY_WAIT: Duration = Duration::from_secs(5);
 
 async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str) -> Result<usize> {
@@ -239,19 +242,19 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                     None => (format!("{e:#}"), false),
                 };
                 tracing::warn!(store = %store.entry.id, id = %item.id, stage, terminal, "stage failed: {msg}");
-                // Failed before reaching the model: the DOOR is down, not the
+                // Failed before reaching the model: the SERVER is down, not the
                 // image. Hold the address and drop the rest of this batch.
                 // `backend_down` (m3rc, 2026-09-05) means NO node is up — same thing.
-                let door_down = !terminal
+                let server_down = !terminal
                     && (msg.contains("error sending request")
                         || msg.contains("connection")
                         || msg.contains("timed out")
                         || msg.contains("backend_down"));
                 d.record_attempt(&store.entry.id, &item.id, stage, msg, terminal);
-                if door_down {
-                    d.stage_hold.lock().unwrap().insert(hold_key.clone(), Instant::now() + DOOR_DOWN_HOLD);
+                if server_down {
+                    d.stage_hold.lock().unwrap().insert(hold_key.clone(), Instant::now() + SERVER_DOWN_HOLD);
                     let next = if target.via == "primary" && ep.fallback.is_some() { "switching to fallback" } else { "waiting" };
-                    tracing::warn!(stage, url = %target.url, via = target.via, "endpoint unreachable — holding it for {}s, {next}", DOOR_DOWN_HOLD.as_secs());
+                    tracing::warn!(stage, url = %target.url, via = target.via, "endpoint unreachable — holding it for {}s, {next}", SERVER_DOWN_HOLD.as_secs());
                     set.abort_all();
                 }
             }
