@@ -85,23 +85,6 @@ impl PanLayout {
         format!("{media_kind}/{kind}/{tail}")
     }
 
-    /// The pre-2026-09-05 layout had the media kind and every derived kind as
-    /// siblings (`image/YYYY/…`, `thumbnail/…`, `caption/…`, `vectors/…`).
-    /// For a path in that shape, the path it has now; `None` if it already is
-    /// where it belongs. Every stored object then was an image.
-    pub fn relocated(rel: &str) -> Option<String> {
-        let (first, rest) = rel.split_once('/')?;
-        match first {
-            "image" => {
-                let seg = rest.split('/').next()?;
-                let is_year = seg.len() == 4 && seg.chars().all(|c| c.is_ascii_digit());
-                is_year.then(|| format!("image/{}/{rest}", Self::SOURCE_SUBDIR))
-            }
-            "thumbnail" | "caption" | "pose" | "sam3" | "region" | "vectors" | "embedding" => Some(format!("image/{first}/{rest}")),
-            _ => None,
-        }
-    }
-
     /// Resolve every root. `media_root_override` is the fully-resolved media
     /// root pand computed from its config (volume + store id); `None` = the
     /// pocket default.
@@ -200,18 +183,5 @@ mod tests {
         assert_eq!(PanLayout::media_rel_path("image", "2026/09/04", &stem, "png"), "image/source/2026/09/04/20260904-034953-k7m2p9x4.png");
         assert_eq!(PanLayout::enrichment_rel_path("image", "caption", "2026/09/04", "k7m2p9x4", Some("m")), "image/caption/2026/09/04/k7m2p9x4.m.xml");
         assert_eq!(PanLayout::media_kind("video/mp4"), "video");
-    }
-
-    #[test]
-    fn old_sibling_layout_relocates_under_the_media_kind() {
-        assert_eq!(PanLayout::relocated("image/2026/09/05/20260905-100234-y77p4v36.png").as_deref(), Some("image/source/2026/09/05/20260905-100234-y77p4v36.png"));
-        assert_eq!(PanLayout::relocated("thumbnail/2026/09/05/x.jpg").as_deref(), Some("image/thumbnail/2026/09/05/x.jpg"));
-        assert_eq!(PanLayout::relocated("caption/2026/09/05/x.qwen/qwen3.8-27b.xml").as_deref(), Some("image/caption/2026/09/05/x.qwen/qwen3.8-27b.xml"));
-        assert_eq!(PanLayout::relocated("pose/2026/09/05/x.rtmw-x-l.png").as_deref(), Some("image/pose/2026/09/05/x.rtmw-x-l.png"));
-        assert_eq!(PanLayout::relocated("vectors/qwen3-vl-embedding-2b/x.npy").as_deref(), Some("image/vectors/qwen3-vl-embedding-2b/x.npy"));
-        // Already home: nothing to do.
-        assert_eq!(PanLayout::relocated("image/source/2026/09/05/x.png"), None);
-        assert_eq!(PanLayout::relocated("image/thumbnail/2026/09/05/x.jpg"), None);
-        assert_eq!(PanLayout::relocated("video/source/2026/09/05/x.mp4"), None);
     }
 }

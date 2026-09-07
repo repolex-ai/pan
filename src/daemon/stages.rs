@@ -34,13 +34,18 @@ pub const STAGE_CAPTION: &str = "caption";
 pub const STAGE_POSE: &str = "pose";
 pub const STAGE_SAM3: &str = "sam3";
 
-/// Which graph link a stage's completion is read from.
+/// Which graph link a stage's completion is read from: the data REFERENCE
+/// (`pan:regionData`, …), not the record link (`pan:region`). A run that
+/// found nothing writes a reference with count 0 and no records, and it must
+/// still count as done — keyed on records, an empty pose or segment run was
+/// handed back every pass forever (seen 2026-09-07: hundreds of sam3 lines
+/// per five minutes for one image).
 pub fn link_for(stage: &str) -> Option<&'static str> {
     match stage {
-        STAGE_EMBED => Some("embedding"),
-        STAGE_CAPTION => Some("captionItem"),
-        STAGE_POSE => Some("pose"),
-        STAGE_SAM3 => Some("region"),
+        STAGE_EMBED => Some("vectorData"),
+        STAGE_CAPTION => Some("captionData"),
+        STAGE_POSE => Some("poseData"),
+        STAGE_SAM3 => Some("regionData"),
         _ => None,
     }
 }

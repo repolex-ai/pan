@@ -294,8 +294,8 @@ pub struct MediaState {
     pub created_date: String,
     pub ready_date: Option<String>,
     pub thumbnail: bool,
-    /// enrichment link (embedding / captionItem / region / pose) → models
-    /// that have a record on this object.
+    /// enrichment reference (vectorData / captionData / regionData / poseData)
+    /// → models that have run on this object (a run with nothing found counts).
     pub enrichment: Vec<(String, Vec<String>)>,
 }
 
@@ -347,164 +347,8 @@ impl Pan {
         let store = Store::open(&layout.oxigraph_root)
             .with_context(|| format!("open oxigraph at {}", layout.oxigraph_root.display()))?;
         let pan = Pan { cfg, layout, store_id: store_id.to_string(), store, indexes: Mutex::new(HashMap::new()) };
-        pan.relocate_media_root()?;
         pan.declare_store()?;
-        pan.migrate_created_date()?;
-        pan.migrate_layout()?;
         Ok(pan)
-    }
-
-    /// pan.ttl 0.3.3 (Rob, 2026-09-05): the Image's creation time is the
-    /// universal `git-lex:dateCreated`, not `pan:createdDate`. Records written
-    /// under the old name are moved once, at open; idempotent, and a no-op on a
-    /// store that never had them. The XMP inside each file catches up the next
-    /// time a stage rewrites it.
-    fn migrate_created_date(&self) -> Result<()> {
-        let count_q = "SELECT (COUNT(?s) AS ?n) WHERE { ?s pan:createdDate ?d }";
-        let n: u64 = match self.query(count_q)? {
-            QueryResults::Solutions(mut sols) => sols
-                .next()
-                .and_then(|s| s.ok())
-                .and_then(|s| s.get("n").map(term_str))
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
-            _ => 0,
-        };
-        if n == 0 {
-            return Ok(());
-        }
-        let up = format!(
-            "PREFIX pan: <{PAN_NS}>\nPREFIX git-lex: <{GIT_LEX_NS}>\n\
-             DELETE {{ ?s pan:createdDate ?d }} INSERT {{ ?s git-lex:dateCreated ?d }} WHERE {{ ?s pan:createdDate ?d }}"
-        );
-        self.store.update(&up).map_err(|e| anyhow!("migrate pan:createdDate → git-lex:dateCreated: {e}"))?;
-        tracing::info!(store = %self.store_id, moved = n, "pan:createdDate → git-lex:dateCreated (pan.ttl 0.3.3)");
-        Ok(())
-    }
-
-    /// Layout of 2026-09-05 (Rob): media type first, `source` for the bytes,
-    /// derived folders beside it. Files written in the old sibling layout are
-    /// moved once, at open, and every path fact in the graph follows; then each
-    /// image's XMP is rewritten so the file agrees with the graph. Idempotent —
-    /// a store already in the new shape does nothing. Runs on the media volume,
-    /// so on the first open after upgrade it takes minutes and says so.
-    fn migrate_layout(&self) -> Result<()> {
-        let q = "SELECT ?s ?p ?o WHERE { ?s ?p ?o . FILTER(?p IN (pan:mediaPath, pan:path, pan:vectorPath, pan:overlayPath, pan:maskPath)) }";
-        let mut moves: Vec<(NamedNode, NamedNode, String, String)> = Vec::new();
-        if let QueryResults::Solutions(sols) = self.query(q)? {
-            for sol in sols {
-                let sol = sol?;
-                let (Some(Term::NamedNode(s)), Some(Term::NamedNode(p)), Some(Term::Literal(o))) = (sol.get("s"), sol.get("p"), sol.get("o")) else { continue };
-                if let Some(new) = PanLayout::relocated(o.value()) {
-                    moves.push((s.clone(), p.clone(), o.value().to_string(), new));
-                }
-            }
-        }
-        if moves.is_empty() {
-            return Ok(());
-        }
-        tracing::info!(store = %self.store_id, files = moves.len(), "moving to the type-first layout (image/source, image/thumbnail, …)");
-        let mut moved = 0usize;
-        let mut missing = 0usize;
-        for (i, (s, p, old, new)) in moves.iter().enumerate() {
-            let from = self.layout.abs(old);
-            let to = self.layout.abs(new);
-            if from.exists() {
-                if let Some(parent) = to.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::rename(&from, &to).with_context(|| format!("move {} → {}", from.display(), to.display()))?;
-                moved += 1;
-            } else if !to.exists() {
-                missing += 1;
-            }
-            let old_q = Quad::new(s.clone(), p.clone(), Literal::new_simple_literal(old), GraphName::DefaultGraph);
-            let new_q = Quad::new(s.clone(), p.clone(), Literal::new_simple_literal(new), GraphName::DefaultGraph);
-            self.store.remove(old_q.as_ref())?;
-            self.store.insert(new_q.as_ref())?;
-            if (i + 1) % 2000 == 0 {
-                tracing::info!(store = %self.store_id, done = i + 1, of = moves.len(), "layout move");
-            }
-        }
-        // Also-moved files with no path fact of their own: the vector .json
-        // beside each .npy.
-        let mut jsons = 0usize;
-        for (_, _, old, new) in &moves {
-            if old.ends_with(".npy") {
-                let (a, b) = (self.layout.abs(old).with_extension("json"), self.layout.abs(new).with_extension("json"));
-                if a.exists() {
-                    fs::rename(&a, &b).ok();
-                    jsons += 1;
-                }
-            }
-        }
-        // The file must agree with the graph: rewrite every image's XMP.
-        let ids: Vec<String> = match self.query("SELECT ?s WHERE { ?s a pan:Image }")? {
-            QueryResults::Solutions(sols) => sols.filter_map(|s| s.ok()).filter_map(|s| s.get("s").map(term_str)).map(|iri| bare_id(&iri)).collect(),
-            _ => Vec::new(),
-        };
-        let mut restamped = 0usize;
-        for (i, id) in ids.iter().enumerate() {
-            match self.restamp(id) {
-                Ok(()) => restamped += 1,
-                Err(e) => tracing::warn!(store = %self.store_id, id = %id, "restamp after layout move: {e:#}"),
-            }
-            if (i + 1) % 2000 == 0 {
-                tracing::info!(store = %self.store_id, done = i + 1, of = ids.len(), "rewriting XMP for the new paths");
-            }
-        }
-        tracing::info!(store = %self.store_id, moved, missing, vector_json = jsons, restamped, "type-first layout in place");
-        Ok(())
-    }
-
-    /// The media root moved (2026-09-05: `<volume>/_pan/<id>/media` became
-    /// `<volume>/<id>/pan`, the soul's folder first). If the graph remembers a
-    /// different media root than the one configured now, and that old
-    /// directory still exists while the new one does not, move the whole
-    /// directory once — every path inside is relative, so nothing else
-    /// changes — and drop the emptied parents. Then `declare_store` records
-    /// the new root. A store whose remembered root matches does nothing.
-    fn relocate_media_root(&self) -> Result<()> {
-        let node = NamedNode::new(format!("{PAN_MEDIA_NS}Store/{}", self.store_id)).map_err(|e| anyhow!("store IRI: {e}"))?;
-        let remembered: Option<PathBuf> = self
-            .store
-            .quads_for_pattern(Some((&node).into()), Some(pan_iri("mediaRoot").as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
-            .filter_map(|q| q.ok())
-            .find_map(|q| match q.object {
-                Term::Literal(l) => Some(PathBuf::from(l.value())),
-                _ => None,
-            });
-        let Some(old) = remembered else { return Ok(()) };
-        let new = &self.layout.media_root;
-        if &old == new || !old.is_dir() {
-            return Ok(());
-        }
-        let new_is_empty = !new.exists() || fs::read_dir(new).map(|mut d| d.next().is_none()).unwrap_or(false);
-        if !new_is_empty {
-            return Err(anyhow!(
-                "media root moved from {} to {}, but the new location already has files; move or empty it by hand and start again",
-                old.display(),
-                new.display()
-            ));
-        }
-        if new.exists() {
-            fs::remove_dir(new).ok();
-        }
-        if let Some(parent) = new.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-        }
-        fs::rename(&old, new).with_context(|| format!("move media root {} → {}", old.display(), new.display()))?;
-        // Tidy the emptied parents (`<volume>/_pan/<id>`, then `<volume>/_pan`).
-        let mut p = old.parent();
-        for _ in 0..2 {
-            let Some(dir) = p else { break };
-            if fs::read_dir(dir).map(|mut d| d.next().is_none()).unwrap_or(false) {
-                fs::remove_dir(dir).ok();
-            }
-            p = dir.parent();
-        }
-        tracing::info!(store = %self.store_id, from = %old.display(), to = %new.display(), "media root moved");
-        Ok(())
     }
 
     /// Forget every embedding in this store — the records, the reference
@@ -797,7 +641,7 @@ impl Pan {
             facts.iter().find(|(p, _)| p == &format!("{PAN_NS}{local}")).and_then(|(_, v)| v.first().cloned())
         };
         let mut enrichment = Vec::new();
-        for link in ["embedding", "captionItem", "region", "pose"] {
+        for link in ["vectorData", "captionData", "regionData", "poseData"] {
             let mut models: Vec<String> = Vec::new();
             for (pred, values) in &facts {
                 if pred != &format!("{PAN_NS}{link}") {
@@ -829,8 +673,11 @@ impl Pan {
         }))
     }
 
-    /// Images with NO record from `model` under `link_local` — the stage
-    /// engine's work list. The graph is the queue: pending means absent.
+    /// Images with NO reference from `model` under `ref_local` (`regionData`,
+    /// `poseData`, `captionData`, `vectorData`) — the stage engine's work
+    /// list. The graph is the queue: pending means absent. The reference is
+    /// written on every run, records or none, so a run that found nothing
+    /// still retires the image.
     ///
     /// Newest first: new files take priority, and older images missing data
     /// are filled in whenever there is slack (Rob, 2026-09-05). Because
@@ -841,10 +688,10 @@ impl Pan {
     /// `since` is the backfill floor: an RFC 3339 local-offset date-time, the
     /// same shape `git-lex:dateCreated` is written in, so a plain string compare
     /// is a time compare. Images created before it are not pending.
-    pub fn pending_for(&self, link_local: &str, model: &str, limit: usize, since: Option<&str>) -> Result<Vec<PendingItem>> {
+    pub fn pending_for(&self, ref_local: &str, model: &str, limit: usize, since: Option<&str>) -> Result<Vec<PendingItem>> {
         // Segmentation is grounded on the caption's OBJECTS line, so an image
         // is not pending for it until it has a caption.
-        let needs = if link_local == "region" { "?s pan:caption ?cap ." } else { "" };
+        let needs = if ref_local == "regionData" { "?s pan:caption ?cap ." } else { "" };
         let model_lit = model.replace('\\', "\\\\").replace('"', "\\\"");
         let floor = match since {
             Some(s) => format!("FILTER(STR(?d) >= \"{}\")", s.replace('\\', "\\\\").replace('"', "\\\"")),
@@ -854,7 +701,7 @@ impl Pan {
             "SELECT ?s ?path ?type ?d WHERE {{
                ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; git-lex:dateCreated ?d .
                {needs}
-               FILTER NOT EXISTS {{ ?s pan:{link_local} ?e . ?e pan:model \"{model_lit}\" }}
+               FILTER NOT EXISTS {{ ?s pan:{ref_local} ?e . ?e pan:model \"{model_lit}\" }}
                {floor}
              }} ORDER BY DESC(?d) ?s LIMIT {limit}"
         );
@@ -870,7 +717,7 @@ impl Pan {
         Ok(out)
     }
 
-    /// Images that have every listed (link, model) pair recorded but no
+    /// Images that have every listed (reference, model) pair recorded but no
     /// `pan:readyDate` yet — the ones the ladder can now mark ready.
     pub fn ready_candidates(&self, required: &[(String, String)], limit: usize) -> Result<Vec<String>> {
         let mut q = String::from("SELECT ?s WHERE { ?s a pan:Image . FILTER NOT EXISTS { ?s pan:readyDate ?r } ");
@@ -1401,102 +1248,5 @@ impl Pan {
 impl Drop for Pan {
     fn drop(&mut self) {
         let _ = self.flush();
-    }
-}
-
-#[cfg(test)]
-mod layout_migration_tests {
-    use super::*;
-
-    /// A store written in the pre-2026-09-05 sibling layout is moved to the
-    /// type-first layout on open: files, path facts, and the XMP in the file.
-    #[test]
-    fn old_sibling_layout_is_moved_on_open() {
-        let dir = tempfile::tempdir().unwrap();
-        let png = crate::xmp::tests::make_test_png(64, 96, 3);
-        let (id, new_media, new_thumb) = {
-            let pan = Pan::open(dir.path()).unwrap();
-            let put = pan.put(&png, Some("image/png")).unwrap();
-            let thumb = pan
-                .facts_for(&put.id)
-                .unwrap()
-                .iter()
-                .find(|(p, _)| p == &format!("{PAN_NS}thumbnail"))
-                .and_then(|(_, v)| v.first().cloned())
-                .expect("thumbnail node");
-            let tpath = match pan.query(&format!("SELECT ?p WHERE {{ <{thumb}> pan:path ?p }}")).unwrap() {
-                QueryResults::Solutions(mut sols) => sols.next().and_then(|s| s.ok()).and_then(|s| s.get("p").map(term_str)).expect("thumbnail path"),
-                _ => panic!("thumbnail path query"),
-            };
-            assert!(put.media_path.starts_with("image/source/"), "{}", put.media_path);
-            assert!(tpath.starts_with("image/thumbnail/"), "{tpath}");
-
-            // Push it back into the OLD shape: image/YYYY/… and thumbnail/YYYY/…
-            let old_media = put.media_path.replacen("image/source/", "image/", 1);
-            let old_thumb = tpath.replacen("image/thumbnail/", "thumbnail/", 1);
-            for (subject_iri, pred, from, to) in [
-                (put.iri.clone(), "mediaPath", put.media_path.clone(), old_media.clone()),
-                (thumb.clone(), "path", tpath.clone(), old_thumb.clone()),
-            ] {
-                let s = NamedNode::new(subject_iri).unwrap();
-                let p = pan_iri(pred);
-                pan.store.remove(Quad::new(s.clone(), p.clone(), Literal::new_simple_literal(&from), GraphName::DefaultGraph).as_ref()).unwrap();
-                pan.store.insert(Quad::new(s, p, Literal::new_simple_literal(&to), GraphName::DefaultGraph).as_ref()).unwrap();
-                let (a, b) = (pan.layout.abs(&from), pan.layout.abs(&to));
-                fs::create_dir_all(b.parent().unwrap()).unwrap();
-                fs::rename(&a, &b).unwrap();
-            }
-            assert!(pan.layout.abs(&old_media).exists() && !pan.layout.abs(&put.media_path).exists());
-            (put.id.clone(), put.media_path.clone(), tpath)
-        };
-
-        // Reopen: the migration runs.
-        let pan = Pan::open(dir.path()).unwrap();
-        assert!(pan.layout.abs(&new_media).exists(), "media bytes moved to image/source");
-        assert!(pan.layout.abs(&new_thumb).exists(), "thumbnail moved to image/thumbnail");
-        assert!(!pan.layout.abs(&new_media.replacen("image/source/", "image/", 1)).exists(), "old media path is gone");
-        let state = pan.state_for(&id).unwrap().expect("state");
-        assert!(state.thumbnail);
-        let facts = pan.facts_for(&id).unwrap();
-        let mp = facts.iter().find(|(p, _)| p == &format!("{PAN_NS}mediaPath")).map(|(_, v)| v[0].clone()).unwrap();
-        assert_eq!(mp, new_media, "graph path fact follows the file");
-        let bytes = fs::read(pan.layout.abs(&new_media)).unwrap();
-        let packet = crate::xmp::read_xmp_packet_from_bytes(&bytes).unwrap().expect("xmp");
-        assert!(packet.contains(&format!("<pan:mediaPath>{new_media}</pan:mediaPath>")), "XMP rewritten with the new path");
-        assert!(!packet.contains("<pan:mediaPath>image/2026"), "no old path left in the file");
-        // Idempotent: a third open moves nothing (would fail on a missing source otherwise).
-        drop(pan);
-        Pan::open(dir.path()).unwrap();
-    }
-
-    /// The media root moved on the volume: `<volume>/_pan/<id>/media` →
-    /// `<volume>/<id>/pan`. The whole directory is moved once, the store node
-    /// remembers the new root, and the old parents are tidied away.
-    #[test]
-    fn media_root_moves_with_its_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let vol = tempfile::tempdir().unwrap();
-        let old_root = vol.path().join("_pan").join("abc123").join("media");
-        let new_root = vol.path().join("abc123").join("pan");
-        let (id, media_path) = {
-            let pan = Pan::open_with(dir.path(), "abc123", Some(&old_root)).unwrap();
-            let put = pan.put(&crate::xmp::tests::make_test_png(32, 32, 9), Some("image/png")).unwrap();
-            assert!(old_root.join(&put.media_path).exists());
-            (put.id.clone(), put.media_path.clone())
-        };
-        let pan = Pan::open_with(dir.path(), "abc123", Some(&new_root)).unwrap();
-        assert!(new_root.join(&media_path).exists(), "bytes moved with the root");
-        assert!(!old_root.exists(), "old media dir gone");
-        assert!(!vol.path().join("_pan").exists(), "emptied _pan parent tidied away");
-        assert!(pan.state_for(&id).unwrap().is_some());
-        let node = format!("{PAN_MEDIA_NS}Store/abc123");
-        let root_fact = match pan.query(&format!("SELECT ?r WHERE {{ <{node}> pan:mediaRoot ?r }}")).unwrap() {
-            QueryResults::Solutions(mut sols) => sols.next().and_then(|s| s.ok()).and_then(|s| s.get("r").map(term_str)).unwrap(),
-            _ => panic!(),
-        };
-        assert_eq!(PathBuf::from(root_fact), new_root, "the store node remembers the new root");
-        // Same root again: nothing happens.
-        drop(pan);
-        Pan::open_with(dir.path(), "abc123", Some(&new_root)).unwrap();
     }
 }

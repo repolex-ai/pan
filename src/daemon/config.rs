@@ -188,7 +188,7 @@ pub fn media_folder_name(store_id: &str) -> String {
 
 impl DaemonConfig {
     /// The media root for one store under this config, or None for the pocket
-    /// default: `<media_volume>/<first 6 chars of the id>/media`. The full path
+    /// default: `<media_volume>/<first 6 chars of the id>/pan`. The full path
     /// is declared in the store's graph as `pan:mediaRoot`; nothing reads it by
     /// convention.
     pub fn media_root_for(&self, store_id: &str) -> Option<PathBuf> {
