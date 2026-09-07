@@ -494,6 +494,43 @@ impl Pan {
         Ok(())
     }
 
+    /// Forget every embedding in this store — the records, the reference
+    /// bags, the vector sidecars, the search index — and rewrite the XMP of
+    /// each image that had one. Pending means absent, so the embed stage
+    /// refills them on its next pass. Used when the vectors are to be remade
+    /// (Rob, 2026-09-07: the ones so far are test data; staying on the 2B).
+    pub fn wipe_embeddings(&self) -> Result<usize> {
+        let ids: Vec<String> = match self.query("SELECT DISTINCT ?s WHERE { { ?s pan:embedding ?e } UNION { ?s pan:vectorData ?v } }")? {
+            QueryResults::Solutions(sols) => sols.filter_map(|r| r.ok()).filter_map(|r| r.get("s").map(term_str)).map(|iri| bare_id(&iri)).collect(),
+            _ => Vec::new(),
+        };
+        let up = format!(
+            "PREFIX pan: <{PAN_NS}>\n\
+             DELETE {{ ?s pan:embedding ?e . ?e ?p ?o }} WHERE {{ ?s pan:embedding ?e . ?e ?p ?o }} ;\n\
+             DELETE {{ ?s pan:vectorData ?v . ?v ?p ?o }} WHERE {{ ?s pan:vectorData ?v . ?v ?p ?o }}"
+        );
+        self.store.update(&up).map_err(|e| anyhow!("wipe embeddings: {e}"))?;
+        self.indexes.lock().unwrap().clear();
+        if self.layout.hnsw_root.exists() {
+            fs::remove_dir_all(&self.layout.hnsw_root).with_context(|| format!("remove {}", self.layout.hnsw_root.display()))?;
+        }
+        if let Ok(kinds) = fs::read_dir(&self.layout.media_root) {
+            for k in kinds.filter_map(|e| e.ok()) {
+                let v = k.path().join(PanLayout::VECTORS_SUBDIR);
+                if v.is_dir() {
+                    fs::remove_dir_all(&v).with_context(|| format!("remove {}", v.display()))?;
+                }
+            }
+        }
+        for id in &ids {
+            if let Err(e) = self.restamp(id) {
+                tracing::warn!(store = %self.store_id, id = %id, "restamp after embedding wipe: {e:#}");
+            }
+        }
+        tracing::info!(store = %self.store_id, images = ids.len(), "embeddings wiped; the embed stage refills them");
+        Ok(ids.len())
+    }
+
     /// The store node `<pan/Store/<id>>`: type, identity, media root. Replaces
     /// a stale media root (the volume moved) rather than adding a second one.
     fn declare_store(&self) -> Result<()> {
