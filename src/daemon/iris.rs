@@ -255,7 +255,11 @@ impl Iris {
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see_pose shape: {e}")))
     }
 
-    pub async fn segment(&self, t: &Target, bytes: &[u8], media_type: &str, prompts: &[String]) -> std::result::Result<Vec<Region>, CallError> {
+    /// `/percept/segment` (m3rc's door → SAM3 on Salad): `prompts` is one
+    /// comma-separated string of nouns. Returns the parsed regions AND the
+    /// whole response as it came, so the caller can keep everything the
+    /// server said (area, verts, provenance) beside the record.
+    pub async fn segment(&self, t: &Target, bytes: &[u8], media_type: &str, prompts: &[String]) -> std::result::Result<(Vec<Region>, serde_json::Value), CallError> {
         if prompts.is_empty() {
             return Err(CallError::Terminal("segment needs at least one prompt".into()));
         }
@@ -263,8 +267,8 @@ impl Iris {
             .part("image", Self::image_part(bytes, media_type).map_err(|e| CallError::Terminal(e.to_string()))?)
             .text("prompts", prompts.join(","));
         let v = self.post(t, form).await?;
-        let out: SegmentResponse = serde_json::from_value(v).map_err(|e| CallError::Transient(format!("segment shape: {e}")))?;
-        Ok(out.regions)
+        let out: SegmentResponse = serde_json::from_value(v.clone()).map_err(|e| CallError::Transient(format!("segment shape: {e}")))?;
+        Ok((out.regions, v))
     }
 }
 

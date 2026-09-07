@@ -14,8 +14,11 @@
 //!                           pan:Caption from the same image load
 //!   caption `/see`        → pan:Caption only (a second captioning model)
 //!   pose    `/see_pose`   → one pan:Pose per detected person + skeleton overlay
-//!   sam3    `/segment`    → pan:Region per grounded prompt — HELD: needs a
-//!                           ruling on where scene prompts live (see TODO doc)
+//!   sam3    `/percept/segment` → pan:Region per grounded prompt. The prompts
+//!                           are the caption's OBJECTS line (the segmentable
+//!                           nouns the caption model listed), so this stage
+//!                           waits for a caption. The whole server answer is
+//!                           kept as a .json beside the record.
 
 use anyhow::{anyhow, Context, Result};
 use std::sync::Arc;
@@ -59,7 +62,7 @@ pub async fn run(d: Arc<Daemon>) {
 pub async fn run_pass(d: Arc<Daemon>) -> usize {
     let mut done = 0usize;
     for store in d.stores.clone() {
-        for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE] {
+        for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE, STAGE_SAM3] {
             if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
                 continue;
             }
@@ -337,9 +340,72 @@ async fn run_one(
             })
             .await??;
         }
+        STAGE_SAM3 => {
+            // Prompts come from the caption's OBJECTS line. pending_for only
+            // hands over images that have a caption, so an empty list here
+            // means the caption listed nothing segmentable: record a
+            // zero-region run so the image is not asked forever.
+            let caption = store.pan.caption_of(&item.id)?.unwrap_or_default();
+            let prompts = objects_from_caption(&caption);
+            let s = store.clone();
+            let id = item.id.clone();
+            let model = ep.model.clone();
+            if prompts.is_empty() {
+                tokio::task::spawn_blocking(move || {
+                    s.pan.write_enrichment(&id, "sam3", "region", "regionData", &model, &[], None).map(|_| ())
+                })
+                .await??;
+                return Ok(());
+            }
+            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let (regions, raw) = d.iris.segment(t, &bytes, media_type, &prompts).await?;
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                let records: Vec<EnrichmentRecord> = regions
+                    .iter()
+                    .map(|r| {
+                        let mut rec = EnrichmentRecord::new(gen_pan_id(), "Region", &model)
+                            .field("descriptor", &r.prompt)
+                            .field("score", format!("{:.4}", r.score));
+                        if r.bbox.len() == 4 {
+                            rec = rec.field("bbox", format!("{},{},{},{}", r.bbox[0], r.bbox[1], r.bbox[2], r.bbox[3]));
+                        }
+                        if let Some(p) = &r.polygon {
+                            if !p.is_empty() {
+                                rec = rec.field("polygon", p);
+                            }
+                        }
+                        rec
+                    })
+                    .collect();
+                let rel = s.pan.write_enrichment(&id, "sam3", "region", "regionData", &model, &records, None)?;
+                // Everything the server said, verbatim, beside the record.
+                let side = s.pan.layout.abs(&rel).with_extension("json");
+                crate::write_atomic(&side, serde_json::to_string_pretty(&raw)?.as_bytes())?;
+                Ok(())
+            })
+            .await??;
+        }
         other => return Err(anyhow!("stage {other} is not runnable")),
     }
     Ok(())
+}
+
+/// The nouns a caption's `OBJECTS:` line lists — the prompt's own contract
+/// ("ONLY the distinct, physically-segmentable things"). Comma-separated,
+/// trimmed, lower-cased, de-duplicated, order kept. No line → nothing.
+pub fn objects_from_caption(text: &str) -> Vec<String> {
+    let Some(line) = text.lines().map(str::trim).find(|l| l.to_ascii_uppercase().starts_with("OBJECTS:")) else {
+        return Vec::new();
+    };
+    let rest = &line["OBJECTS:".len()..];
+    let mut out: Vec<String> = Vec::new();
+    for raw in rest.split(',') {
+        let n = raw.trim().trim_matches(|c: char| c == '.' || c == ';').trim().to_lowercase();
+        if !n.is_empty() && n.len() <= 40 && !out.contains(&n) {
+            out.push(n);
+        }
+    }
+    out
 }
 
 /// One model's caption: a Caption record in its own data file, and the
@@ -350,3 +416,20 @@ fn write_caption(s: &StoreHandle, id: &str, model: &str, text: &str) -> Result<(
     s.pan.write_enrichment(id, "caption", "captionItem", "captionData", model, std::slice::from_ref(&rec), Some(model))?;
     s.pan.set_caption(id, text)
 }
+
+#[cfg(test)]
+mod objects_tests {
+    use super::objects_from_caption;
+
+    #[test]
+    fn objects_line_becomes_prompts() {
+        let text = "A woman kneels on mossy stone.\n\nOBJECTS: woman, hair, eyes, vines, moss, boots, boots, stones, stone arch, plants\n\nSCENE:\nsceneCamera: low angle";
+        assert_eq!(
+            objects_from_caption(text),
+            ["woman", "hair", "eyes", "vines", "moss", "boots", "stones", "stone arch", "plants"]
+        );
+        assert!(objects_from_caption("no objects line here").is_empty());
+        assert!(objects_from_caption("OBJECTS: ").is_empty());
+    }
+}
+

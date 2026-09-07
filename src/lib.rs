@@ -829,6 +829,9 @@ impl Pan {
     /// same shape `git-lex:dateCreated` is written in, so a plain string compare
     /// is a time compare. Images created before it are not pending.
     pub fn pending_for(&self, link_local: &str, model: &str, limit: usize, since: Option<&str>) -> Result<Vec<PendingItem>> {
+        // Segmentation is grounded on the caption's OBJECTS line, so an image
+        // is not pending for it until it has a caption.
+        let needs = if link_local == "region" { "?s pan:caption ?cap ." } else { "" };
         let model_lit = model.replace('\\', "\\\\").replace('"', "\\\"");
         let floor = match since {
             Some(s) => format!("FILTER(STR(?d) >= \"{}\")", s.replace('\\', "\\\\").replace('"', "\\\"")),
@@ -837,6 +840,7 @@ impl Pan {
         let q = format!(
             "SELECT ?s ?path ?type ?d WHERE {{
                ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; git-lex:dateCreated ?d .
+               {needs}
                FILTER NOT EXISTS {{ ?s pan:{link_local} ?e . ?e pan:model \"{model_lit}\" }}
                {floor}
              }} ORDER BY DESC(?d) ?s LIMIT {limit}"
@@ -911,6 +915,15 @@ impl Pan {
             .and_then(|(_, v)| v.first().cloned())
             .unwrap_or_default();
         Ok(PanLayout::kind_of_path(&path).to_string())
+    }
+
+    /// The image's current caption text, if any.
+    pub fn caption_of(&self, id: &str) -> Result<Option<String>> {
+        Ok(self
+            .facts_for(id)?
+            .iter()
+            .find(|(p, _)| p == &format!("{PAN_NS}caption"))
+            .and_then(|(_, v)| v.first().cloned()))
     }
 
     fn created_date_of(&self, id: &str) -> Result<String> {
