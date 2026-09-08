@@ -275,6 +275,106 @@ pub struct PutResult {
 /// How much of each kind a store holds, read from the graph alone: the
 /// number of images, and for each derived kind the number of images that
 /// have at least one record of it. `pending_*` is images minus that.
+/// The scene fields of pan.ttl 0.3.4, in the order the file writes them.
+/// A JSON key from the caption model must be one of these, a description, or
+/// sceneObjects; anything else is refused (the ontology is the whole of what
+/// Pan may say). The test below checks every name here against pan.ttl.
+pub const SCENE_FIELDS: [&str; 12] = [
+    "sceneCamera", "sceneFraming", "scenePosture", "sceneGaze", "sceneExpression", "sceneAction",
+    "sceneEnergy", "sceneMood", "sceneLighting", "sceneStyle", "sceneMedium", "sceneLocation",
+];
+
+/// Every property the caption stage writes on the object.
+pub const PERCEPTION_FIELDS: [&str; 15] = [
+    "shortDescription", "longDescription", "sceneObjects",
+    "sceneCamera", "sceneFraming", "scenePosture", "sceneGaze", "sceneExpression", "sceneAction",
+    "sceneEnergy", "sceneMood", "sceneLighting", "sceneStyle", "sceneMedium", "sceneLocation",
+];
+
+/// What the caption stage learned about one object: the model's JSON answer,
+/// checked against the vocabulary.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Perception {
+    pub short_description: String,
+    pub long_description: String,
+    pub scene_objects: Vec<String>,
+    pub scene: Vec<(String, String)>,
+}
+
+impl Perception {
+    /// Parse the caption model's answer: one JSON object (a ```json fence
+    /// around it is tolerated) whose keys are property names. Unknown keys
+    /// are an error naming the key — the prompt is the schema and the
+    /// ontology is the law; nothing undeclared is stored.
+    pub fn parse(answer: &str) -> std::result::Result<Self, String> {
+        let s = answer.trim();
+        let start = s.find('{').ok_or("answer has no JSON object")?;
+        let end = s.rfind('}').ok_or("answer has no JSON object")?;
+        if end < start {
+            return Err("answer has no JSON object".into());
+        }
+        let v: serde_json::Value = serde_json::from_str(&s[start..=end]).map_err(|e| format!("answer is not valid JSON: {e}"))?;
+        let serde_json::Value::Object(m) = v else { return Err("answer is not a JSON object".into()) };
+        let mut out = Perception::default();
+        for (k, v) in &m {
+            match k.as_str() {
+                "shortDescription" => out.short_description = v.as_str().unwrap_or_default().trim().to_string(),
+                "longDescription" => out.long_description = v.as_str().unwrap_or_default().trim().to_string(),
+                "sceneObjects" => {
+                    let items: Vec<String> = match v {
+                        serde_json::Value::Array(a) => a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect(),
+                        serde_json::Value::String(s) => s.split(',').map(str::to_string).collect(),
+                        _ => return Err("sceneObjects must be a list of strings".into()),
+                    };
+                    for raw in items {
+                        let n = raw.trim().trim_matches(|c: char| c == '.' || c == ';').trim().to_lowercase();
+                        if !n.is_empty() && n.len() <= 40 && !out.scene_objects.contains(&n) {
+                            out.scene_objects.push(n);
+                        }
+                    }
+                }
+                other if SCENE_FIELDS.contains(&other) => {
+                    let val = match v {
+                        serde_json::Value::String(s) => s.trim().to_string(),
+                        serde_json::Value::Null => String::new(),
+                        x => x.to_string(),
+                    };
+                    if !val.is_empty() && val.to_ascii_uppercase() != "N/A" {
+                        out.scene.push((other.to_string(), val));
+                    }
+                }
+                other => return Err(format!("answer has a key the Pan ontology does not declare: {other}")),
+            }
+        }
+        if out.short_description.is_empty() || out.long_description.is_empty() {
+            return Err("answer is missing shortDescription or longDescription".into());
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod perception_tests {
+    use super::*;
+
+    #[test]
+    fn every_perception_field_is_declared_in_the_ontology() {
+        for f in PERCEPTION_FIELDS {
+            assert!(PAN_ONTOLOGY_TTL.contains(&format!("\npan:{f} a owl:DatatypeProperty")), "pan:{f} is not declared in pan.ttl");
+        }
+    }
+
+    #[test]
+    fn parses_the_answer_and_refuses_undeclared_keys() {
+        let p = Perception::parse("```json\n{\"shortDescription\": \"A wolf.\", \"longDescription\": \"A grey wolf on a ridge.\", \"sceneObjects\": [\"Wolf\", \"rock\", \"wolf\", \"\"], \"sceneMood\": \"still\", \"sceneGaze\": null}\n```").unwrap();
+        assert_eq!(p.scene_objects, ["wolf", "rock"]);
+        assert_eq!(p.scene, [("sceneMood".to_string(), "still".to_string())]);
+        let e = Perception::parse("{\"shortDescription\": \"x\", \"longDescription\": \"y\", \"vibe\": \"z\"}").unwrap_err();
+        assert!(e.contains("vibe"), "{e}");
+        assert!(Perception::parse("{\"shortDescription\": \"x\"}").is_err());
+    }
+}
+
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct StoreCounts {
     pub images: u64,
@@ -689,9 +789,15 @@ impl Pan {
     /// same shape `git-lex:dateCreated` is written in, so a plain string compare
     /// is a time compare. Images created before it are not pending.
     pub fn pending_for(&self, ref_local: &str, model: &str, limit: usize, since: Option<&str>) -> Result<Vec<PendingItem>> {
-        // Segmentation is grounded on the caption's OBJECTS line, so an image
-        // is not pending for it until it has a caption.
-        let needs = if ref_local == "regionData" { "?s pan:caption ?cap ." } else { "" };
+        // What a stage needs before it can run (goodlux, 2026-09-08):
+        // segmentation is prompted with the scene objects, and the embedding
+        // is built from the image AND its XMP, so both wait for the caption
+        // stage to have written its fields.
+        let needs = match ref_local {
+            "regionData" => "?s pan:sceneObjects ?obj .",
+            "vectorData" => "?s pan:longDescription ?ld .",
+            _ => "",
+        };
         let model_lit = model.replace('\\', "\\\\").replace('"', "\\\"");
         let floor = match since {
             Some(s) => format!("FILTER(STR(?d) >= \"{}\")", s.replace('\\', "\\\\").replace('"', "\\\"")),
@@ -802,13 +908,15 @@ impl Pan {
         })
     }
 
-    /// The image's current caption text, if any.
-    pub fn caption_of(&self, id: &str) -> Result<Option<String>> {
+    /// The image's scene objects (pan:sceneObjects), one per value — the
+    /// segmentation prompts. Empty when the caption stage has not run.
+    pub fn scene_objects_of(&self, id: &str) -> Result<Vec<String>> {
         Ok(self
             .facts_for(id)?
             .iter()
-            .find(|(p, _)| p == &format!("{PAN_NS}caption"))
-            .and_then(|(_, v)| v.first().cloned()))
+            .find(|(p, _)| p == &format!("{PAN_NS}sceneObjects"))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default())
     }
 
     fn created_date_of(&self, id: &str) -> Result<String> {
@@ -887,20 +995,32 @@ impl Pan {
         self.restamp(id)
     }
 
-    /// Set the object's current caption text (replaces any previous value).
-    pub fn set_caption(&self, id: &str, text: &str) -> Result<()> {
+    /// Write what the caption stage learned onto the object (pan.ttl 0.3.4):
+    /// the two descriptions, the scene objects (one value each) and the scene
+    /// fields. Every previous value of those properties goes first, so a
+    /// re-caption replaces rather than accumulates. XMP refreshed.
+    pub fn set_perception(&self, id: &str, p: &Perception) -> Result<()> {
         let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
         let mut t = self.store.start_transaction().context("start transaction")?;
-        let old: Vec<Quad> = self
-            .store
-            .quads_for_pattern(Some((&subject).into()), Some(pan_iri("caption").as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
-            .collect::<std::result::Result<_, _>>()
-            .context("read caption")?;
-        for q in &old {
-            t.remove(q.as_ref());
+        for local in PERCEPTION_FIELDS {
+            let old: Vec<Quad> = self
+                .store
+                .quads_for_pattern(Some((&subject).into()), Some(pan_iri(local).as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+                .collect::<std::result::Result<_, _>>()
+                .with_context(|| format!("read {local}"))?;
+            for q in &old {
+                t.remove(q.as_ref());
+            }
         }
-        t.insert(self.quad(&subject, "caption", text).as_ref());
-        t.commit().context("commit caption")?;
+        t.insert(self.quad(&subject, "shortDescription", &p.short_description).as_ref());
+        t.insert(self.quad(&subject, "longDescription", &p.long_description).as_ref());
+        for o in &p.scene_objects {
+            t.insert(self.quad(&subject, "sceneObjects", o).as_ref());
+        }
+        for (local, value) in &p.scene {
+            t.insert(self.quad(&subject, local, value).as_ref());
+        }
+        t.commit().context("commit perception")?;
         self.restamp(id)
     }
 
@@ -1221,7 +1341,10 @@ impl Pan {
             media_type: pan_field("mediaType").unwrap_or_default(),
             width: pan_field("width").and_then(|v| v.parse().ok()),
             height: pan_field("height").and_then(|v| v.parse().ok()),
-            caption: pan_field("caption"),
+            short_description: pan_field("shortDescription"),
+            long_description: pan_field("longDescription"),
+            scene_objects: facts.iter().find(|(p, _)| p == &format!("{PAN_NS}sceneObjects")).map(|(_, v)| v.clone()).unwrap_or_default(),
+            scene: SCENE_FIELDS.iter().filter_map(|l| pan_field(l).map(|v| (l.to_string(), v))).collect(),
             ready_date: pan_field("readyDate"),
             thumbnail,
             enrichment,

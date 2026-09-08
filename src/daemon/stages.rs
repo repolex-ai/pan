@@ -292,12 +292,16 @@ async fn run_one(
 
     match stage {
         STAGE_EMBED => {
+            // The embedding is multimodal: the image AND the complete XMP
+            // packet in the file, embedded together as one vector (goodlux,
+            // 2026-09-08). pending_for holds an image back until the caption
+            // stage has written its fields, so the packet carries them.
+            let packet = crate::xmp::read_xmp_packet_from_bytes(&bytes)?.unwrap_or_default();
             d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.see_embed(t, &bytes, media_type).await?;
+            let r = d.iris.embed(t, &bytes, media_type, &packet).await?;
             let s = store.clone();
             let id = item.id.clone();
             let model = ep.model.clone();
-            let caption_model = ep.caption_model.clone();
             tokio::task::spawn_blocking(move || -> Result<()> {
                 // One index per embedding model: the model name IS the index
                 // name, so a second embedder never lands in the first one's
@@ -305,13 +309,7 @@ async fn run_one(
                 // Everything the server said besides the vector rides along:
                 // its HF model id, precision, provider … (m3rc's Salad answers
                 // label themselves). precision/provider land on the record.
-                s.pan.write_embedding(&id, &model, &model, &r.vector, &r.extra)?;
-                if let (Some(cm), Some(text)) = (caption_model, r.caption.as_deref()) {
-                    if !text.trim().is_empty() {
-                        write_caption(&s, &id, &cm, text)?;
-                    }
-                }
-                Ok(())
+                s.pan.write_embedding(&id, &model, &model, &r.vector, &r.extra)
             })
             .await??;
         }
@@ -336,11 +334,16 @@ async fn run_one(
             if r.text.trim().is_empty() {
                 return Err(CallError::Terminal("no caption text returned".into()).into());
             }
+            // The answer is one JSON object keyed by property name (pan.ttl
+            // 0.3.4). A key the ontology does not declare fails this image
+            // for good: the prompt is the schema, and a wrong prompt is a
+            // config error, not something to retry.
+            let perception = crate::Perception::parse(&r.text).map_err(|e| CallError::Terminal(format!("caption answer: {e}")))?;
             let s = store.clone();
             let id = item.id.clone();
             let model = r.model.clone().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| ep.model.clone());
             let text = r.text.clone();
-            tokio::task::spawn_blocking(move || write_caption(&s, &id, &model, &text)).await??;
+            tokio::task::spawn_blocking(move || write_perception(&s, &id, &model, &text, &perception)).await??;
         }
         STAGE_POSE => {
             d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -404,12 +407,11 @@ async fn run_one(
             .await??;
         }
         STAGE_SAM3 => {
-            // Prompts come from the caption's OBJECTS line. pending_for only
-            // hands over images that have a caption, so an empty list here
-            // means the caption listed nothing segmentable: record a
-            // zero-region run so the image is not asked forever.
-            let caption = store.pan.caption_of(&item.id)?.unwrap_or_default();
-            let prompts = objects_from_caption(&caption);
+            // Prompts are the image's pan:sceneObjects. pending_for only
+            // hands over images that have them, so an empty list here means
+            // the caption named nothing segmentable: record a zero-region
+            // run so the image is not asked forever.
+            let prompts = store.pan.scene_objects_of(&item.id)?;
             let s = store.clone();
             let id = item.id.clone();
             let model = ep.model.clone();
@@ -453,46 +455,12 @@ async fn run_one(
     Ok(())
 }
 
-/// The nouns a caption's `OBJECTS:` line lists — the prompt's own contract
-/// ("ONLY the distinct, physically-segmentable things"). Comma-separated,
-/// trimmed, lower-cased, de-duplicated, order kept. No line → nothing.
-pub fn objects_from_caption(text: &str) -> Vec<String> {
-    let Some(line) = text.lines().map(str::trim).find(|l| l.to_ascii_uppercase().starts_with("OBJECTS:")) else {
-        return Vec::new();
-    };
-    let rest = &line["OBJECTS:".len()..];
-    let mut out: Vec<String> = Vec::new();
-    for raw in rest.split(',') {
-        let n = raw.trim().trim_matches(|c: char| c == '.' || c == ';').trim().to_lowercase();
-        if !n.is_empty() && n.len() <= 40 && !out.contains(&n) {
-            out.push(n);
-        }
-    }
-    out
-}
-
-/// One model's caption: a Caption record in its own data file, and the
-/// image's current caption text set to it (the newest caption is the one a
-/// viewer sees).
-fn write_caption(s: &StoreHandle, id: &str, model: &str, text: &str) -> Result<()> {
-    let rec = EnrichmentRecord::new(gen_pan_id(), "Caption", model).field("text", text);
+/// The model's whole answer goes into the Caption record verbatim (save
+/// everything); the parsed fields go onto the object.
+fn write_perception(s: &StoreHandle, id: &str, model: &str, raw: &str, p: &crate::Perception) -> Result<()> {
+    let rec = EnrichmentRecord::new(gen_pan_id(), "Caption", model).field("text", raw);
     s.pan.write_enrichment(id, "caption", "captionItem", "captionData", model, std::slice::from_ref(&rec), Some(model))?;
-    s.pan.set_caption(id, text)
+    s.pan.set_perception(id, p)
 }
 
-#[cfg(test)]
-mod objects_tests {
-    use super::objects_from_caption;
-
-    #[test]
-    fn objects_line_becomes_prompts() {
-        let text = "A woman kneels on mossy stone.\n\nOBJECTS: woman, hair, eyes, vines, moss, boots, boots, stones, stone arch, plants\n\nSCENE:\nsceneCamera: low angle";
-        assert_eq!(
-            objects_from_caption(text),
-            ["woman", "hair", "eyes", "vines", "moss", "boots", "stones", "stone arch", "plants"]
-        );
-        assert!(objects_from_caption("no objects line here").is_empty());
-        assert!(objects_from_caption("OBJECTS: ").is_empty());
-    }
-}
 

@@ -74,8 +74,15 @@ pub struct ImagePacket {
     pub media_type: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    /// The current caption text — the one thing a plain viewer should show.
-    pub caption: Option<String>,
+    /// One sentence (pan:shortDescription) and the detailed description
+    /// (pan:longDescription) the caption stage wrote.
+    pub short_description: Option<String>,
+    pub long_description: Option<String>,
+    /// Every physical thing the caption model named (pan:sceneObjects), one
+    /// value each — an rdf:Bag in the file.
+    pub scene_objects: Vec<String>,
+    /// The scene fields, `(local name, value)`, e.g. `("sceneMood", "serene")`.
+    pub scene: Vec<(String, String)>,
     /// Set once every configured stage has a record.
     pub ready_date: Option<String>,
     /// The thumbnail Pan made: (media-root-relative path, width, height).
@@ -146,7 +153,7 @@ pub fn build_packet(p: &ImagePacket) -> String {
 pub fn build_pan_description(p: &ImagePacket) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str("    <rdf:Description rdf:about=\"\"");
-    out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n"));
+    out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\">\n"));
     out.push_str(&format!("      <pan:id>{}</pan:id>\n", xml_escape(&bracket_of_iri(&p.iri))));
     out.push_str(&format!("      <pan:dateCreated>{}</pan:dateCreated>\n", xml_escape(&p.created_date)));
     let mut ident: Vec<(String, FieldValue)> = vec![
@@ -161,23 +168,23 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
     if let Some(h) = p.height {
         ident.push(("height".into(), FieldValue::Scalar(h.to_string())));
     }
-    if let Some(c) = &p.caption {
-        ident.push(("caption".into(), FieldValue::Scalar(c.clone())));
+    if let Some(c) = &p.short_description {
+        ident.push(("shortDescription".into(), FieldValue::Scalar(c.clone())));
+    }
+    if let Some(c) = &p.long_description {
+        ident.push(("longDescription".into(), FieldValue::Scalar(c.clone())));
+    }
+    if !p.scene_objects.is_empty() {
+        ident.push(("sceneObjects".into(), FieldValue::Bag(p.scene_objects.clone())));
+    }
+    for (local, value) in &p.scene {
+        ident.push((local.clone(), FieldValue::Scalar(value.clone())));
     }
     if let Some(r) = &p.ready_date {
         ident.push(("readyDate".into(), FieldValue::Scalar(r.clone())));
     }
     for (local, value) in &ident {
         out.push_str(&serialize_field("pan", local, value, "      "));
-    }
-    // The caption also goes where every viewer and editor looks for a
-    // caption: `dc:description`, the one standard field the stack keeps
-    // (copia metadata spec 2026-06-03; goodlux, 2026-09-07). Standard
-    // XMP form: a language alternative with the default entry.
-    if let Some(c) = &p.caption {
-        out.push_str("      <dc:description>\n       <rdf:Alt>\n");
-        out.push_str(&format!("        <rdf:li xml:lang=\"x-default\">{}</rdf:li>\n", xml_escape(c)));
-        out.push_str("       </rdf:Alt>\n      </dc:description>\n");
     }
     if let Some((path, w, h)) = &p.thumbnail {
         out.push_str("      <pan:thumbnail rdf:parseType=\"Resource\">\n");
@@ -1215,7 +1222,10 @@ mod flat_block_tests {
             iri: "https://repolex.ai/pan/Image/altocnif".into(),
             media_path: "image/2026/09/05/20260905-000009-altocnif.png".into(),
             created_date: "2026-09-05T00:00:09-07:00".into(),
-            caption: Some("A wolf on a ridge at dusk.".into()),
+            short_description: Some("A wolf on a ridge at dusk.".into()),
+            long_description: Some("A grey wolf stands on a rocky ridge, lit from the left by a low sun.".into()),
+            scene_objects: vec!["wolf".into(), "rock".into(), "sky".into()],
+            scene: vec![("sceneMood".into(), "still".into())],
             thumbnail: Some(("thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), 341, 512)),
             enrichment: vec![(
                 "captionData".into(),
@@ -1233,7 +1243,11 @@ mod flat_block_tests {
         assert!(desc.contains("<pan:id>&lt;pan/Image/altocnif&gt;</pan:id>"), "image id in bracket form: {desc}");
         assert!(desc.contains("<pan:id>&lt;pan/Enrichment/jz55pu47&gt;</pan:id>"), "enrichment id in bracket form: {desc}");
         assert!(desc.contains("<pan:dateCreated>"), "creation time under pan:, not git-lex: {desc}");
-        assert!(desc.contains("<dc:description>") && desc.contains("<rdf:li xml:lang=\"x-default\">"), "the caption in the standard caption field: {desc}");
+        assert!(desc.contains("<pan:shortDescription>A wolf on a ridge at dusk.</pan:shortDescription>"), "{desc}");
+        assert!(desc.contains("<pan:longDescription>"), "{desc}");
+        assert!(desc.contains("<pan:sceneObjects><rdf:Bag><rdf:li>wolf</rdf:li><rdf:li>rock</rdf:li><rdf:li>sky</rdf:li></rdf:Bag></pan:sceneObjects>"), "scene objects as a bag: {desc}");
+        assert!(desc.contains("<pan:sceneMood>still</pan:sceneMood>"), "{desc}");
+        assert!(!desc.contains("dc:"), "no dc:description: {desc}");
         assert!(!desc.contains("git-lex"), "the file carries only the pan namespace in Pan's block: {desc}");
         assert!(!desc.contains("https://repolex.ai/pan/"), "no expanded IRI anywhere in the block: {desc}");
         // Flat fields sit directly on the Description.
@@ -1272,7 +1286,9 @@ mod flat_block_tests {
             media_type: "image/png".into(),
             width: Some(1280),
             height: Some(1920),
-            caption: Some("A sample caption.".into()),
+            short_description: Some("A sample caption.".into()),
+            long_description: Some("A sample caption, at length.".into()),
+            scene_objects: vec!["wolf".into()],
             thumbnail: Some(("thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), 341, 512)),
             enrichment: vec![(
                 "captionData".into(),

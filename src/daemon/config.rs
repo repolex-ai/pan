@@ -26,11 +26,12 @@ pub const DEFAULT_BIND: &str = "127.0.0.1";
 pub struct ModelEndpoint {
     pub url: String,
     pub model: String,
-    /// The instruction sent with the image to a captioning endpoint
-    /// (`/percept/vlm` takes `prompt`). Required for the caption stage: the
-    /// prompt is Pan's to supply, never the door's (Rob, 2026-09-05). Several
-    /// questions in ONE prompt is the cheap way (m3rc: every prompt resends
-    /// the image).
+    /// The instruction sent with the image to a captioning endpoint. In the
+    /// config file this is the NAME of a plain-text file under
+    /// `~/.config/pan/prompts/` (goodlux, 2026-09-08: the prompt text lives
+    /// somewhere a person edits, not inside YAML); after `load` it holds
+    /// the file's text. Required for the caption stage. The prompt is the
+    /// schema: the model answers with the property names it names.
     pub prompt: Option<String>,
     /// Provider-side request fields for a captioning endpoint, sent VERBATIM
     /// as the `extra_body` form field; the door merges them into the
@@ -39,11 +40,6 @@ pub struct ModelEndpoint {
     /// and so do `max_tokens` / `temperature`. Pan has no opinion about the
     /// contents and the door has none either. Absent = nothing sent.
     pub extra_body: Option<serde_json::Value>,
-    /// For an `embed` endpoint that is really `/see_embed` (one image load
-    /// gives caption AND vector): the captioning model's name, so the caption
-    /// it returns is recorded under the right `pan:model`. Absent = the
-    /// caption is not recorded from this stage.
-    pub caption_model: Option<String>,
     /// Test mode (Rob, 2026-09-03): `enabled: false` keeps the stage declared
     /// but pand never calls it — ingest still lands, `pan state` says "off",
     /// and turning it back on later picks up every image missing this model's
@@ -210,12 +206,22 @@ impl DaemonConfig {
         if stores.is_empty() {
             stores.push(default_store_dir());
         }
-        for m in yml.models.values() {
+        let mut models = yml.models;
+        for (stage, m) in models.iter_mut() {
             if m.url.is_empty() || m.model.is_empty() {
                 return Err(anyhow!("{}: every model needs both url and model", path.display()));
             }
             if m.concurrency == 0 {
                 return Err(anyhow!("{}: model concurrency must be at least 1", path.display()));
+            }
+            if let Some(name) = m.prompt.take() {
+                let file = path.parent().unwrap_or(Path::new(".")).join("prompts").join(name.trim());
+                let text = std::fs::read_to_string(&file)
+                    .with_context(|| format!("{}: stage {stage} names prompt file {} which cannot be read", path.display(), file.display()))?;
+                if text.trim().is_empty() {
+                    return Err(anyhow!("{}: prompt file {} is empty", path.display(), file.display()));
+                }
+                m.prompt = Some(text);
             }
         }
         Ok(DaemonConfig {
@@ -225,7 +231,7 @@ impl DaemonConfig {
             media_volume: yml.media_volume.map(|p| expand_home(&p)),
             bind: DEFAULT_BIND.to_string(),
             port: yml.port.unwrap_or(DEFAULT_PORT),
-            models: yml.models,
+            models,
             interval_secs: yml.interval_secs.unwrap_or(5),
             batch: yml.batch.unwrap_or(8),
             backfill_since: yml.backfill_since.filter(|s| !s.trim().is_empty()),

@@ -58,10 +58,10 @@ The id is the last eight characters and is the same id the graph uses:
 `<pan/Image/v5ha2dfd>`.
 
 The image's XMP carries everything Pan knows about it under the `pan`
-namespace: id, creation time, path, type, size, caption, thumbnail, and one
-reference per model run. The caption is also written to `dc:description`,
-the standard caption field, so any viewer or editor shows it. What a producer
-wrote into the file before it arrived is kept untouched.
+namespace: id, creation time, path, type, size, the short and long
+descriptions, the scene objects, the scene fields, the thumbnail, and one
+reference per model run. What a producer wrote into the file before it
+arrived is kept untouched.
 
 ## Pan as an indexer of existing media — planned
 
@@ -108,7 +108,7 @@ are idle.
 | File | Scope | What it is for |
 |---|---|---|
 | `~/.config/pan/config.yml` | this machine | the daemon: port, the stores it serves, model endpoints and their auth, concurrency ceilings, backfill floor |
-| `~/.config/pan/prompts/<stage>.md` — planned | this machine | default prompt text per stage, plain text, one file each |
+| `~/.config/pan/prompts/<name>` | this machine | prompt text, plain text, one file per stage; the config names the file |
 | `~/.config/pan/logs/calls/YYYY-MM-DD.jsonl` — planned | this machine | one line per model call: store, image, stage, model, status, latency, sizes; pruned after `log_keep_days` |
 | `<store>/pan.yml` | one store | the store's id; **planned:** its media root, which stages run, which prompt file each uses, its backfill floor, which ontologies apply |
 | `<store>/_ignore/` | one store | the graph, the vector index, the ontology copy; never edited by hand |
@@ -130,8 +130,7 @@ models:
   caption:
     url: http://127.0.0.1:1215/percept/vlm
     model: qwen/qwen3.8-27b
-    prompt: |                            # planned: `prompt: prompts/caption.md` instead of inline text
-      ...
+    prompt: caption.md                   # a file in ~/.config/pan/prompts/
     extra_body: { ... }                  # provider settings passed through untouched
     concurrency: 2                       # a ceiling; the window opens and closes with the server's answers
     enabled: true
@@ -160,14 +159,17 @@ ontologies: [pan]                        # what vocabulary a model answer may us
 A soul store gets its id from the repo and its vocabulary from the kits
 installed in the repo, so it needs none of the planned lines.
 
-### How a model answer becomes metadata — planned
+### How a model answer becomes metadata
 
-The caption prompt asks the model for one JSON object whose keys are property
-names from the store's ontologies, for example `dc:description`, and a scene
-field from an installed kit. Pan writes every key it recognises onto the image,
-in the graph and in the XMP, and refuses the whole answer if a key is not
-declared. The prompt is the schema; extending it means adding a property to
-the kit's ontology and a line to the prompt file. Pan's code does not change.
+The caption prompt asks the model for one JSON object whose keys are Pan
+property names: `shortDescription`, `longDescription`, `sceneObjects` (a
+list), and the twelve scene fields (`sceneCamera` … `sceneLocation`). Pan
+writes them onto the image, in the graph and in the XMP, and refuses the
+whole answer if a key is not declared in pan.ttl. The prompt is the schema.
+The model's raw answer is kept verbatim in the caption record beside the
+image.
 
-A stage that needs prompts of its own, such as segmentation, names in its
-config which property supplies them, and waits for that property to exist.
+The order of the stages follows from the data. Segmentation is prompted with
+`sceneObjects`, and the embedding is built from the image and its complete
+XMP together, so both wait until the caption stage has written its fields.
+Pose needs nothing and runs at once.

@@ -29,7 +29,7 @@ pand start                             # kills every pand on the machine, then r
 pand stop                              # kills every pand on the machine
 pand status                            # RUNNING / NOT running; pid, stages on/off, images stored, model calls made
 pan store  ~/Pictures/wolf.png         # → <pan/Image/k7m2p9x4>
-pan state  '<pan/Image/k7m2p9x4>'      # thumbnail, embed, caption, pose: done / pending / off
+pan state  '<pan/Image/k7m2p9x4>'      # thumbnail, caption, embed, pose, sam3: done / pending / off
 pan info   '<pan/Image/k7m2p9x4>'      # every fact the graph holds about it
 pan query  'SELECT ?m ?t WHERE { ?s pan:captionItem ?c . ?c pan:model ?m ; pan:text ?t }'
 pan stores                             # the stores this machine's pand manages

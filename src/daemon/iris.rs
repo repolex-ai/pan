@@ -199,10 +199,16 @@ impl Iris {
         serde_json::from_str(&body).map_err(|e| CallError::Transient(format!("{url}: response not JSON: {e}")))
     }
 
-    pub async fn see_embed(&self, t: &Target, bytes: &[u8], media_type: &str) -> std::result::Result<SeeEmbed, CallError> {
+    /// `/percept/embed` on Iris (:1215): the image as a file part and the
+    /// text to embed WITH it as the `text` string part; ONE joint vector of
+    /// pixels and text comes back (m3rc, 2026-09-08). Pan sends the file's
+    /// complete XMP packet as the text (goodlux, 2026-09-08). The model
+    /// input is capped at 8192 tokens, image and text together; a very long
+    /// packet is truncated at its end by the node.
+    pub async fn embed(&self, t: &Target, bytes: &[u8], media_type: &str, text: &str) -> std::result::Result<SeeEmbed, CallError> {
         let form = Form::new()
             .part("image", Self::image_part(bytes, media_type).map_err(|e| CallError::Terminal(e.to_string()))?)
-            .text("resident", "true");
+            .text("text", text.to_string());
         let v = self.post(t, form).await?;
         let out: SeeEmbed = serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see_embed shape: {e}")))?;
         if out.vector.is_empty() {
