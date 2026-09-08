@@ -1,7 +1,10 @@
 # ExifTool user config — teaches ExifTool (and every viewer that embeds it:
-# Xee³, XnView, digiKam …) the Pan, Copia and git-lex XMP vocabularies, each
-# with its own family-0 group, so they show as "pan:Image properties",
-# "copia:Moment properties" and "git-lex properties" beside "XMP properties".
+# Xee³, XnView, digiKam …) the Pan and Copia XMP vocabularies, each with its
+# own family-0 group, so they show as "pan:Image properties" and
+# "copia:Moment properties" beside "XMP properties". A file carries only these
+# two namespaces (goodlux, 2026-09-07); identity and creation time are
+# pan:id and pan:dateCreated in the file, git-lex:id and git-lex:dateCreated
+# in the graph.
 # The image files are untouched; only the reader learns. Install:
 #   cp exiftool/ExifTool_config ~/.ExifTool_config
 # then restart the viewer (ExifTool reads this once per process).
@@ -34,17 +37,8 @@
     # items it holds, when it was produced.
     captionData => { List => 'Bag', Struct => \%panRef },
     poseData    => { List => 'Bag', Struct => \%panRef },
-    embedding   => { List => 'Bag', Struct => \%panRef },
+    vectorData  => { List => 'Bag', Struct => \%panRef },
     regionData  => { List => 'Bag', Struct => \%panRef },
-);
-
-# git-lex — the universal identity and dating vocabulary every kit shares.
-# `id` is written in angle-bracket form, `<pan/Image/abc>`, the same text a
-# soul writes in frontmatter.
-%Image::ExifTool::UserDefined::gitlex = (
-    GROUPS    => { 0 => 'git-lex', 1 => 'git-lex', 2 => 'Image' },
-    NAMESPACE => { 'git-lex' => 'https://repolex.ai/ontology/git-lex/' },
-    WRITABLE  => 'string',
 );
 
 # copia — Horae's Moment block. Namespace and group ONLY: ExifTool picks up
@@ -59,7 +53,6 @@
 %Image::ExifTool::UserDefined = (
     'Image::ExifTool::XMP::Main' => {
         pan       => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::pan' } },
-        'git-lex' => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::gitlex' } },
         copia     => { SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::copia' } },
     },
 );

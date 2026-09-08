@@ -104,7 +104,7 @@ fn serialize_enrichment(local: &str, refs: &[crate::enrich::EnrichmentRef], inde
     let mut out = format!("{indent}<pan:{local}>\n{indent} <rdf:Bag>\n");
     for r in refs {
         out.push_str(&format!("{indent}  <rdf:li rdf:parseType=\"Resource\">\n"));
-        out.push_str(&format!("{indent}   <git-lex:id>&lt;pan/Enrichment/{}&gt;</git-lex:id>\n", xml_escape(&r.id)));
+        out.push_str(&format!("{indent}   <pan:id>&lt;pan/Enrichment/{}&gt;</pan:id>\n", xml_escape(&r.id)));
         if !r.model.is_empty() {
             out.push_str(&format!("{indent}   <pan:model>{}</pan:model>\n", xml_escape(&r.model)));
         }
@@ -130,20 +130,25 @@ pub fn build_packet(p: &ImagePacket) -> String {
 /// viewer labels them "Media Path", not "Image Media Path" (Rob, 2026-09-05:
 /// no wrapper struct). `rdf:about=""` is the standard Adobe form — it
 /// resolves to the parser's base IRI, i.e. the media object. Nothing but pan:
-/// vocabulary (plus the universal `git-lex:id`) lives here; other namespaces
-/// ride in their own Descriptions, untouched.
+/// vocabulary lives here — the file carries only the pan and copia
+/// namespaces, never git-lex (goodlux, 2026-09-07). Other namespaces ride in
+/// their own Descriptions, untouched.
+///
+/// Identity and creation time are `pan:id` and `pan:dateCreated` in the file;
+/// in the graph the same two facts are the universal `git-lex:id` and
+/// `git-lex:dateCreated` (a pan:Image is a git-lex Thing, pan.ttl 0.3.3). The
+/// file names are Pan's, the graph names are git-lex's; the conversion is at
+/// the boundary, never in the file (goodlux, 2026-09-05 and 2026-09-07).
 ///
 /// Every identity in the file is written in git-lex's angle-bracket form,
 /// `<pan/Image/id>` — the same text a soul writes in frontmatter — never the
-/// expanded IRI (Rob, 2026-09-05).
+/// expanded IRI (goodlux, 2026-09-05).
 pub fn build_pan_description(p: &ImagePacket) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str("    <rdf:Description rdf:about=\"\"");
-    out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\" xmlns:git-lex=\"{}\">\n", crate::config::GIT_LEX_NS));
-    out.push_str(&format!("      <git-lex:id>{}</git-lex:id>\n", xml_escape(&bracket_of_iri(&p.iri))));
-    // The Image is a git-lex Thing: its creation time is the universal
-    // git-lex:dateCreated (pan.ttl 0.3.3), beside its git-lex:id.
-    out.push_str(&format!("      <git-lex:dateCreated>{}</git-lex:dateCreated>\n", xml_escape(&p.created_date)));
+    out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\">\n"));
+    out.push_str(&format!("      <pan:id>{}</pan:id>\n", xml_escape(&bracket_of_iri(&p.iri))));
+    out.push_str(&format!("      <pan:dateCreated>{}</pan:dateCreated>\n", xml_escape(&p.created_date)));
     let mut ident: Vec<(String, FieldValue)> = vec![
         ("mediaPath".into(), FieldValue::Scalar(p.media_path.clone())),
     ];
@@ -259,11 +264,12 @@ pub fn split_descriptions(packet: &str) -> Vec<(bool, String)> {
         let Some(c) = close else { break };
         let elem = &body[s0..c];
         // Pan's own block is the one that names a pan Image as its identity
-        // (`<git-lex:id>&lt;pan/Image/…&gt;`); files written before the block
-        // went flat carry the old `<pan:image` wrapper instead. A producer's
-        // block never has either, whatever pan: fields it tries to write.
+        // (`<pan:id>&lt;pan/Image/…&gt;`). Files Pan wrote earlier on
+        // 2026-09-07 named it `<git-lex:id>` instead; that block is Pan's too
+        // and is replaced, not kept as a producer's. A producer's block never
+        // names a pan Image, whatever pan: fields it tries to write.
         let pan_authored = elem.contains(PAN_NS)
-            && (elem.contains("<git-lex:id>&lt;pan/Image/") || elem.contains("<pan:image"));
+            && (elem.contains("<pan:id>&lt;pan/Image/") || elem.contains("<git-lex:id>&lt;pan/Image/"));
         out.push((pan_authored, elem.to_string()));
         i = c;
     }
@@ -1214,8 +1220,10 @@ mod flat_block_tests {
             ..Default::default()
         });
         assert!(!desc.contains("<pan:image"), "no wrapper struct: {desc}");
-        assert!(desc.contains("<git-lex:id>&lt;pan/Image/altocnif&gt;</git-lex:id>"), "image id in bracket form: {desc}");
-        assert!(desc.contains("<git-lex:id>&lt;pan/Enrichment/jz55pu47&gt;</git-lex:id>"), "enrichment id in bracket form: {desc}");
+        assert!(desc.contains("<pan:id>&lt;pan/Image/altocnif&gt;</pan:id>"), "image id in bracket form: {desc}");
+        assert!(desc.contains("<pan:id>&lt;pan/Enrichment/jz55pu47&gt;</pan:id>"), "enrichment id in bracket form: {desc}");
+        assert!(desc.contains("<pan:dateCreated>"), "creation time under pan:, not git-lex: {desc}");
+        assert!(!desc.contains("git-lex"), "the file carries only the pan namespace in Pan's block: {desc}");
         assert!(!desc.contains("https://repolex.ai/pan/"), "no expanded IRI anywhere in the block: {desc}");
         // Flat fields sit directly on the Description.
         assert!(desc.contains("      <pan:mediaPath>image/2026/09/05/20260905-000009-altocnif.png</pan:mediaPath>"));

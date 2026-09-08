@@ -105,8 +105,7 @@ pub fn build_data_file(image_iri: &str, link_local: &str, records: &[EnrichmentR
     let mut out = String::with_capacity(512 + records.len() * 256);
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"\n");
-    out.push_str(&format!("         xmlns:pan=\"{PAN_NS}\"\n"));
-    out.push_str(&format!("         xmlns:git-lex=\"{GIT_LEX_NS}\">\n"));
+    out.push_str(&format!("         xmlns:pan=\"{PAN_NS}\">\n"));
 
     // The image, and what it has.
     out.push_str(&format!("  <rdf:Description rdf:about=\"{}\">\n", esc(image_iri)));
@@ -125,7 +124,7 @@ pub fn build_data_file(image_iri: &str, link_local: &str, records: &[EnrichmentR
             "    <rdf:type rdf:resource=\"{PAN_NS}{}\"/>\n",
             esc(&r.class)
         ));
-        out.push_str(&format!("    <git-lex:id>{}</git-lex:id>\n", esc(&crate::xmp::bracket_of_iri(&r.iri()))));
+        out.push_str(&format!("    <pan:id>{}</pan:id>\n", esc(&crate::xmp::bracket_of_iri(&r.iri()))));
         if !r.model.is_empty() {
             out.push_str(&format!("    <pan:model>{}</pan:model>\n", esc(&r.model)));
         }
