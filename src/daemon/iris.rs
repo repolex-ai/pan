@@ -184,6 +184,12 @@ impl Iris {
                 _ => CallError::Transient(format!("{url}: {status}: {short}")),
             });
         }
+        if status.as_u16() == 402 {
+            // The provider's account is out of credit. A fact about the
+            // account, not the image: nothing about this image will change,
+            // and nothing about the next one either. The stage holds.
+            return Err(CallError::Transient(format!("{url}: 402 quota exceeded (add credits): {}", body.chars().take(300).collect::<String>())));
+        }
         if status.is_server_error() || status.as_u16() == 429 {
             return Err(CallError::Transient(format!("{url}: {status}: {}", body.chars().take(300).collect::<String>())));
         }
