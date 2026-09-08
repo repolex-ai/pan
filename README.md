@@ -41,6 +41,10 @@ SHA, or a bare store's id); absent = pand's default.
 
 ## Configuration — `~/.config/pan/config.yml`
 
+The full picture — solo store, indexing in place, the Subtexture stack, every
+file and what it is for — is in `docs/2026_09_08_PAN_OVERVIEW_AND_CONFIGURATION.md`.
+The example below is abridged.
+
 A missing file means one store at `~/.pan` and no model stages.
 
 ```yaml
