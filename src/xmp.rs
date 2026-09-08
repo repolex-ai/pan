@@ -146,7 +146,7 @@ pub fn build_packet(p: &ImagePacket) -> String {
 pub fn build_pan_description(p: &ImagePacket) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str("    <rdf:Description rdf:about=\"\"");
-    out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\">\n"));
+    out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n"));
     out.push_str(&format!("      <pan:id>{}</pan:id>\n", xml_escape(&bracket_of_iri(&p.iri))));
     out.push_str(&format!("      <pan:dateCreated>{}</pan:dateCreated>\n", xml_escape(&p.created_date)));
     let mut ident: Vec<(String, FieldValue)> = vec![
@@ -169,6 +169,15 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
     }
     for (local, value) in &ident {
         out.push_str(&serialize_field("pan", local, value, "      "));
+    }
+    // The caption also goes where every viewer and editor looks for a
+    // caption: `dc:description`, the one standard field the stack keeps
+    // (copia metadata spec 2026-06-03; goodlux, 2026-09-07). Standard
+    // XMP form: a language alternative with the default entry.
+    if let Some(c) = &p.caption {
+        out.push_str("      <dc:description>\n       <rdf:Alt>\n");
+        out.push_str(&format!("        <rdf:li xml:lang=\"x-default\">{}</rdf:li>\n", xml_escape(c)));
+        out.push_str("       </rdf:Alt>\n      </dc:description>\n");
     }
     if let Some((path, w, h)) = &p.thumbnail {
         out.push_str("      <pan:thumbnail rdf:parseType=\"Resource\">\n");
@@ -1206,6 +1215,7 @@ mod flat_block_tests {
             iri: "https://repolex.ai/pan/Image/altocnif".into(),
             media_path: "image/2026/09/05/20260905-000009-altocnif.png".into(),
             created_date: "2026-09-05T00:00:09-07:00".into(),
+            caption: Some("A wolf on a ridge at dusk.".into()),
             thumbnail: Some(("thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), 341, 512)),
             enrichment: vec![(
                 "captionData".into(),
@@ -1223,6 +1233,7 @@ mod flat_block_tests {
         assert!(desc.contains("<pan:id>&lt;pan/Image/altocnif&gt;</pan:id>"), "image id in bracket form: {desc}");
         assert!(desc.contains("<pan:id>&lt;pan/Enrichment/jz55pu47&gt;</pan:id>"), "enrichment id in bracket form: {desc}");
         assert!(desc.contains("<pan:dateCreated>"), "creation time under pan:, not git-lex: {desc}");
+        assert!(desc.contains("<dc:description>") && desc.contains("<rdf:li xml:lang=\"x-default\">"), "the caption in the standard caption field: {desc}");
         assert!(!desc.contains("git-lex"), "the file carries only the pan namespace in Pan's block: {desc}");
         assert!(!desc.contains("https://repolex.ai/pan/"), "no expanded IRI anywhere in the block: {desc}");
         // Flat fields sit directly on the Description.
