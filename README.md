@@ -42,26 +42,26 @@ open http://127.0.0.1:7401/swagger-ui
 
 Modern creative workflows and generative AI pipelines produce thousands of high-resolution images, while photographers manage multi-terabyte archives spanning millions of camera RAW captures. Existing options force an uncomfortable trade-off: either keep "dumb folders" on disk with zero semantic searchability, or upload sensitive assets to closed cloud DAM platforms with recurring subscription fees, privacy risks, and bandwidth bottlenecks.
 
-Pan bridges this gap by turning any local directory or external photographic volume into a **sovereign, queryable visual knowledge base**. It combines embedded open-standard metadata (XMP/RDF), an embedded W3C SPARQL graph database (Oxigraph), fast local vector indexing (USearch HNSW), and an asynchronous perception ladder powered by local and resident AI vision models.
+Pan bridges this gap by turning any local directory or external photographic volume into a **sovereign, queryable visual knowledge base**. It combines embedded open-standard metadata (XMP/RDF), an embedded graph database (Oxigraph), fast local vector search (USearch HNSW), and automatic background AI enrichment using local vision models.
 
 ---
 
-## Key Features & Selling Points
+## Key Features
 
-* **100% Local & Sovereign:** Your master files, graph triples, and vector embeddings remain on your own disks. Zero telemetry, zero external accounts, and zero cloud lock-in.
-* **Hybrid Graph & Vector Retrieval:** Combines structured metadata filters (ratings, camera EXIF, shoot dates, custom tags) with semantic embeddings in a single search pass using Oxigraph SPARQL and USearch HNSW.
-* **Two Complementary Storage Modes:**
-  * **Managed Store (Mode 1):** Lossless compressed master storage for generated and active project assets, saving rich RDF metadata directly inside standard PNG XMP chunks.
-  * **Referenced Archive Indexer (Mode 2):** Indexes multi-terabyte archives (1.2M+ RAW/DNG files) directly on external SSDs and hard drives without moving or copying master files, caching fast 4K display previews and 512px thumbnails locally.
-* **Resident Multi-Modal AI Perception Ladder:** Asynchronous, non-blocking background workers continuously enrich indexed assets:
-  * **Dense Semantic Embeddings:** Multi-modal vectors for natural language search (`qwen3-vl-embedding-2b`).
-  * **Structured Captions & Aesthetics:** High-fidelity scene descriptions, technical clarity scores, and artistic critiques.
-  * **Kinematics & Pose Estimation:** 133-keypoint human posture matching (`rtmw-pose`), searching body geometry invariant to wardrobe or background.
-  * **Spatial Depth Profiles:** Monocular metric depth geometry and focal plane analysis (`depth-anything-v2-base`).
-  * **Zero-Shot Face Identity:** 512-dim facial identity vectors (`insightface`) for clustering individuals across historical archives.
-  * **Instant Duplicate Triage:** 64-bit gradient difference hashing (dHash) for zero-cost duplicate detection.
-* **Disk-First Truth & Resilient Architecture:** All catalog metadata lives in flat XML/XMP sidecars and Oxigraph N-Quads on disk. External disk unplugs or workstation crashes never corrupt your library; the ephemeral crawler queue resumes instantly.
-* **Dual-Control Interface Ready:** Built to pair directly with `pan-ui` for 120fps human culling and live AI agent viewport steering via `pansee`.
+* **100% Local & Sovereign:** Your master files, catalog records, and search vectors remain on your own disks. Zero telemetry, zero external accounts, and zero cloud lock-in.
+* **Primary Media Store or Referenced Index:** Pan can act as the primary, managed store for your media files, or it can run purely as an index keeping your original media in place. This is especially useful if you are already committed to existing asset management software (such as Lightroom, Capture One, or Apple Photos) or an established folder structure, but want to take advantage of Pan's graph and AI retrieval features without moving or duplicating terabytes of data.
+* **Unified Graph & Visual Search:** Traditional catalogs only let you search rigid metadata tags (e.g. 5-star rating, 85mm lens, 2024), while modern AI tools only let you search by generic visual vibes. Pan combines both in a single query:
+  * *"Find 5-star studio portraits shot on an 85mm lens that have dramatic rim lighting and a pose similar to this reference photo."*
+  * *"Find every unpicked outtake of Model Sarah from last year's shoots where the subject is mid-jump."*
+  * *"Find photos where two different vision models disagreed on aesthetic appeal, filtered to black-and-white images."*
+* **Continuous Background AI Analysis:** Pan automatically enriches images in the background using local and resident vision models:
+  * **Natural Language Descriptions:** Detailed scene captions, technical clarity scores, and artistic critiques.
+  * **Human Pose & Kinematics:** Recognizes body posture and skeletal geometry (`rtmw-pose`), letting you find matching poses regardless of wardrobe, model, or background.
+  * **3D Depth & Spatial Geometry:** Understands focal planes, depth-of-field, and subject isolation (`depth-anything-v2-base`).
+  * **Face Recognition:** Identifies and groups the same person across years of historical shoots without manual tagging (`insightface`).
+  * **Visual Similarity & Duplicate Detection:** Finds visually similar frames and flags near-duplicate burst shots instantly.
+* **Crash-Proof & Drive-Friendly:** All metadata is stored in standard industry-standard formats (open XMP sidecars and local graph files) directly alongside your media. Unplugging an external hard drive mid-scan or rebooting your computer will never corrupt your catalog; Pan resumes indexing automatically right where it left off.
+* **Instant Culling & Agent Dual-Control:** Pairs directly with `pan-ui` for ultra-fast keyboard-driven photo review and culling. Autonomous AI agents can also steer the screen in real-time (`pansee`) to present visual search results directly to you.
 
 ---
 
@@ -102,10 +102,10 @@ models:                                  # External perception model stages (opt
 
 ## Storage & Ingestion Pipeline
 
-### Operational Modes
+### Flexible Storage Options
 
-1. **Mode 1 (Managed Store):** Used for newly generated assets, generative AI renders, and active project media. Files are stored losslessly as compressed PNGs in `media/image/YYYY/MM/DD/` with metadata written directly into standard PNG XMP chunks.
-2. **Mode 2 (Referenced Indexer):** Used for large photographic archives (e.g. 1.2M camera RAW/DNG files). Master RAW files remain untouched on external volumes; Pan extracts 4K JPEG previews (`pan:previewImage`) and indexes EXIF/XMP metadata into the local graph.
+* **Managed Primary Store:** When Pan manages your files directly (such as newly rendered assets or active projects), files are stored losslessly as compressed PNGs in a clean date-based folder structure, with open XMP metadata embedded directly into the files.
+* **Referenced Archive Index:** When indexing an existing library (such as large external hard drives or multi-terabyte camera RAW/DNG collections), Pan leaves your original files completely untouched. It extracts fast 4K previews and thumbnails to its local cache, indexing all EXIF, ratings, and camera metadata into the local graph.
 
 ### Ingestion Sequence
 
