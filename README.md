@@ -1,6 +1,6 @@
 # Pan
 
-Pan is a graph-native media store and perception engine. It manages media assets on disk, describes them with an RDF knowledge graph (Oxigraph), and provides hybrid graph pattern and vector similarity search (USearch).
+Pan is a local, sovereign media store and perception engine designed for private storage, state-of-the-art knowledge graph retrieval, and multi-modal AI enrichment. It can be used as an independent standalone media store or as the visual storage layer of the Subtexture Stack.
 
 ## Installation
 
@@ -38,6 +38,33 @@ open http://127.0.0.1:7401/swagger-ui
 
 ---
 
+## Overview
+
+Modern creative workflows and generative AI pipelines produce thousands of high-resolution images, while photographers manage multi-terabyte archives spanning millions of camera RAW captures. Existing options force an uncomfortable trade-off: either keep "dumb folders" on disk with zero semantic searchability, or upload sensitive assets to closed cloud DAM platforms with recurring subscription fees, privacy risks, and bandwidth bottlenecks.
+
+Pan bridges this gap by turning any local directory or external photographic volume into a **sovereign, queryable visual knowledge base**. It combines embedded open-standard metadata (XMP/RDF), an embedded W3C SPARQL graph database (Oxigraph), fast local vector indexing (USearch HNSW), and an asynchronous perception ladder powered by local and resident AI vision models.
+
+---
+
+## Key Features & Selling Points
+
+* **100% Local & Sovereign:** Your master files, graph triples, and vector embeddings remain on your own disks. Zero telemetry, zero external accounts, and zero cloud lock-in.
+* **Hybrid Graph & Vector Retrieval:** Combines structured metadata filters (ratings, camera EXIF, shoot dates, custom tags) with semantic embeddings in a single search pass using Oxigraph SPARQL and USearch HNSW.
+* **Two Complementary Storage Modes:**
+  * **Managed Store (Mode 1):** Lossless compressed master storage for generated and active project assets, saving rich RDF metadata directly inside standard PNG XMP chunks.
+  * **Referenced Archive Indexer (Mode 2):** Indexes multi-terabyte archives (1.2M+ RAW/DNG files) directly on external SSDs and hard drives without moving or copying master files, caching fast 4K display previews and 512px thumbnails locally.
+* **Resident Multi-Modal AI Perception Ladder:** Asynchronous, non-blocking background workers continuously enrich indexed assets:
+  * **Dense Semantic Embeddings:** Multi-modal vectors for natural language search (`qwen3-vl-embedding-2b`).
+  * **Structured Captions & Aesthetics:** High-fidelity scene descriptions, technical clarity scores, and artistic critiques.
+  * **Kinematics & Pose Estimation:** 133-keypoint human posture matching (`rtmw-pose`), searching body geometry invariant to wardrobe or background.
+  * **Spatial Depth Profiles:** Monocular metric depth geometry and focal plane analysis (`depth-anything-v2-base`).
+  * **Zero-Shot Face Identity:** 512-dim facial identity vectors (`insightface`) for clustering individuals across historical archives.
+  * **Instant Duplicate Triage:** 64-bit gradient difference hashing (dHash) for zero-cost duplicate detection.
+* **Disk-First Truth & Resilient Architecture:** All catalog metadata lives in flat XML/XMP sidecars and Oxigraph N-Quads on disk. External disk unplugs or workstation crashes never corrupt your library; the ephemeral crawler queue resumes instantly.
+* **Dual-Control Interface Ready:** Built to pair directly with `pan-ui` for 120fps human culling and live AI agent viewport steering via `pansee`.
+
+---
+
 ## Architecture
 
 Pan consists of two binaries compiled from a single crate:
@@ -53,9 +80,9 @@ Pan is configured via a single YAML file. If absent, `pand` defaults to a single
 
 ```yaml
 stores:
-  - /Users/rob/repos/7R1PL3F0RC3/lUX     # Soul repository store (<repo>/.pan)
-  - ~/.pan                               # Standalone bare store
-default: /Users/rob/repos/7R1PL3F0RC3/lUX
+  - ~/projects/creative-studio/.pan      # Project-local store
+  - ~/.pan                               # Standalone workstation store
+default: ~/projects/creative-studio/.pan
 port: 7401
 interval_secs: 5                         # Polling interval between background worker passes
 batch: 8                                 # Images per stage per pass
@@ -77,7 +104,7 @@ models:                                  # External perception model stages (opt
 
 ### Operational Modes
 
-1. **Mode 1 (Managed Store):** Used for newly generated assets, soul media, and active agent renders. Files are stored losslessly as compressed PNGs in `media/image/YYYY/MM/DD/` with metadata written directly into standard PNG XMP chunks.
+1. **Mode 1 (Managed Store):** Used for newly generated assets, generative AI renders, and active project media. Files are stored losslessly as compressed PNGs in `media/image/YYYY/MM/DD/` with metadata written directly into standard PNG XMP chunks.
 2. **Mode 2 (Referenced Indexer):** Used for large photographic archives (e.g. 1.2M camera RAW/DNG files). Master RAW files remain untouched on external volumes; Pan extracts 4K JPEG previews (`pan:previewImage`) and indexes EXIF/XMP metadata into the local graph.
 
 ### Ingestion Sequence
@@ -93,8 +120,8 @@ models:                                  # External perception model stages (opt
 ## Store Layout
 
 ```
-<root>/                       # e.g., <repo>/.pan or ~/.pan
-  pan.yml                     # Storage ID (for bare stores)
+<root>/                       # e.g., ~/projects/my-project/.pan or ~/.pan
+  pan.yml                     # Storage ID (for standalone stores)
   _ignore/                    # Gitignored runtime data
     pan.ttl                   # Reference copy of the Pan ontology
     oxigraph/                 # Oxigraph embedded RDF database
