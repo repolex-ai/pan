@@ -61,6 +61,7 @@ Pan bridges this gap by turning any local directory or external photographic vol
   * **Face Recognition:** Identifies and groups the same person across years of historical shoots without manual tagging (`insightface`).
   * **Visual Similarity & Duplicate Detection:** Finds visually similar frames and flags near-duplicate burst shots instantly.
 * **Crash-Proof & Drive-Friendly:** All metadata is stored in standard industry-standard formats (open XMP sidecars and local graph files) directly alongside your media. Unplugging an external hard drive mid-scan or rebooting your computer will never corrupt your catalog; Pan resumes indexing automatically right where it left off.
+* **LoRA & Fine-Tuning Dataset Curation & Evaluation:** Curate, prep, track, and evaluate model training runs from a single unified system. Assemble training candidates into Photosets, generate rich captions and descriptive tags, track model checkpoints, and **directly compare generated synthetic renders side-by-side with your actual ground-truth source photos** to verify subject likeness, lighting transfer, and anatomical fidelity.
 * **Instant Culling & Agent Dual-Control:** Pairs directly with `pan-ui` for ultra-fast keyboard-driven photo review and culling. Autonomous AI agents can also steer the screen in real-time (`pansee`) to present visual search results directly to you.
 
 ---
