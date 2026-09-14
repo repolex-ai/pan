@@ -124,7 +124,6 @@ models:                                  # External perception model stages (opt
 <root>/                                       # e.g., ~/projects/my-project/.pan or ~/.pan
 ├── pan.yml                                   # Storage ID (for standalone stores)
 └── _ignore/                                  # Gitignored runtime data
-    ├── pan.ttl                               # Reference copy of the Pan ontology
     ├── oxigraph/                             # Oxigraph embedded RDF database
     ├── hnsw/                                 # Vector search indexes
     │   └── <model>/                          # USearch HNSW index per embedding model
@@ -135,17 +134,3 @@ models:                                  # External perception model stages (opt
         ├── caption/YYYY/MM/DD/<id>.<model>.xml
         └── pose/YYYY/MM/DD/<id>.xml
 ```
-
-With `media_volume: /Volumes/MediaSSD/pan_storage`, the media directory can be relocated to external or secondary storage while keeping the graph and vector indexes on your fast primary disk. The root's absolute path is declared in the graph as `pan:mediaRoot` on startup.
-
----
-
-## ExifTool Integration
-
-Pan metadata is stored in standard XMP packets under the `pan` namespace. To view Pan-specific fields in desktop image viewers (such as Xee³):
-
-```sh
-cp exiftool/ExifTool_config ~/.ExifTool_config
-```
-
-This configures ExifTool to group Pan metadata into its own **Pan** section alongside standard EXIF and IPTC fields.
