@@ -1,147 +1,122 @@
 # Pan
 
-> **Pan is a media store that speaks git-lex: it stores media, describes it
-> with a graph, and searches it by both graph pattern and vector similarity.**
+Pan is a graph-native media store and perception engine. It manages media assets on disk, describes them with an RDF knowledge graph (Oxigraph), and provides hybrid graph pattern and vector similarity search (USearch).
 
-That sentence is the ruler. Anything that is not *store media / describe it /
-search it* is out of scope and belongs in a different tool.
-
-Two binaries, one crate:
-
-- **`pand`** — the daemon. One per machine. It owns every Pan store on the
-  machine: it is the only thing that touches a store's files or writes its
-  graph, it makes every model call (one funnel, with a concurrency limit per
-  model), and it keeps filesystem and graph in step in small atomic steps.
-  `pand start` / `pand stop`, run from a terminal, no flags; everything is in
-  `~/.config/pan/config.yml`. No launchd, no supervisor: exactly one pand or
-  none, and the terminal that started it owns it (and lends it its file-access
-  grant, so no macOS consent dialog).
-- **`pan`** — the command line. A thin client of pand. Every answer it prints
-  came from the graph; it never reads a store directly.
-
-git-lex and Syrinx are readers of the stores; Horae (rendering) delivers into
-pand exactly as it delivered into Pool.
-
-## Quick start
+## Installation
 
 ```sh
-pand start                             # kills every pand on the machine, then runs in this terminal
-pand stop                              # kills every pand on the machine
-pand status                            # RUNNING / NOT running; pid, stages on/off, images stored, model calls made
-pan store  ~/Pictures/wolf.png         # → <pan/Image/k7m2p9x4>
-pan state  '<pan/Image/k7m2p9x4>'      # thumbnail, caption, embed, pose, sam3: done / pending / off
-pan info   '<pan/Image/k7m2p9x4>'      # every fact the graph holds about it
-pan query  'SELECT ?m ?t WHERE { ?s pan:captionItem ?c . ?c pan:model ?m ; pan:text ?t }'
-pan stores                             # the stores this machine's pand manages
-open http://127.0.0.1:7401/swagger-ui  # the Swagger IS the interface spec
+git clone https://github.com/repolex-ai/pan.git
+cd pan && cargo install --path .
 ```
 
-`pan store [<user-id>] <file>` — `<user-id>` names a store (a soul's genesis
-SHA, or a bare store's id); absent = pand's default.
+---
 
-## Configuration — `~/.config/pan/config.yml`
+## Quick Start
 
-The full picture — solo store, indexing in place, the Subtexture stack, every
-file and what it is for — is in `docs/2026_09_08_PAN_OVERVIEW_AND_CONFIGURATION.md`.
-The example below is abridged.
+```sh
+# 1. Start the daemon (runs in foreground, manages stores and HTTP API)
+pand start
 
-A missing file means one store at `~/.pan` and no model stages.
+# 2. In another terminal, store an image
+pan store ~/Pictures/sample.png
+# → <https://repolex.ai/pan/Image/k7m2p9x4>
+
+# 3. Inspect image state and enrichment progress
+pan state '<https://repolex.ai/pan/Image/k7m2p9x4>'
+pan info  '<https://repolex.ai/pan/Image/k7m2p9x4>'
+
+# 4. Query the knowledge graph via SPARQL
+pan query 'SELECT ?s ?r WHERE { ?s pan:rating ?r . FILTER(?r >= 4) }'
+
+# 5. Check daemon health and registered stores
+pand status
+pan stores
+
+# 6. Open interactive API docs
+open http://127.0.0.1:7401/swagger-ui
+```
+
+---
+
+## Architecture
+
+Pan consists of two binaries compiled from a single crate:
+
+* **`pand` (The Daemon):** One process per machine. It is the sole component that reads and writes store files, commits transactions to Oxigraph, manages USearch HNSW vector indexes, runs async background perception stages (embeddings, captions, poses, depth), and serves the Axum HTTP/SSE API (default port `7401`).
+* **`pan` (The CLI):** A thin command-line client that communicates with `pand` over HTTP. Every answer it displays is queried directly from the graph; it never reads store files directly.
+
+---
+
+## Configuration (`~/.config/pan/config.yml`)
+
+Pan is configured via a single YAML file. If absent, `pand` defaults to a single local store at `~/.pan` on port `7401` with no external model stages.
 
 ```yaml
 stores:
-  - /Users/rob/repos/7R1PL3F0RC3/lUX     # a soul repo → store at <repo>/.pan, id = genesis SHA
-  - ~/.pan                               # a bare store → id from its own pan.yml (storage_id)
+  - /Users/rob/repos/7R1PL3F0RC3/lUX     # Soul repository store (<repo>/.pan)
+  - ~/.pan                               # Standalone bare store
 default: /Users/rob/repos/7R1PL3F0RC3/lUX
 port: 7401
-interval_secs: 5                         # pause between stage passes when nothing is pending
-batch: 8                                 # images per stage per store per pass
-models:                                  # every stage optional; pand ships zero models
+interval_secs: 5                         # Polling interval between background worker passes
+batch: 8                                 # Images per stage per pass
+models:                                  # External perception model stages (optional)
   embed:
     url: http://127.0.0.1:1215/see_embed
-    model: qwen3-vl-embedding-2b-8bit    # recorded as pan:model on every Embedding
-    caption_model: qwen3.5-9b-mlx-8bit   # /see_embed also captions; recorded under this name
+    model: qwen3-vl-embedding-2b-8bit
+    caption_model: qwen3.5-9b-mlx-8bit
     concurrency: 1
   pose:
     url: http://127.0.0.1:1215/see_pose
     model: rtmw-x-l
-    enabled: false                       # test mode: declared, never called; flip on later
+    enabled: false                       # Staged, but inactive until enabled
 ```
 
-`enabled: false` is the test-mode switch: the stage stays declared, pand never
-calls it, ingest still lands, `pan state` reports it `off`. Because the graph is
-the queue, turning it back on picks up every image missing that model's record.
+---
 
-A soul repo's `.pan/` must be gitignored (media is never git history); pand
-warns at start if it is not.
+## Storage & Ingestion Pipeline
 
-## How an image gets in
+### Operational Modes
 
-`POST /media` (default store) or `POST /stores/{id}/media`. **The request body
-is the file** — raw bytes, media type in `Content-Type`, nothing else. `pan
-store` does exactly that. Whatever XMP the file already carries is its
-metadata: a producer (Horae) writes its copia block into the image before
-handing it over, and a file from anywhere else brings what it brings. In this
-order:
+1. **Mode 1 (Managed Store):** Used for newly generated assets, soul media, and active agent renders. Files are stored losslessly as compressed PNGs in `media/image/YYYY/MM/DD/` with metadata written directly into standard PNG XMP chunks.
+2. **Mode 2 (Referenced Indexer):** Used for large photographic archives (e.g. 1.2M camera RAW/DNG files). Master RAW files remain untouched on external volumes; Pan extracts 4K JPEG previews (`pan:previewImage`) and indexes EXIF/XMP metadata into the local graph.
 
-1. the file's XMP read with a real RDF/XML parser — `rdf:about=""` is this
-   image, named subjects stay themselves, datatypes survive. Not valid RDF/XML
-   = 400, nothing stored.
-2. bytes written to `media/image/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.png` with Pan's own block
-   APPENDED to that XMP (identity, thumbnail, enrichment references); every
-   other chunk and every other Description byte-for-byte as it arrived
-3. thumbnail made (512px JPEG) beside it
-4. graph node committed — ONE transaction, the file's statements included.
-   The image exists only after this.
+### Ingestion Sequence
 
-The receipt says how many statements were read from the file, so a producer
-can assert its block landed.
+1. **XMP Harvest:** Incoming image metadata is parsed using an RDF/XML parser (`rdf:about=""` binds to the new image node).
+2. **Disk Storage:** Image bytes land in the store path, and Pan appends its own identity and enrichment block to the XMP packet.
+3. **Thumbnail Generation:** 512px square-padded JPEG thumbnails are generated for fast preview.
+4. **Atomic Graph Commit:** Statements and file records are committed to Oxigraph in a single atomic transaction.
+5. **Background Stage Ladder:** `pand` queries the graph for images lacking configured model outputs, invokes models via bounded HTTP worker pools, and saves vectors (`.npy`) and overlays (`.xml`/`.png`).
 
-Then the **stage ladder**: every pass, per store, per configured stage, pand
-asks the graph *which images have no record from this model*, takes a bounded
-batch, calls the model, and writes the data file + graph + XMP for each one.
-The graph is the queue. A failed call leaves the image pending (with an
-in-memory hold so it is not retried every pass); success is only ever the
-record in the graph. `pan state` reads that record.
+---
 
-## Layout of one store
+## Store Layout
 
 ```
-<root>/                       soul repo: <repo>/.pan   bare: the configured dir
-  pan.yml                     bare store only: storage_id (a soul's id is its genesis SHA)
-  _ignore/                    gitignored (git-lex writes the `.pan/_ignore/` line)
-    pan.ttl                   reference copy of the ontology
-    oxigraph/                 the graph — always here, never relocated
-    hnsw/<model>/             vector index per embedding model — always here
-    media/                    the media root — HERE unless media_volume is set
-      image/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.png     Pool's shape, Pan's id, local time
+<root>/                       # e.g., <repo>/.pan or ~/.pan
+  pan.yml                     # Storage ID (for bare stores)
+  _ignore/                    # Gitignored runtime data
+    pan.ttl                   # Reference copy of the Pan ontology
+    oxigraph/                 # Oxigraph embedded RDF database
+    hnsw/<model>/             # USearch HNSW vector index
+    media/                    # Media assets (or symlink to external volume)
+      image/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.png
       thumbnail/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.jpg
       vectors/<model>/<id>.npy
       caption/YYYY/MM/DD/<id>.<model>.xml
-      pose/YYYY/MM/DD/<id>.xml  (+ <id>.<model>.png skeleton overlay)
+      pose/YYYY/MM/DD/<id>.xml
 ```
 
-With `media_volume: /Volumes/p02/_pan` the media root moves to
-`/Volumes/p02/_pan/<first 6 chars of the store id>/media` — e.g.
-`/Volumes/p02/_pan/700c5b/media`. The folder is short because a person reads
-it; the store id itself is always the full hash. The root's absolute path is
-declared in the store's graph as `pan:mediaRoot` on every start, so renaming
-or moving the folder and restarting pand is the whole migration.
+With `media_volume: /Volumes/p02/_pan`, the media root moves to `/Volumes/p02/_pan/<store_id_prefix>/media`. The root's absolute path is declared in the store graph as `pan:mediaRoot` on startup.
 
-Every path above is declared in the graph and in the image's own XMP; nothing
-is found by convention.
+---
 
-## Seeing Pan's block as its own section in a viewer
+## ExifTool Integration
 
-Pan's block lives in the image's XMP under the `pan` namespace. Viewers that
-section metadata by ExifTool family (File / PNG / XMP / EXIF / IPTC …) fold
-every namespace into "XMP". `exiftool/ExifTool_config`, copied to
-`~/.ExifTool_config`, declares the `pan` namespace to ExifTool with its own
-family-0 group, so those viewers (Xee³, anything embedding ExifTool) show a
-**Pan** section beside XMP. The file is unchanged; only the reader learns the
-vocabulary. Restart the viewer after installing; ExifTool reads the config once
-per process.
+Pan metadata is stored in standard XMP packets under the `pan` namespace. To view Pan-specific fields in desktop image viewers (such as Xee³):
 
-## What Pan is NOT
+```sh
+cp exiftool/ExifTool_config ~/.ExifTool_config
+```
 
-No processing queue table. No multi-soul router (that is Syrinx). No security
-model beyond identity validation. No bundled model weights.
+This configures ExifTool to group Pan metadata into its own **Pan** section alongside standard EXIF and IPTC fields.
