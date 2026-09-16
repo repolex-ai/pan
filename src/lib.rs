@@ -519,12 +519,11 @@ mod perception_tests {
 
     #[test]
     fn photoset_vocabulary_is_declared_in_the_ontology() {
-        // pan.ttl 0.4.0 (goodlux, 2026-09-16): the set class and the three
-        // properties the photoset file and the image XMP will carry.
+        // pan.ttl 0.4.2 (goodlux, 2026-09-16): the set class under
+        // subtexture:Set and its description. pan:member and pan:inPhotoset
+        // are gone: membership is pan:relatedToId from the image to the set.
         for decl in [
-            "\npan:Photoset a owl:Class ;\n    rdfs:subClassOf git-lex:Set",
-            "\npan:inPhotoset a owl:ObjectProperty",
-            "\npan:member a owl:ObjectProperty",
+            "\npan:Photoset a owl:Class ;\n    rdfs:subClassOf subtexture:Set",
             "\npan:description a owl:DatatypeProperty",
         ] {
             assert!(PAN_ONTOLOGY_TTL.contains(decl), "missing in pan.ttl: {decl}");
