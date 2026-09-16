@@ -39,11 +39,36 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.3.7" .
+    owl:versionInfo "0.3.8" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.3.8 (2026-09-16, ruled by goodlux; two rulings landed together):
+#   (1) HOW AN IMAGE LINKS ITS RECORDS — option B of the record-link question
+#       (pan issue #18). The image links ONLY to the references
+#       (captionData, vectorData, poseData, regionData); each reference links
+#       the records its file holds with ONE property, pan:item. The four
+#       direct record links pan:captionItem, pan:embedding, pan:pose and
+#       pan:region are DELETED (deleted, not deprecated: predicates come from
+#       the writer, and pand no longer writes them). A data file now opens
+#       with its reference node listing pan:item links, then each record in
+#       full; the image's XMP is unchanged (references only). Reading a
+#       caption's text is one hop longer: ?img pan:captionData ?d . ?d
+#       pan:item ?c . ?c pan:text ?t. The shape is the one the file already
+#       had, so file and graph agree, and the name that was open since v0.2
+#       (captionItem) is gone rather than settled.
+#   (2) THREE CURATION FACTS A PERSON SETS ON THE MEDIA: pan:rating (integer
+#       0..5, declared as the bounded datatype pan:RatingValue), pan:isPicked
+#       and pan:isRejected (booleans). At most one each. They ride in the
+#       image's XMP like every pan fact, so a rating travels with the file
+#       and needs no second database. The command that writes them is pan
+#       issue #19; this version only declares them.
+#   Deliberately not done: pan:tag. Machine tags belong in the git-lex or
+#   subtexture namespace, not here; a field for loose words earns nothing.
+#   Also not done: putting regions themselves in the image's XMP (considered,
+#   ruled against: the image links to the region data, as before).
+#
 # v0.3.7 (2026-09-16, ruled by goodlux, the same evening; final word on count):
 #   (1) pan:count exists for REGIONS ONLY and lives on a class of its own.
 #       pan:RegionData (subclass of pan:Enrichment) is the reference to one
@@ -399,6 +424,34 @@ pan:dateCreated a owl:DatatypeProperty ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:dateTime .
 
+# --- curation: facts a person sets on the media (goodlux, 2026-09-16) ----------
+# Written by `pan set`, never by a model. They ride in the image's XMP so a
+# rating travels with the file; no second database. At most one value each.
+# Deliberately absent: a tag field — machine tags belong to git-lex or
+# subtexture, not to the media store.
+
+pan:RatingValue a rdfs:Datatype ;
+    owl:onDatatype xsd:integer ;
+    owl:withRestrictions ( [ xsd:minInclusive 0 ] [ xsd:maxInclusive 5 ] ) .
+
+pan:rating a owl:DatatypeProperty ;
+    rdfs:label "rating" ;
+    rdfs:comment "Star rating 0 to 5 set by a person. Overwrite the value; do not repeat the key." ;
+    rdfs:domain pan:Media ;
+    rdfs:range pan:RatingValue .
+
+pan:isPicked a owl:DatatypeProperty ;
+    rdfs:label "is picked" ;
+    rdfs:comment "true when a person picked this media. Set or unset it; never write false to mean unknown." ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:boolean .
+
+pan:isRejected a owl:DatatypeProperty ;
+    rdfs:label "is rejected" ;
+    rdfs:comment "true when a person rejected this media. Set or unset it; never write false to mean unknown." ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:boolean .
+
 # -----------------------------------------------------------------------------
 # ENRICHMENT — what a model saw, where its output lives, when
 # -----------------------------------------------------------------------------
@@ -411,7 +464,7 @@ pan:dateCreated a owl:DatatypeProperty ;
 pan:Enrichment a owl:Class ;
     rdfs:subClassOf git-lex:Thing ;
     rdfs:label "Enrichment" ;
-    rdfs:comment "A reference to one stage's output file for one media object: which model, where the file is, when produced. The image's own index of what exists for it." .
+    rdfs:comment "A reference to one stage's output file for one media object: which model, where the file is, when produced, and (pan:item) the records it holds. The image's own index of what exists for it." .
 
 # The one reference that counts: a segmentation run yields one Region per
 # thing found, all in one file, so its reference says how many. Caption and
@@ -469,27 +522,15 @@ pan:vectorData a owl:ObjectProperty ;
     rdfs:comment "Reference to an embedding vector file (.npy). One per embedding model." ;
     rdfs:domain pan:Media ; rdfs:range pan:Enrichment .
 
-# --- membership: media → the records themselves --------------------------------
+# --- membership: reference → the records its file holds ------------------------
+# The image never links a record directly (goodlux, 2026-09-16, option B):
+# image → captionData/vectorData/poseData/regionData → pan:item → record.
+# One property for every stage, the same shape the image's XMP already had.
 
-pan:region a owl:ObjectProperty ;
-    rdfs:label "region" ;
-    rdfs:comment "One Region of this image." ;
-    rdfs:domain pan:Image ; rdfs:range pan:Region .
-
-pan:pose a owl:ObjectProperty ;
-    rdfs:label "pose" ;
-    rdfs:comment "One Pose found in this image." ;
-    rdfs:domain pan:Image ; rdfs:range pan:Pose .
-
-pan:captionItem a owl:ObjectProperty ;
-    rdfs:label "caption item" ;
-    rdfs:comment "One Caption record of this media. The descriptions on the media are the current values; this record keeps the model's whole answer." ;
-    rdfs:domain pan:Media ; rdfs:range pan:Caption .
-
-pan:embedding a owl:ObjectProperty ;
-    rdfs:label "embedding" ;
-    rdfs:comment "One Embedding of this media." ;
-    rdfs:domain pan:Media ; rdfs:range pan:Embedding .
+pan:item a owl:ObjectProperty ;
+    rdfs:label "item" ;
+    rdfs:comment "One record this reference's file holds. Reach records through here; never link them from the image." ;
+    rdfs:domain pan:Enrichment ; rdfs:range git-lex:Thing .
 
 pan:thumbnail a owl:ObjectProperty ;
     rdfs:label "thumbnail" ;
@@ -624,7 +665,10 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:readyDate    ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] .
+    [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:rating     ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:isPicked   ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:isRejected ; owl:maxCardinality 1 ] .
 
 pan:Enrichment rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,

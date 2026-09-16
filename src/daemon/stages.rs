@@ -36,7 +36,7 @@ pub const STAGE_POSE: &str = "pose";
 pub const STAGE_SAM3: &str = "sam3";
 
 /// Which graph link a stage's completion is read from: the data REFERENCE
-/// (`pan:regionData`, …), not the record link (`pan:region`). A run that
+/// (`pan:regionData`, …), not a record (records hang off the reference via `pan:item`). A run that
 /// found nothing writes a reference with count 0 and no records, and it must
 /// still count as done — keyed on records, an empty pose or segment run was
 /// handed back every pass forever (seen 2026-09-07: hundreds of sam3 lines
@@ -394,7 +394,7 @@ async fn run_one(
                 let id = item.id.clone();
                 let model = ep.model.clone();
                 tokio::task::spawn_blocking(move || {
-                    s.pan.write_enrichment(&id, "pose", "pose", "poseData", &model, &[], None).map(|_| ())
+                    s.pan.write_enrichment(&id, "pose", "poseData", &model, &[], None).map(|_| ())
                 })
                 .await??;
                 return Ok(());
@@ -439,7 +439,7 @@ async fn run_one(
                         rec
                     })
                     .collect();
-                s.pan.write_enrichment(&id, "pose", "pose", "poseData", &model, &records, None)?;
+                s.pan.write_enrichment(&id, "pose", "poseData", &model, &records, None)?;
                 Ok(())
             })
             .await??;
@@ -455,7 +455,7 @@ async fn run_one(
             let model = ep.model.clone();
             if prompts.is_empty() {
                 tokio::task::spawn_blocking(move || {
-                    s.pan.write_enrichment(&id, "sam3", "region", "regionData", &model, &[], None).map(|_| ())
+                    s.pan.write_enrichment(&id, "sam3", "regionData", &model, &[], None).map(|_| ())
                 })
                 .await??;
                 return Ok(());
@@ -480,7 +480,7 @@ async fn run_one(
                         rec
                     })
                     .collect();
-                let rel = s.pan.write_enrichment(&id, "sam3", "region", "regionData", &model, &records, None)?;
+                let rel = s.pan.write_enrichment(&id, "sam3", "regionData", &model, &records, None)?;
                 // Everything the server said, verbatim, beside the record.
                 let side = s.pan.layout.abs(&rel).with_extension("json");
                 crate::write_atomic(&side, serde_json::to_string_pretty(&raw)?.as_bytes())?;
@@ -497,7 +497,7 @@ async fn run_one(
 /// everything); the parsed fields go onto the object.
 fn write_perception(s: &StoreHandle, id: &str, model: &str, raw: &str, p: &crate::Perception) -> Result<()> {
     let rec = EnrichmentRecord::new(gen_pan_id(), "Caption", model).field("text", raw);
-    s.pan.write_enrichment(id, "caption", "captionItem", "captionData", model, std::slice::from_ref(&rec), Some(model))?;
+    s.pan.write_enrichment(id, "caption", "captionData", model, std::slice::from_ref(&rec), Some(model))?;
     s.pan.set_perception(id, p)
 }
 

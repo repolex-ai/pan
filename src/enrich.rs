@@ -11,10 +11,13 @@
 //!   looked identical).
 //!
 //! A data file is plain RDF/XML — the same triples the graph holds, written
-//! standalone. It names the image by its full IRI (no XMP base-IRI games), and
-//! every record inside is a first-class node with its own assigned id and its
-//! own `https://repolex.ai/pan/<Class>/<id>` IRI. Loading one into the graph
-//! is therefore just parsing it; there is no translation layer anywhere.
+//! standalone. It opens with the REFERENCE node (the same `<pan/Enrichment/id>`
+//! the image's XMP names) linking each record with `pan:item`, and every
+//! record inside is a first-class node with its own assigned id and its own
+//! `https://repolex.ai/pan/<Class>/<id>` IRI. The image links only to the
+//! reference; records are reached through it (goodlux, 2026-09-16, option B
+//! of the record-link question). Loading a file into the graph is therefore
+//! just parsing it; there is no translation layer anywhere.
 
 use anyhow::{anyhow, Context, Result};
 use oxigraph::io::RdfFormat;
@@ -88,6 +91,12 @@ impl EnrichmentRef {
     pub fn new(model: &str, path: &str, count: Option<usize>) -> Self {
         Self { id: crate::gen_pan_id(), model: model.to_string(), path: path.to_string(), count, produced_date: now_local() }
     }
+
+    /// This reference's full IRI, `<pan/Enrichment/id>` — the subject the data
+    /// file opens with and the node the image's XMP names.
+    pub fn iri(&self) -> String {
+        format!("{PAN_MEDIA_NS}Enrichment/{}", self.id)
+    }
 }
 
 /// Escape text for XML character data / attribute values.
@@ -98,23 +107,23 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Author a standalone data file: the image linked to each record, then each
-/// record described in full.
+/// Author a standalone data file: the reference node linked to each record
+/// with `pan:item`, then each record described in full.
 ///
-/// `link_local` is the membership predicate's local name (`region`, `pose`,
-/// `captionItem`) — the same predicate the graph uses, so a file and the store
-/// never disagree about how a record hangs off its image.
-pub fn build_data_file(image_iri: &str, link_local: &str, records: &[EnrichmentRecord]) -> String {
+/// `ref_iri` is the reference's IRI (`<pan/Enrichment/id>`), the same node the
+/// image's XMP names — so a file and the store never disagree about how a
+/// record hangs off its image: image → reference → item.
+pub fn build_data_file(ref_iri: &str, records: &[EnrichmentRecord]) -> String {
     let mut out = String::with_capacity(512 + records.len() * 256);
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"\n");
     out.push_str(&format!("         xmlns:pan=\"{PAN_NS}\">\n"));
 
-    // The image, and what it has.
-    out.push_str(&format!("  <rdf:Description rdf:about=\"{}\">\n", esc(image_iri)));
+    // The reference, and the records its file holds.
+    out.push_str(&format!("  <rdf:Description rdf:about=\"{}\">\n", esc(ref_iri)));
     for r in records {
         out.push_str(&format!(
-            "    <pan:{link_local} rdf:resource=\"{}\"/>\n",
+            "    <pan:item rdf:resource=\"{}\"/>\n",
             esc(&r.iri())
         ));
     }
@@ -144,17 +153,16 @@ pub fn build_data_file(image_iri: &str, link_local: &str, records: &[EnrichmentR
 
 /// The quads a data file's content contributes to the graph — produced from
 /// the SAME records the file is written from, so store and file cannot drift.
-pub fn record_quads(image_iri: &str, link_local: &str, records: &[EnrichmentRecord]) -> Result<Vec<Quad>> {
-    let image = NamedNode::new(image_iri).map_err(|e| anyhow!("bad image IRI {image_iri}: {e}"))?;
-    let link = NamedNode::new(format!("{PAN_NS}{link_local}"))
-        .map_err(|e| anyhow!("bad link predicate {link_local}: {e}"))?;
+pub fn record_quads(ref_iri: &str, records: &[EnrichmentRecord]) -> Result<Vec<Quad>> {
+    let reference = NamedNode::new(ref_iri).map_err(|e| anyhow!("bad reference IRI {ref_iri}: {e}"))?;
+    let link = NamedNode::new(format!("{PAN_NS}item")).expect("pan:item");
     let rdf_type = NamedNode::new(RDF_TYPE).expect("rdf:type");
     let mut quads = Vec::with_capacity(records.len() * 6);
 
     for r in records {
         let subj = NamedNode::new(r.iri()).map_err(|e| anyhow!("bad record IRI: {e}"))?;
         quads.push(Quad::new(
-            image.clone(),
+            reference.clone(),
             link.clone(),
             subj.clone(),
             GraphName::DefaultGraph,
@@ -181,8 +189,7 @@ pub fn record_quads(image_iri: &str, link_local: &str, records: &[EnrichmentReco
 /// exists for it and where.
 pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<Vec<Quad>> {
     let image = NamedNode::new(image_iri).map_err(|e| anyhow!("bad image IRI {image_iri}: {e}"))?;
-    let node = NamedNode::new(format!("{PAN_MEDIA_NS}Enrichment/{}", r.id))
-        .map_err(|e| anyhow!("bad enrichment IRI: {e}"))?;
+    let node = NamedNode::new(r.iri()).map_err(|e| anyhow!("bad enrichment IRI: {e}"))?;
     let rdf_type = NamedNode::new(RDF_TYPE).expect("rdf:type");
     let mut quads = vec![
         Quad::new(
@@ -269,8 +276,8 @@ mod tests {
 
     #[test]
     fn data_file_round_trips_through_a_real_rdf_parser() {
-        let img = "https://repolex.ai/pan/Image/k7m2p9x4";
-        let xml = build_data_file(img, "region", &sample());
+        let reference = "https://repolex.ai/pan/Enrichment/r7k2p9x4";
+        let xml = build_data_file(reference, &sample());
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("regions.xml");
         std::fs::write(&p, &xml).unwrap();
@@ -279,10 +286,10 @@ mod tests {
         let region_iri = "https://repolex.ai/pan/Region/x7q2mf";
 
         assert!(
-            triples.iter().any(|(s, p, o)| s == img
-                && p == &format!("{PAN_NS}region")
+            triples.iter().any(|(s, p, o)| s == reference
+                && p == &format!("{PAN_NS}item")
                 && matches!(o, Term::NamedNode(n) if n.as_str() == region_iri)),
-            "image links to the region by IRI"
+            "the reference links to the region by IRI with pan:item"
         );
         assert!(
             triples.iter().any(|(s, p, o)| s == region_iri
@@ -295,19 +302,19 @@ mod tests {
     #[test]
     fn empty_fields_never_become_empty_facts() {
         // maskPath was supplied empty: it must be ABSENT, not "".
-        let xml = build_data_file("https://repolex.ai/pan/Image/a", "region", &sample());
+        let xml = build_data_file("https://repolex.ai/pan/Enrichment/a", &sample());
         assert!(!xml.contains("maskPath"), "empty field is omitted entirely");
     }
 
     #[test]
     fn file_and_graph_agree() {
         // The same records produce the same statements on both paths.
-        let img = "https://repolex.ai/pan/Image/k7m2p9x4";
+        let reference = "https://repolex.ai/pan/Enrichment/r7k2p9x4";
         let recs = sample();
-        let quads = record_quads(img, "region", &recs).unwrap();
+        let quads = record_quads(reference, &recs).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("r.xml");
-        std::fs::write(&p, build_data_file(img, "region", &recs)).unwrap();
+        std::fs::write(&p, build_data_file(reference, &recs)).unwrap();
         let from_file = read_data_file(&p).unwrap();
         assert_eq!(
             quads.len(),

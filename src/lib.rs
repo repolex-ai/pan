@@ -487,13 +487,13 @@ impl Pan {
     /// refills them on its next pass. Used when the vectors are to be remade
     /// (Rob, 2026-09-07: the ones so far are test data; staying on the 2B).
     pub fn wipe_embeddings(&self) -> Result<usize> {
-        let ids: Vec<String> = match self.query("SELECT DISTINCT ?s WHERE { { ?s pan:embedding ?e } UNION { ?s pan:vectorData ?v } }")? {
+        let ids: Vec<String> = match self.query("SELECT DISTINCT ?s WHERE { ?s pan:vectorData ?v }")? {
             QueryResults::Solutions(sols) => sols.filter_map(|r| r.ok()).filter_map(|r| r.get("s").map(term_str)).map(|iri| bare_id(&iri)).collect(),
             _ => Vec::new(),
         };
         let up = format!(
             "PREFIX pan: <{PAN_NS}>\n\
-             DELETE {{ ?s pan:embedding ?e . ?e ?p ?o }} WHERE {{ ?s pan:embedding ?e . ?e ?p ?o }} ;\n\
+             DELETE {{ ?v pan:item ?e . ?e ?p ?o }} WHERE {{ ?s pan:vectorData ?v . ?v pan:item ?e . ?e ?p ?o }} ;\n\
              DELETE {{ ?s pan:vectorData ?v . ?v ?p ?o }} WHERE {{ ?s pan:vectorData ?v . ?v ?p ?o }}"
         );
         self.store.update(&up).map_err(|e| anyhow!("wipe embeddings: {e}"))?;
@@ -932,10 +932,12 @@ impl Pan {
         Ok(StoreCounts {
             images: count("")?,
             thumbnails: count("?s pan:thumbnail ?t .")?,
-            captions: count("?s pan:captionItem ?c .")?,
-            embeddings: count("?s pan:embedding ?e .")?,
-            poses: count("?s pan:pose ?p .")?,
-            regions: count("?s pan:region ?r .")?,
+            // Records hang off their reference (pan:item), never off the
+            // image directly (goodlux, 2026-09-16).
+            captions: count("?s pan:captionData ?d . ?d pan:item ?c .")?,
+            embeddings: count("?s pan:vectorData ?d . ?d pan:item ?e .")?,
+            poses: count("?s pan:poseData ?d . ?d pan:item ?p .")?,
+            regions: count("?s pan:regionData ?d . ?d pan:item ?r .")?,
         })
     }
 
@@ -962,13 +964,13 @@ impl Pan {
     /// Record one model's output for an object as a data file beside the
     /// media plus the graph statements that describe it, then refresh the
     /// XMP so the image's own packet lists the new file. `kind` = data-file
-    /// directory (caption / sam3 / pose); `link_local` = membership predicate;
-    /// `ref_local` = reference predicate.
+    /// directory (caption / sam3 / pose); `ref_local` = reference predicate.
+    /// The image links to the reference only; the reference links each record
+    /// with pan:item (goodlux, 2026-09-16).
     pub fn write_enrichment(
         &self,
         id: &str,
         kind: &str,
-        link_local: &str,
         ref_local: &str,
         model: &str,
         records: &[enrich::EnrichmentRecord],
@@ -983,14 +985,16 @@ impl Pan {
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent).context("create enrichment dir")?;
         }
-        write_atomic(&abs, enrich::build_data_file(subject.as_str(), link_local, records).as_bytes()).with_context(|| format!("write {}", abs.display()))?;
-        let mut quads = enrich::record_quads(subject.as_str(), link_local, records)?;
         // pan:count only on the segmentation reference (pan:RegionData), the
         // one file that holds many records; caption, vector and pose
         // references carry none (goodlux, 2026-09-16).
         let count = (ref_local == "regionData").then_some(records.len());
+        // The reference comes first: its IRI is the subject the data file
+        // opens with and the node the records hang off.
         let r = enrich::EnrichmentRef::new(model, &rel, count);
-        quads.extend(enrich::ref_quads(subject.as_str(), ref_local, &r)?);
+        write_atomic(&abs, enrich::build_data_file(&r.iri(), records).as_bytes()).with_context(|| format!("write {}", abs.display()))?;
+        let mut quads = enrich::ref_quads(subject.as_str(), ref_local, &r)?;
+        quads.extend(enrich::record_quads(&r.iri(), records)?);
         if let Err(e) = self.insert_quads(&quads) {
             let _ = fs::remove_file(&abs);
             return Err(e);
@@ -1024,8 +1028,9 @@ impl Pan {
                 rec = rec.field(key, v);
             }
         }
-        let mut quads = enrich::record_quads(subject.as_str(), "embedding", std::slice::from_ref(&rec))?;
-        quads.extend(enrich::ref_quads(subject.as_str(), "vectorData", &enrich::EnrichmentRef::new(model, &rel, None))?);
+        let r = enrich::EnrichmentRef::new(model, &rel, None);
+        let mut quads = enrich::ref_quads(subject.as_str(), "vectorData", &r)?;
+        quads.extend(enrich::record_quads(&r.iri(), std::slice::from_ref(&rec))?);
         self.insert_quads(&quads)?;
         self.restamp(id)
     }
