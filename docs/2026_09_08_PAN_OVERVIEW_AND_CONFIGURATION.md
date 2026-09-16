@@ -108,7 +108,7 @@ are idle.
 |---|---|---|
 | `~/.config/pan/config.yml` | this machine | the daemon: port, the stores it serves, model endpoints and their auth, concurrency ceilings, backfill floor |
 | `~/.config/pan/prompts/<name>` | this machine | prompt text, plain text, one file per stage; the config names the file |
-| `~/.config/pan/logs/calls/YYYY-MM-DD.jsonl` — planned | this machine | one line per model call: store, image, stage, model, status, latency, sizes; pruned after `log_keep_days` |
+| `~/.config/pan/logs/calls/YYYY-MM-DD.jsonl` | this machine | the model-call log: one JSON line per call, by local day; files older than `log_keep_days` are removed at start and once a day |
 | `<store>/pan.yml` | one store | the store's id; **planned:** its media root, which stages run, which prompt file each uses, its backfill floor, which ontologies apply |
 | `<store>/_ignore/` | one store | the graph, the vector index, the ontology copy; never edited by hand |
 | `~/.pan/logs/pand.log` | this machine | the daemon's log, also printed in the terminal that started it |
@@ -125,6 +125,7 @@ port: 7401
 batch: 4                                 # images per stage per store per pass
 interval_secs: 5                         # pause between passes when nothing is pending
 backfill_since: "2026-09-07T04:15:45-07:00"   # images created before this are not sent to models
+log_keep_days: 30                        # days of model-call log files kept under logs/calls/
 models:
   caption:
     url: http://127.0.0.1:1215/percept/vlm
@@ -140,6 +141,36 @@ models:
 
 Every stage is optional. A missing config file means one store at `~/.pan`
 and no model stages.
+
+### The model-call log, `~/.config/pan/logs/calls/`
+
+Every call pand makes to a model writes one JSON line to the file for the
+current local day. The line holds what happened, never what was sent or
+said: no image bytes, no answer text.
+
+```json
+{"time":"2026-09-16T10:42:07.318-07:00","store":"700c5bd4a969723107c1b92b83c0f1ec1497d9d4","id":"ygjjmvkw","stage":"caption","model":"qwen/qwen3.8-27b","url":"http://127.0.0.1:1215/percept/vlm","via":"primary","request_bytes":812344,"status":200,"latency_ms":9412,"response_bytes":3120,"outcome":"recorded","error":null}
+```
+
+- `via` is `primary` or `fallback`.
+- `status` is the HTTP status, or null when no answer came back at all.
+- `request_bytes` is the payload (image plus text or JSON body), not the
+  wire size.
+- `outcome` is one of `recorded` (the answer was written), `busy` (every
+  node's queue was full, asked again in seconds), `backend_down` (no node
+  up, the stage held), `quota` (the provider account is out of credit, the
+  stage held), `transient` (asked again later), `terminal` (this image is
+  never asked again by this stage).
+
+`log_keep_days` in `config.yml` says how many days of files to keep; absent
+means 30, and 0 is refused. A day's cost is one `jq` away:
+
+```sh
+jq -r 'select(.outcome=="recorded") | .stage' ~/.config/pan/logs/calls/2026-09-16.jsonl | sort | uniq -c
+```
+
+A log write that fails is a warning in the daemon log, once; it never stops
+a stage. The daemon's own log, `~/.pan/logs/pand.log`, is unchanged.
 
 ### The store file, `<store>/pan.yml`
 

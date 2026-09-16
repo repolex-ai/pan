@@ -11,6 +11,7 @@
 //! caption, pose, regions are STAGES — is found by asking the graph what is
 //! missing, done, and recorded, one image at a time.
 
+pub mod calllog;
 pub mod config;
 pub mod http;
 pub mod iris;
@@ -68,6 +69,9 @@ pub struct Daemon {
     /// way, image after image (2026-09-05: 42 failed calls in 90 s against a
     /// dark :1215). One try per stage per hold, then the batch resumes.
     pub stage_hold: Mutex<HashMap<String, Instant>>,
+    /// One JSON line per model call, by day, beside the config; pruned by
+    /// `log_keep_days`. Metadata only — see `calllog.rs`.
+    pub calls: calllog::CallLog,
 }
 
 /// How many calls a stage keeps in flight, decided by the answers it gets —
@@ -187,7 +191,10 @@ impl Daemon {
             .iter()
             .map(|(name, m)| (name.clone(), Arc::new(Limiter::new(name, m.concurrency))))
             .collect();
+        // The log lives beside config.yml, whichever directory that is.
+        let calls = calllog::CallLog::new(cfg.path.parent().unwrap_or(Path::new(".")), cfg.log_keep_days);
         Ok(Daemon {
+            calls,
             cfg,
             stores,
             default_id,

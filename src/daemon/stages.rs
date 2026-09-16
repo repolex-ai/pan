@@ -24,6 +24,7 @@ use anyhow::{anyhow, Context, Result};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::calllog::{CallLine, Meter};
 use super::iris::{self, CallError};
 use super::{Daemon, StoreHandle};
 use crate::enrich::EnrichmentRecord;
@@ -211,24 +212,49 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
         let (d, store, ep, target) = (d.clone(), store.clone(), ep.clone(), target.clone());
         set.spawn(async move {
             let permit = d.funnels[stage].acquire().await;
-            let result = run_one(&d, &store, stage, &ep, &target, &item).await;
+            // The client measures the call into `meter`; the outcome is only
+            // known here, after the write — so the log line is written where
+            // both meet, below. No model call = nothing measured = no line.
+            let meter = Meter::new();
+            let result = run_one(&d, &store, stage, &ep, &target, &item, &meter).await;
             drop(permit);
-            (item, result)
+            (item, result, meter.take())
         });
     }
     let mut saw_busy = false;
     while let Some(joined) = set.join_next().await {
-        let (item, result) = match joined {
+        let (item, result, meta) = match joined {
             Ok(x) => x,
             Err(e) => {
                 tracing::error!(stage, "stage task join: {e}");
                 continue;
             }
         };
+        // One line in the model-call log per call that reached the client.
+        let log_call = |outcome: &str, error: Option<&str>| {
+            if let Some(m) = &meta {
+                d.calls.record(&CallLine {
+                    time: CallLine::now(),
+                    store: &store.entry.id,
+                    id: &item.id,
+                    stage,
+                    model: &ep.model,
+                    url: &m.url,
+                    via: target.via,
+                    request_bytes: m.request_bytes,
+                    status: m.status,
+                    latency_ms: m.latency_ms,
+                    response_bytes: m.response_bytes,
+                    outcome,
+                    error,
+                });
+            }
+        };
         match result {
             Ok(()) => {
                 d.clear_attempt(&store.entry.id, &item.id, stage);
                 d.funnels[stage].on_success();
+                log_call("recorded", None);
                 tracing::info!(store = %store.entry.id, id = %item.id, stage, model = %ep.model, via = target.via, window = d.funnels[stage].window(), "recorded");
             }
             Err(e) => {
@@ -238,6 +264,7 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                     // pending and is asked again next pass.
                     saw_busy = true;
                     d.funnels[stage].on_busy();
+                    log_call("busy", Some(m));
                     tracing::info!(store = %store.entry.id, id = %item.id, stage, window = d.funnels[stage].window(), "door busy: {m}");
                     continue;
                 }
@@ -257,6 +284,16 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                         || msg.contains("timed out")
                         || msg.contains("backend_down"));
                 let quota = !terminal && msg.contains("402 quota exceeded");
+                let outcome = if terminal {
+                    "terminal"
+                } else if quota {
+                    "quota"
+                } else if server_down {
+                    "backend_down"
+                } else {
+                    "transient"
+                };
+                log_call(outcome, Some(&msg));
                 d.record_attempt(&store.entry.id, &item.id, stage, msg, terminal);
                 if quota {
                     d.stage_hold.lock().unwrap().insert(hold_key.clone(), Instant::now() + QUOTA_HOLD);
@@ -284,6 +321,7 @@ async fn run_one(
     ep: &super::config::ModelEndpoint,
     t: &super::config::Target,
     item: &PendingItem,
+    meter: &Meter,
 ) -> Result<()> {
     // pand is the one thing allowed to read the media file.
     let abs = store.pan.layout.abs(&item.media_path);
@@ -298,7 +336,7 @@ async fn run_one(
             // stage has written its fields, so the packet carries them.
             let packet = crate::xmp::read_xmp_packet_from_bytes(&bytes)?.unwrap_or_default();
             d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.embed(t, &bytes, media_type, &packet).await?;
+            let r = d.iris.embed(t, &bytes, media_type, &packet, meter).await?;
             let s = store.clone();
             let id = item.id.clone();
             let model = ep.model.clone();
@@ -330,7 +368,7 @@ async fn run_one(
                 tokio::task::spawn_blocking(move || crate::wire::caption_copy(&b)).await??
             };
             d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.vlm(t, &ep.model, &wire.bytes, wire.media_type, prompt, ep.extra_body.as_ref()).await?;
+            let r = d.iris.vlm(t, &ep.model, &wire.bytes, wire.media_type, prompt, ep.extra_body.as_ref(), meter).await?;
             if r.text.trim().is_empty() {
                 return Err(CallError::Terminal("no caption text returned".into()).into());
             }
@@ -347,7 +385,7 @@ async fn run_one(
         }
         STAGE_POSE => {
             d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.see_pose(t, &bytes, media_type).await?;
+            let r = d.iris.see_pose(t, &bytes, media_type, meter).await?;
             if r.keypoints.is_empty() {
                 // The eye reports "no people" and "I failed" the same way (200
                 // {}). Record a zero-count run so the image is not asked
@@ -423,7 +461,7 @@ async fn run_one(
                 return Ok(());
             }
             d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let (regions, raw) = d.iris.segment(t, &bytes, media_type, &prompts).await?;
+            let (regions, raw) = d.iris.segment(t, &bytes, media_type, &prompts, meter).await?;
             tokio::task::spawn_blocking(move || -> Result<()> {
                 let records: Vec<EnrichmentRecord> = regions
                     .iter()

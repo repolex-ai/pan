@@ -117,6 +117,9 @@ struct ConfigYml {
     /// store with a backlog cannot starve the others.
     batch: Option<usize>,
     backfill_since: Option<String>,
+    /// How many days of model-call log files to keep under
+    /// `<config dir>/logs/calls/`. Absent = 30.
+    log_keep_days: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +142,10 @@ pub struct DaemonConfig {
     /// (Rob, 2026-09-05: a reasonable floor is mine to pick; picked midnight
     /// of the day the remote stages first came on.)
     pub backfill_since: Option<String>,
+    /// Retention of the model-call log, in days (goodlux, 2026-09-07: a
+    /// setting, default one month). Files older than this under
+    /// `<config dir>/logs/calls/` are removed at start and once a day.
+    pub log_keep_days: u32,
 }
 
 pub fn config_dir() -> PathBuf {
@@ -202,6 +209,9 @@ impl DaemonConfig {
         } else {
             ConfigYml::default()
         };
+        if yml.log_keep_days == Some(0) {
+            return Err(anyhow!("{}: log_keep_days must be at least 1 (it would delete today's log)", path.display()));
+        }
         let mut stores: Vec<PathBuf> = yml.stores.iter().map(|p| expand_home(p)).collect();
         if stores.is_empty() {
             stores.push(default_store_dir());
@@ -235,6 +245,7 @@ impl DaemonConfig {
             interval_secs: yml.interval_secs.unwrap_or(5),
             batch: yml.batch.unwrap_or(8),
             backfill_since: yml.backfill_since.filter(|s| !s.trim().is_empty()),
+            log_keep_days: yml.log_keep_days.unwrap_or(super::calllog::DEFAULT_KEEP_DAYS),
         })
     }
 
@@ -299,6 +310,19 @@ mod tests {
         assert_eq!(root, PathBuf::from("/Volumes/p02/700c5b/pan"));
         // The all-zeros bare store id shortens the same way.
         assert_eq!(media_folder_name("0000000000000000000000000000000000000000"), "000000");
+    }
+
+    #[test]
+    fn log_keep_days_defaults_to_a_month_and_refuses_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        assert_eq!(DaemonConfig::load_from(&p).unwrap().log_keep_days, 30, "missing file");
+        std::fs::write(&p, "port: 7401\n").unwrap();
+        assert_eq!(DaemonConfig::load_from(&p).unwrap().log_keep_days, 30, "missing key");
+        std::fs::write(&p, "log_keep_days: 7\n").unwrap();
+        assert_eq!(DaemonConfig::load_from(&p).unwrap().log_keep_days, 7);
+        std::fs::write(&p, "log_keep_days: 0\n").unwrap();
+        assert!(DaemonConfig::load_from(&p).is_err(), "zero would delete today's file");
     }
 
     #[test]

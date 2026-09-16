@@ -11,8 +11,9 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::multipart::{Form, Part};
 use serde::Deserialize;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+pub use super::calllog::{CallMeta, Meter};
 pub use super::config::Target;
 
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(900);
@@ -136,36 +137,56 @@ impl Iris {
         req
     }
 
-    async fn post(&self, t: &Target, form: Form) -> std::result::Result<serde_json::Value, CallError> {
+    /// `request_bytes` is the payload size the caller knows (image + text);
+    /// the multipart framing is not counted. Every path out of here — an
+    /// answer, a bad status, or no answer at all — leaves the measurement in
+    /// `meter` for the call log.
+    async fn post(&self, t: &Target, form: Form, request_bytes: u64, meter: &Meter) -> std::result::Result<serde_json::Value, CallError> {
         let url = &t.url;
-        let resp = self
-            .request(t)
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|e| CallError::Transient(format!("{url}: {e}")))?;
-        self.finish(url, resp).await
+        let start = Instant::now();
+        let resp = self.request(t).multipart(form).send().await.map_err(|e| {
+            meter.set(CallMeta { url: url.clone(), status: None, latency_ms: ms(start), request_bytes, response_bytes: 0 });
+            CallError::Transient(format!("{url}: {e}"))
+        })?;
+        self.finish(url, resp, start, request_bytes, meter).await
     }
 
     /// `POST` a JSON body. Used where the door forwards Pan's bytes to a
     /// provider untouched and hands back the provider's own status + body.
-    async fn post_json(&self, t: &Target, body: &serde_json::Value) -> std::result::Result<serde_json::Value, CallError> {
+    async fn post_json(&self, t: &Target, body: &serde_json::Value, meter: &Meter) -> std::result::Result<serde_json::Value, CallError> {
         let url = &t.url;
-        let resp = self
-            .request(t)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| CallError::Transient(format!("{url}: {e}")))?;
-        self.finish(url, resp).await
+        let request_bytes = serde_json::to_vec(body).map(|v| v.len() as u64).unwrap_or(0);
+        let start = Instant::now();
+        let resp = self.request(t).json(body).send().await.map_err(|e| {
+            meter.set(CallMeta { url: url.clone(), status: None, latency_ms: ms(start), request_bytes, response_bytes: 0 });
+            CallError::Transient(format!("{url}: {e}"))
+        })?;
+        self.finish(url, resp, start, request_bytes, meter).await
     }
 
-    async fn finish(&self, url: &str, resp: reqwest::Response) -> std::result::Result<serde_json::Value, CallError> {
+    async fn finish(
+        &self,
+        url: &str,
+        resp: reqwest::Response,
+        start: Instant,
+        request_bytes: u64,
+        meter: &Meter,
+    ) -> std::result::Result<serde_json::Value, CallError> {
         let status = resp.status();
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| CallError::Transient(format!("{url}: read body: {e}")))?;
+        let body = match resp.text().await {
+            Ok(b) => b,
+            Err(e) => {
+                meter.set(CallMeta { url: url.to_string(), status: Some(status.as_u16()), latency_ms: ms(start), request_bytes, response_bytes: 0 });
+                return Err(CallError::Transient(format!("{url}: read body: {e}")));
+            }
+        };
+        meter.set(CallMeta {
+            url: url.to_string(),
+            status: Some(status.as_u16()),
+            latency_ms: ms(start),
+            request_bytes,
+            response_bytes: body.len() as u64,
+        });
         if status.as_u16() == 422 {
             return Err(CallError::Terminal(format!("{url}: {}", body.chars().take(300).collect::<String>())));
         }
@@ -205,11 +226,11 @@ impl Iris {
     /// complete XMP packet as the text (goodlux, 2026-09-08). The model
     /// input is capped at 8192 tokens, image and text together; a very long
     /// packet is truncated at its end by the node.
-    pub async fn embed(&self, t: &Target, bytes: &[u8], media_type: &str, text: &str) -> std::result::Result<SeeEmbed, CallError> {
+    pub async fn embed(&self, t: &Target, bytes: &[u8], media_type: &str, text: &str, meter: &Meter) -> std::result::Result<SeeEmbed, CallError> {
         let form = Form::new()
             .part("image", Self::image_part(bytes, media_type).map_err(|e| CallError::Terminal(e.to_string()))?)
             .text("text", text.to_string());
-        let v = self.post(t, form).await?;
+        let v = self.post(t, form, (bytes.len() + text.len()) as u64, meter).await?;
         let out: SeeEmbed = serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see_embed shape: {e}")))?;
         if out.vector.is_empty() {
             return Err(CallError::Transient("see_embed returned no vector".into()));
@@ -222,11 +243,11 @@ impl Iris {
 
     /// `/see` (or `/see_embed` — the caption fields are the same): caption
     /// only, no vector required.
-    pub async fn see(&self, t: &Target, bytes: &[u8], media_type: &str) -> std::result::Result<SeeEmbed, CallError> {
+    pub async fn see(&self, t: &Target, bytes: &[u8], media_type: &str, meter: &Meter) -> std::result::Result<SeeEmbed, CallError> {
         let form = Form::new()
             .part("image", Self::image_part(bytes, media_type).map_err(|e| CallError::Terminal(e.to_string()))?)
             .text("resident", "true");
-        let v = self.post(t, form).await?;
+        let v = self.post(t, form, bytes.len() as u64, meter).await?;
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see shape: {e}")))
     }
 
@@ -246,9 +267,10 @@ impl Iris {
         media_type: &str,
         prompt: &str,
         extra_body: Option<&serde_json::Value>,
+        meter: &Meter,
     ) -> std::result::Result<Vlm, CallError> {
         let body = build_chat_request(model, media_type, bytes, prompt, extra_body).map_err(CallError::Terminal)?;
-        let v = self.post_json(t, &body).await?;
+        let v = self.post_json(t, &body, meter).await?;
         let text = text_from_chat_response(&v)
             .ok_or_else(|| CallError::Transient(format!("vlm: no choices[0].message.content in: {}", v.to_string().chars().take(300).collect::<String>())))?;
         let model = v.get("model").and_then(|m| m.as_str()).map(str::to_owned);
@@ -259,11 +281,11 @@ impl Iris {
         Ok(Vlm { text, model, provider: None, extra })
     }
 
-    pub async fn see_pose(&self, t: &Target, bytes: &[u8], media_type: &str) -> std::result::Result<SeePose, CallError> {
+    pub async fn see_pose(&self, t: &Target, bytes: &[u8], media_type: &str, meter: &Meter) -> std::result::Result<SeePose, CallError> {
         let form = Form::new()
             .part("image", Self::image_part(bytes, media_type).map_err(|e| CallError::Terminal(e.to_string()))?)
             .text("with_keypoints", "true");
-        let v = self.post(t, form).await?;
+        let v = self.post(t, form, bytes.len() as u64, meter).await?;
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see_pose shape: {e}")))
     }
 
@@ -271,14 +293,16 @@ impl Iris {
     /// comma-separated string of nouns. Returns the parsed regions AND the
     /// whole response as it came, so the caller can keep everything the
     /// server said (area, verts, provenance) beside the record.
-    pub async fn segment(&self, t: &Target, bytes: &[u8], media_type: &str, prompts: &[String]) -> std::result::Result<(Vec<Region>, serde_json::Value), CallError> {
+    pub async fn segment(&self, t: &Target, bytes: &[u8], media_type: &str, prompts: &[String], meter: &Meter) -> std::result::Result<(Vec<Region>, serde_json::Value), CallError> {
         if prompts.is_empty() {
             return Err(CallError::Terminal("segment needs at least one prompt".into()));
         }
+        let joined = prompts.join(",");
+        let request_bytes = (bytes.len() + joined.len()) as u64;
         let form = Form::new()
             .part("image", Self::image_part(bytes, media_type).map_err(|e| CallError::Terminal(e.to_string()))?)
-            .text("prompts", prompts.join(","));
-        let v = self.post(t, form).await?;
+            .text("prompts", joined);
+        let v = self.post(t, form, request_bytes, meter).await?;
         let out: SegmentResponse = serde_json::from_value(v.clone()).map_err(|e| CallError::Transient(format!("segment shape: {e}")))?;
         Ok((out.regions, v))
     }
@@ -288,6 +312,10 @@ impl Default for Iris {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn ms(start: Instant) -> u64 {
+    start.elapsed().as_millis() as u64
 }
 
 /// Keypoints → the `pan:keypoints` literal: `x,y,c;x,y,c;…` in the model's
