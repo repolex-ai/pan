@@ -984,7 +984,11 @@ impl Pan {
         }
         write_atomic(&abs, enrich::build_data_file(subject.as_str(), link_local, records).as_bytes()).with_context(|| format!("write {}", abs.display()))?;
         let mut quads = enrich::record_quads(subject.as_str(), link_local, records)?;
-        let r = enrich::EnrichmentRef::new(model, &rel, records.len());
+        // pan:count only where one run yields many records in one file
+        // (regionData, poseData); caption and vector references carry none
+        // (goodlux, 2026-09-16).
+        let count = matches!(ref_local, "regionData" | "poseData").then_some(records.len());
+        let r = enrich::EnrichmentRef::new(model, &rel, count);
         quads.extend(enrich::ref_quads(subject.as_str(), ref_local, &r)?);
         if let Err(e) = self.insert_quads(&quads) {
             let _ = fs::remove_file(&abs);
@@ -1020,7 +1024,7 @@ impl Pan {
             }
         }
         let mut quads = enrich::record_quads(subject.as_str(), "embedding", std::slice::from_ref(&rec))?;
-        quads.extend(enrich::ref_quads(subject.as_str(), "vectorData", &enrich::EnrichmentRef::new(model, &rel, 1))?);
+        quads.extend(enrich::ref_quads(subject.as_str(), "vectorData", &enrich::EnrichmentRef::new(model, &rel, None))?);
         self.insert_quads(&quads)?;
         self.restamp(id)
     }
@@ -1343,7 +1347,7 @@ impl Pan {
                             id: bare_id(node_iri),
                             model: f.get("model").cloned().unwrap_or_default(),
                             path: path.clone(),
-                            count: f.get("count").and_then(|c| c.parse().ok()).unwrap_or(0),
+                            count: f.get("count").and_then(|c| c.parse().ok()),
                             produced_date: f.get("producedDate").cloned().unwrap_or_default(),
                         });
                     }

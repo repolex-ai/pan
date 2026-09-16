@@ -39,11 +39,41 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.3.5" .
+    owl:versionInfo "0.3.6" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.3.6 (2026-09-16, ruled by goodlux, same day, reading one stored file):
+#   (1) pan:id now applies to EVERY Pan node, not only media: its domain moves
+#       from pan:Media to git-lex:Thing. Each reference in a media file's XMP
+#       (captionData, poseData, regionData, vectorData entries) already carries
+#       <pan:id>&lt;pan/Enrichment/xxxxxxxx&gt;</pan:id>, and every record in a
+#       data file (Caption, Embedding, Pose, Region) carries its own pan:id; the
+#       graph stores git-lex:id on each. The ruling: a reference is addressable
+#       on its own, so its id is a declared field beside model, producedDate
+#       and path — not a convention the writer happens to follow.
+#   (2) Identity is REQUIRED on every class: each cardinality block gains
+#       `git-lex:id cardinality 1`. Restricted under the git-lex spelling, not
+#       pan:id, because the SHACL generator (git-lex/src/shacl.rs) reads
+#       owl:onProperty literally and does not follow owl:equivalentProperty;
+#       the pan:Media block already restricts git-lex:dateCreated the same way.
+#   Found while verifying, not fixed here: the pan:thumbnail struct in the
+#   XMP carries path, width and height but no pan:id, although the Thumbnail
+#   node in the graph has one. Code change, not ontology; tracked separately.
+#   (3) pan:count is no longer required on every reference: cardinality 1
+#       becomes maxCardinality 1 on pan:Enrichment. It is written only where
+#       one model run yields many records in one file — regionData (one
+#       Region per thing SAM3 found) and poseData (one skeleton per person).
+#       A caption or vector reference names one file holding one answer and
+#       carries no count. pand stops writing it there. Its domain narrows
+#       from git-lex:Thing to pan:Enrichment: the reference is the only class
+#       that carries a count. The other shared fields (model, precision,
+#       provider, producedDate, path) keep their Thing domain in this bump;
+#       they are a separate question.
+#   Deliberately not done: the record-link redesign (#18) and everything
+#   0.4.0 (#5).
+#
 # v0.3.5 (2026-09-16, ruled by goodlux; corrections only, nothing new said):
 #   (1) pan:id, pan:dateCreated, pan:relatedToId are declared as THE SAME
 #       PROPERTY as git-lex:id, git-lex:dateCreated, git-lex:relatedToId
@@ -330,12 +360,15 @@ pan:sceneLocation a owl:DatatypeProperty ;
 # git-lex:dateCreated in the graph. owl:equivalentProperty says they are ONE
 # property under two names: the sameAs ruling (goodlux, 2026-09-16) in the
 # form OWL gives properties. pand translates on read; nothing else changes.
+# pan:id is not media-only: every reference and record node (Enrichment,
+# Caption, Embedding, Pose, Region, Thumbnail) carries its own (goodlux,
+# 2026-09-16), so its domain is git-lex:Thing.
 
 pan:id a owl:ObjectProperty ;
     owl:equivalentProperty git-lex:id ;
     rdfs:label "id" ;
-    rdfs:comment "Which Thing this media IS, written <pan/Image/id>; the file spelling of git-lex:id. Never write the bare token." ;
-    rdfs:domain pan:Media ;
+    rdfs:comment "Which Thing this node IS, written <pan/Class/id>; the file spelling of git-lex:id. On media and on every record and reference. Never write the bare token." ;
+    rdfs:domain git-lex:Thing ;
     rdfs:range git-lex:Thing .
 
 pan:dateCreated a owl:DatatypeProperty ;
@@ -444,7 +477,7 @@ pan:relatedToId a owl:ObjectProperty ;
 
 # --- shared fields -------------------------------------------------------------
 # These apply to several pan classes (Enrichment, Region, Pose, Caption, …);
-# their domain is the shared parent Thing and the cardinality block below says
+# their domain is the shared parent Thing (pan:count excepted: Enrichment only) and the cardinality block below says
 # which class carries which.
 
 pan:model a owl:DatatypeProperty ;
@@ -479,8 +512,8 @@ pan:path a owl:DatatypeProperty ;
 
 pan:count a owl:DatatypeProperty ;
     rdfs:label "count" ;
-    rdfs:comment "How many items the referenced file holds." ;
-    rdfs:domain git-lex:Thing ;
+    rdfs:comment "How many records the referenced file holds. Written only on region and pose references, where one run yields many; never on caption or vector references." ;
+    rdfs:domain pan:Enrichment ;
     rdfs:range xsd:integer .
 
 # --- Region fields -------------------------------------------------------------
@@ -542,11 +575,17 @@ pan:vectorPath a owl:DatatypeProperty ;
 # -----------------------------------------------------------------------------
 # CARDINALITY
 # -----------------------------------------------------------------------------
+# Every class requires exactly one identity. It is restricted as git-lex:id,
+# the universal the graph stores, because the SHACL generator reads
+# owl:onProperty literally and does not follow owl:equivalentProperty; in a
+# media file the same fact is spelled pan:id (see the identity block above).
 
 pan:Store rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:mediaRoot ; owl:cardinality 1 ] .
 
 pan:Media rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:mediaPath  ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:mediaType  ; owl:cardinality 1 ] ,
     # When Pan created this record and its id (RFC3339, system local time):
@@ -558,12 +597,17 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] .
 
 pan:Enrichment rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:model      ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:path       ; owl:cardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:count      ; owl:cardinality 1 ] ,
+    # count only where one run yields many records (regionData, poseData);
+    # a caption or vector reference names one file with one answer and
+    # carries no count (goodlux, 2026-09-16).
+    [ a owl:Restriction ; owl:onProperty pan:count      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:producedDate ; owl:cardinality 1 ] .
 
 pan:Region rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:model      ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:producedDate ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:descriptor ; owl:cardinality 1 ] ,
@@ -573,23 +617,27 @@ pan:Region rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:maskPath   ; owl:maxCardinality 1 ] .
 
 pan:Pose rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:model       ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:producedDate  ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:keypoints   ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:overlayPath ; owl:maxCardinality 1 ] .
 
 pan:Caption rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:model      ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:producedDate ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:text       ; owl:cardinality 1 ] .
 
 pan:Embedding rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:model      ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:producedDate ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:dim        ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:vectorPath ; owl:cardinality 1 ] .
 
 pan:Thumbnail rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:path       ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:producedDate ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width      ; owl:cardinality 1 ] ,

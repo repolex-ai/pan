@@ -116,7 +116,9 @@ fn serialize_enrichment(local: &str, refs: &[crate::enrich::EnrichmentRef], inde
             out.push_str(&format!("{indent}   <pan:model>{}</pan:model>\n", xml_escape(&r.model)));
         }
         out.push_str(&format!("{indent}   <pan:path>{}</pan:path>\n", xml_escape(&r.path)));
-        out.push_str(&format!("{indent}   <pan:count>{}</pan:count>\n", r.count));
+        if let Some(count) = r.count {
+            out.push_str(&format!("{indent}   <pan:count>{count}</pan:count>\n"));
+        }
         out.push_str(&format!("{indent}   <pan:producedDate>{}</pan:producedDate>\n", xml_escape(&r.produced_date)));
         out.push_str(&format!("{indent}  </rdf:li>\n"));
     }
@@ -1233,7 +1235,7 @@ mod flat_block_tests {
                     id: "jz55pu47".into(),
                     model: "qwen/qwen3.8-27b".into(),
                     path: "caption/2026/09/05/altocnif.xml".into(),
-                    count: 1,
+                    count: None,
                     produced_date: "2026-09-05T10:02:40-07:00".into(),
                 }],
             )],
@@ -1296,7 +1298,7 @@ mod flat_block_tests {
                     id: "jz55pu47".into(),
                     model: "qwen/qwen3.8-27b".into(),
                     path: "caption/2026/09/05/altocnif.xml".into(),
-                    count: 1,
+                    count: None,
                     produced_date: "2026-09-05T10:02:40-07:00".into(),
                 }],
             )],

@@ -76,13 +76,16 @@ pub struct EnrichmentRef {
     pub model: String,
     /// Path relative to the store's media root.
     pub path: String,
-    pub count: usize,
+    /// `pan:count` — how many records the file holds. Written only where one
+    /// model run yields many records in one file: regionData and poseData
+    /// (goodlux, 2026-09-16). Caption and vector references carry none.
+    pub count: Option<usize>,
     /// `pan:producedDate` — RFC3339, system local time.
     pub produced_date: String,
 }
 
 impl EnrichmentRef {
-    pub fn new(model: &str, path: &str, count: usize) -> Self {
+    pub fn new(model: &str, path: &str, count: Option<usize>) -> Self {
         Self { id: crate::gen_pan_id(), model: model.to_string(), path: path.to_string(), count, produced_date: now_local() }
     }
 }
@@ -181,7 +184,7 @@ pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<
     let node = NamedNode::new(format!("{PAN_MEDIA_NS}Enrichment/{}", r.id))
         .map_err(|e| anyhow!("bad enrichment IRI: {e}"))?;
     let rdf_type = NamedNode::new(RDF_TYPE).expect("rdf:type");
-    Ok(vec![
+    let mut quads = vec![
         Quad::new(
             image,
             NamedNode::new(format!("{PAN_NS}{ref_local}")).map_err(|e| anyhow!("bad ref predicate: {e}"))?,
@@ -197,9 +200,12 @@ pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<
         self_id_quad(&node)?,
         pan_quad(&node, "model", &r.model)?,
         pan_quad(&node, "path", &r.path)?,
-        pan_quad(&node, "count", &r.count.to_string())?,
-        pan_quad(&node, "producedDate", &r.produced_date)?,
-    ])
+    ];
+    if let Some(count) = r.count {
+        quads.push(pan_quad(&node, "count", &count.to_string())?);
+    }
+    quads.push(pan_quad(&node, "producedDate", &r.produced_date)?);
+    Ok(quads)
 }
 
 /// `<node> git-lex:id <node>` — the universal identity, an IRI pointing at
@@ -306,7 +312,7 @@ mod tests {
 
     #[test]
     fn reference_quads_name_model_path_and_count() {
-        let r = EnrichmentRef::new("sam3", "sam3/2026/08/17/k7m2p9x4.xml", 15);
+        let r = EnrichmentRef::new("sam3", "sam3/2026/08/17/k7m2p9x4.xml", Some(15));
         let quads = ref_quads("https://repolex.ai/pan/Image/k7m2p9x4", "regionData", &r).unwrap();
         let has = |local: &str, val: &str| {
             quads.iter().any(|q| {
@@ -317,5 +323,19 @@ mod tests {
         assert!(has("path", "sam3/2026/08/17/k7m2p9x4.xml"));
         assert!(has("count", "15"));
         assert!(has("model", "sam3"));
+    }
+
+    /// A caption or vector reference names one file holding one answer;
+    /// pan:count is written only for region and pose references
+    /// (goodlux, 2026-09-16), so it must be absent here.
+    #[test]
+    fn caption_reference_carries_no_count() {
+        let r = EnrichmentRef::new("qwen/qwen3.8-27b", "image/caption/2026/09/16/abc.xml", None);
+        let quads = ref_quads("https://repolex.ai/pan/Image/abcdefgh", "captionData", &r).unwrap();
+        assert!(
+            !quads.iter().any(|q| q.predicate.as_str() == format!("{PAN_NS}count")),
+            "caption reference must not carry pan:count: {quads:?}"
+        );
+        assert!(quads.iter().any(|q| q.predicate.as_str() == format!("{PAN_NS}path")));
     }
 }
