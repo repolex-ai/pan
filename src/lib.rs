@@ -610,8 +610,8 @@ impl Pan {
             enrich::self_id_quad(&subject)?,
             self.quad(&subject, "mediaPath", &rel_path),
             // The Image is a git-lex Thing: when it came to be is the universal
-            // git-lex:dateCreated, not a Pan-private property (Rob, 2026-09-05).
-            Quad::new(subject.clone(), git_lex_iri("dateCreated"), Literal::new_simple_literal(&created_date), GraphName::DefaultGraph),
+            // git-lex:createdDate, the universal (goodlux, 2026-09-05; renamed with base kit 0.18.0, 2026-09-16).
+            Quad::new(subject.clone(), git_lex_iri("createdDate"), Literal::new_simple_literal(&created_date), GraphName::DefaultGraph),
             self.quad(&subject, "mediaType", &media_type),
         ];
 
@@ -795,7 +795,7 @@ impl Pan {
             media_type: one("mediaType").unwrap_or_default(),
             created_date: facts
                 .iter()
-                .find(|(p, _)| p == &format!("{GIT_LEX_NS}dateCreated"))
+                .find(|(p, _)| p == &format!("{GIT_LEX_NS}createdDate"))
                 .and_then(|(_, v)| v.first().cloned())
                 .unwrap_or_default(),
             ready_date: one("readyDate"),
@@ -817,7 +817,7 @@ impl Pan {
     /// the old. No second queue, no second process.
     ///
     /// `since` is the backfill floor: an RFC 3339 local-offset date-time, the
-    /// same shape `git-lex:dateCreated` is written in, so a plain string compare
+    /// same shape `git-lex:createdDate` is written in, so a plain string compare
     /// is a time compare. Images created before it are not pending.
     pub fn pending_for(&self, ref_local: &str, model: &str, limit: usize, since: Option<&str>) -> Result<Vec<PendingItem>> {
         // What a stage needs before it can run (goodlux, 2026-09-08):
@@ -836,7 +836,7 @@ impl Pan {
         };
         let q = format!(
             "SELECT ?s ?path ?type ?d WHERE {{
-               ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; git-lex:dateCreated ?d .
+               ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; git-lex:createdDate ?d .
                {needs}
                FILTER NOT EXISTS {{ ?s pan:{ref_local} ?e . ?e pan:model \"{model_lit}\" }}
                {floor}
@@ -956,7 +956,7 @@ impl Pan {
         Ok(self
             .facts_for(id)?
             .iter()
-            .find(|(p, _)| p == &format!("{GIT_LEX_NS}dateCreated"))
+            .find(|(p, _)| p == &format!("{GIT_LEX_NS}createdDate"))
             .and_then(|(_, v)| v.first().cloned())
             .unwrap_or_default())
     }
@@ -1377,7 +1377,7 @@ impl Pan {
         Ok(xmp::ImagePacket {
             iri: subject.as_str().to_string(),
             media_path: pan_field("mediaPath").unwrap_or_default(),
-            created_date: git_lex_field("dateCreated").unwrap_or_default(),
+            created_date: git_lex_field("createdDate").unwrap_or_default(),
             media_type: pan_field("mediaType").unwrap_or_default(),
             width: pan_field("width").and_then(|v| v.parse().ok()),
             height: pan_field("height").and_then(|v| v.parse().ok()),

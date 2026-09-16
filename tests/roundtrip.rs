@@ -115,9 +115,9 @@ fn full_store_describe_query_search_roundtrip() {
         "pan: identity block present, id in angle-bracket form"
     );
     assert!(!packet.contains(&wolf.iri), "the expanded IRI is never written into the file");
-    assert!(packet.contains("<pan:dateCreated>"), "the Thing's creation time in the packet, under pan:");
+    assert!(packet.contains("<pan:createdDate>"), "the Thing's creation time in the packet, under pan:");
     assert!(!packet.contains("git-lex:"), "Pan writes no git-lex names into the file");
-    assert!(!packet.contains("pan:createdDate"), "pan:createdDate is gone (pan.ttl 0.3.3)");
+    assert!(!packet.contains("pan:dateCreated"), "the old spelling is gone (pan.ttl 0.3.9)");
 
     // ── describe: merge facts, loud failure on unknown prefix ──
     store

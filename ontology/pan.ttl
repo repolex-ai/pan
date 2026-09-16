@@ -39,11 +39,21 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.3.8" .
+    owl:versionInfo "0.3.9" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.3.9 (2026-09-16, ruled by goodlux): every Pan date is named <what>Date,
+#   type at the end, like producedDate and readyDate. pan:dateCreated is
+#   RENAMED pan:createdDate. The base kit renames its universals the same
+#   day (git-lex:dateCreated → git-lex:createdDate, git-lex:dateUpdated →
+#   git-lex:updatedDate; base kit 0.18.0), so pan:createdDate is
+#   owl:equivalentProperty git-lex:createdDate and the graph now stores
+#   git-lex:createdDate. The Media cardinality restriction moves with it and
+#   stays on the universal (the SHACL generator reads owl:onProperty literally).
+#   No alias for the old spelling in the reader: files written before this
+#   version are test data and are wiped before switchover.
 # v0.3.8 (2026-09-16, ruled by goodlux; two rulings landed together):
 #   (1) HOW AN IMAGE LINKS ITS RECORDS — option B of the record-link question
 #       (pan issue #18). The image links ONLY to the references
@@ -402,8 +412,8 @@ pan:sceneLocation a owl:DatatypeProperty ;
 # --- identity and time, as spelled inside a media file -------------------------
 # A media file carries only the pan and copia namespaces. So the two universal
 # facts every Thing has — which Thing it is, and when it came to be — are
-# written pan:id and pan:dateCreated in the file and stored git-lex:id and
-# git-lex:dateCreated in the graph. owl:equivalentProperty says they are ONE
+# written pan:id and pan:createdDate in the file and stored git-lex:id and
+# git-lex:createdDate in the graph. owl:equivalentProperty says they are ONE
 # property under two names: the sameAs ruling (goodlux, 2026-09-16) in the
 # form OWL gives properties. pand translates on read; nothing else changes.
 # pan:id is not media-only: every reference and record node (Enrichment,
@@ -417,10 +427,10 @@ pan:id a owl:ObjectProperty ;
     rdfs:domain git-lex:Thing ;
     rdfs:range git-lex:Thing .
 
-pan:dateCreated a owl:DatatypeProperty ;
-    owl:equivalentProperty git-lex:dateCreated ;
-    rdfs:label "date created" ;
-    rdfs:comment "When Pan created this record, RFC3339 system local time; the file spelling of git-lex:dateCreated. Written by pand, never by hand." ;
+pan:createdDate a owl:DatatypeProperty ;
+    owl:equivalentProperty git-lex:createdDate ;
+    rdfs:label "created date" ;
+    rdfs:comment "When Pan created this record, RFC3339 system local time; the file spelling of git-lex:createdDate. Written by pand, never by hand." ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:dateTime .
 
@@ -660,8 +670,8 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:mediaPath  ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:mediaType  ; owl:cardinality 1 ] ,
     # When Pan created this record and its id (RFC3339, system local time):
-    # the universal git-lex:dateCreated, inherited from git-lex:Thing.
-    [ a owl:Restriction ; owl:onProperty git-lex:dateCreated ; owl:cardinality 1 ] ,
+    # the universal git-lex:createdDate, inherited from git-lex:Thing (base kit 0.18.0).
+    [ a owl:Restriction ; owl:onProperty git-lex:createdDate ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:readyDate    ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,

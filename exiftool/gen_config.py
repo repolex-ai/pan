@@ -22,9 +22,9 @@ def props(path, prefix):
 
 pan = props(sys.argv[1], "pan")
 copia = props(sys.argv[2], "copia")
-# In the file, identity and creation time are pan:id / pan:dateCreated
-# (git-lex:id / git-lex:dateCreated in the graph).
-pan = sorted(set(pan) | {"id", "dateCreated"})
+# In the file, identity and creation time are pan:id / pan:createdDate
+# (git-lex:id / git-lex:createdDate in the graph).
+pan = sorted(set(pan) | {"id", "createdDate"})
 # Nested shapes Pan writes: the thumbnail struct and the per-stage reference bags.
 # regionData alone carries a count (pan:RegionData, pan.ttl 0.3.6).
 structs = {"thumbnail"}

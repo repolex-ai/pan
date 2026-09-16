@@ -26,7 +26,7 @@
     WRITABLE  => 'string',
     bbox => { },
     count => { },
-    dateCreated => { },
+    createdDate => { },
     descriptor => { },
     dim => { },
     height => { },

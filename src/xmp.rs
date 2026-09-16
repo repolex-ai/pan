@@ -155,9 +155,9 @@ pub fn build_packet(p: &ImagePacket) -> String {
 /// namespaces, never git-lex (goodlux, 2026-09-07). Other namespaces ride in
 /// their own Descriptions, untouched.
 ///
-/// Identity and creation time are `pan:id` and `pan:dateCreated` in the file;
+/// Identity and creation time are `pan:id` and `pan:createdDate` in the file;
 /// in the graph the same two facts are the universal `git-lex:id` and
-/// `git-lex:dateCreated` (a pan:Image is a git-lex Thing, pan.ttl 0.3.3). The
+/// `git-lex:createdDate` (a pan:Image is a git-lex Thing; universal renamed with base kit 0.18.0). The
 /// file names are Pan's, the graph names are git-lex's; the conversion is at
 /// the boundary, never in the file (goodlux, 2026-09-05 and 2026-09-07).
 ///
@@ -169,7 +169,7 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
     out.push_str("    <rdf:Description rdf:about=\"\"");
     out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\">\n"));
     out.push_str(&format!("      <pan:id>{}</pan:id>\n", xml_escape(&bracket_of_iri(&p.iri))));
-    out.push_str(&format!("      <pan:dateCreated>{}</pan:dateCreated>\n", xml_escape(&p.created_date)));
+    out.push_str(&format!("      <pan:createdDate>{}</pan:createdDate>\n", xml_escape(&p.created_date)));
     let mut ident: Vec<(String, FieldValue)> = vec![
         ("mediaPath".into(), FieldValue::Scalar(p.media_path.clone())),
     ];
@@ -1008,7 +1008,7 @@ pub(crate) mod tests {
                <copia:momentId>3hyh7rwekpmq</copia:momentId>\n\
                <copia:sceneMood>calm &amp; &lt;bright&gt;</copia:sceneMood>\n\
                <copia:genSteps rdf:datatype=\"http://www.w3.org/2001/XMLSchema#integer\">12</copia:genSteps>\n\
-               <git-lex:dateCreated rdf:datatype=\"http://www.w3.org/2001/XMLSchema#dateTime\">2026-09-03T23:54:18-07:00</git-lex:dateCreated>\n\
+               <git-lex:createdDate rdf:datatype=\"http://www.w3.org/2001/XMLSchema#dateTime\">2026-09-03T23:54:18-07:00</git-lex:createdDate>\n\
                <copia:sceneObjects><rdf:Bag><rdf:li>wolf</rdf:li><rdf:li>forest</rdf:li></rdf:Bag></copia:sceneObjects>\n\
              </rdf:Description>"
         );
@@ -1016,8 +1016,8 @@ pub(crate) mod tests {
         let quads = load_packet_statements(&arrived, "https://repolex.ai/pan/Image/abc123xy").unwrap();
         assert!(quads.len() >= 5);
         assert!(
-            quads.iter().any(|q| q.predicate.as_str() == "https://repolex.ai/ontology/git-lex/dateCreated"),
-            "a producer's git-lex:dateCreated on its own subject is declared vocabulary and must load"
+            quads.iter().any(|q| q.predicate.as_str() == "https://repolex.ai/ontology/git-lex/createdDate"),
+            "a producer's git-lex:createdDate on its own subject is declared vocabulary and must load"
         );
         let steps = quads
             .iter()
@@ -1268,7 +1268,7 @@ mod flat_block_tests {
             .expect("the reader returns the thumbnail struct");
         let id = th.iter().find(|(f, _)| f.ends_with("/id")).map(|(_, v)| v.value().to_string());
         assert_eq!(id.as_deref(), Some("<pan/Thumbnail/th2umb02>"), "reader returns the thumbnail id: {th:?}");
-        assert!(desc.contains("<pan:dateCreated>"), "creation time under pan:, not git-lex: {desc}");
+        assert!(desc.contains("<pan:createdDate>"), "creation time under pan:, not git-lex: {desc}");
         assert!(desc.contains("<pan:shortDescription>A wolf on a ridge at dusk.</pan:shortDescription>"), "{desc}");
         assert!(desc.contains("<pan:longDescription>"), "{desc}");
         assert!(desc.contains("<pan:sceneObjects><rdf:Bag><rdf:li>wolf</rdf:li><rdf:li>rock</rdf:li><rdf:li>sky</rdf:li></rdf:Bag></pan:sceneObjects>"), "scene objects as a bag: {desc}");
@@ -1328,7 +1328,7 @@ mod flat_block_tests {
             )],
             ..Default::default()
         });
-        let copia = "<rdf:Description rdf:about=\"\" xmlns:copia=\"https://repolex.ai/ontology/copia/\" xmlns:pan=\"https://repolex.ai/ontology/pan/\" xmlns:git-lex=\"https://repolex.ai/ontology/git-lex/\">\n  <copia:momentId>296pm7ygm6np-1-4</copia:momentId>\n  <copia:seed>4123927538</copia:seed>\n  <git-lex:dateCreated>2026-09-04T21:31:34-07:00</git-lex:dateCreated>\n  <pan:relatedToId>&lt;copia/Moment/296pm7ygm6np-1-4&gt;</pan:relatedToId>\n</rdf:Description>";
+        let copia = "<rdf:Description rdf:about=\"\" xmlns:copia=\"https://repolex.ai/ontology/copia/\" xmlns:pan=\"https://repolex.ai/ontology/pan/\" xmlns:git-lex=\"https://repolex.ai/ontology/git-lex/\">\n  <copia:momentId>296pm7ygm6np-1-4</copia:momentId>\n  <copia:seed>4123927538</copia:seed>\n  <git-lex:createdDate>2026-09-04T21:31:34-07:00</git-lex:createdDate>\n  <pan:relatedToId>&lt;copia/Moment/296pm7ygm6np-1-4&gt;</pan:relatedToId>\n</rdf:Description>";
         let arrived = format!(
             "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n{copia}\n</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
         );
