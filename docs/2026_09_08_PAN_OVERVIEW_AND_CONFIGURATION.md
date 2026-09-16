@@ -110,7 +110,8 @@ are idle.
 | `~/.config/pan/prompts/<name>` | this machine | prompt text, plain text, one file per stage; the config names the file |
 | `~/.config/pan/logs/calls/YYYY-MM-DD.jsonl` | this machine | the model-call log: one JSON line per call, by local day; files older than `log_keep_days` are removed at start and once a day |
 | `<store>/pan.yml` | one store | the store's id; **planned:** its media root, which stages run, which prompt file each uses, its backfill floor, which ontologies apply |
-| `<store>/_ignore/` | one store | the graph, the vector index, the ontology copy; never edited by hand |
+| `<store>/_ignore/` | one store | the graph and the vector index; never edited by hand |
+| `~/.config/pan/ontology/pan.ttl` | this machine | the ontology the running pand was built with, rewritten at every start; read it, do not edit it |
 | `~/.pan/logs/pand.log` | this machine | the daemon's log, also printed in the terminal that started it |
 
 ### The daemon file, `~/.config/pan/config.yml`

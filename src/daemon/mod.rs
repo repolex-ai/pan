@@ -192,7 +192,13 @@ impl Daemon {
             .map(|(name, m)| (name.clone(), Arc::new(Limiter::new(name, m.concurrency))))
             .collect();
         // The log lives beside config.yml, whichever directory that is.
-        let calls = calllog::CallLog::new(cfg.path.parent().unwrap_or(Path::new(".")), cfg.log_keep_days);
+        let config_dir = cfg.path.parent().unwrap_or(Path::new("."));
+        let calls = calllog::CallLog::new(config_dir, cfg.log_keep_days);
+        // The ontology this binary was built with, for anything else on the
+        // machine that wants to read Pan's vocabulary. Machine-wide, not per
+        // store (goodlux, 2026-09-16). Rewritten every start.
+        let ttl = crate::write_ontology_copy(&config_dir.join("ontology"))?;
+        tracing::info!(path = %ttl.display(), version = crate::ontology_version(), "ontology written");
         Ok(Daemon {
             calls,
             cfg,

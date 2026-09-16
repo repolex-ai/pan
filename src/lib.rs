@@ -48,6 +48,28 @@ pub use layout::PanLayout;
 /// The Pan base ontology, shipped with the binary; NOT loaded into the media graph.
 pub const PAN_ONTOLOGY_TTL: &str = include_str!("../ontology/pan.ttl");
 
+/// The `owl:versionInfo` of the compiled-in ontology ("0.3.5"), or "?" if the
+/// header ever loses it.
+pub fn ontology_version() -> &'static str {
+    PAN_ONTOLOGY_TTL
+        .split("owl:versionInfo")
+        .nth(1)
+        .and_then(|rest| rest.split('"').nth(1))
+        .unwrap_or("?")
+}
+
+/// Write the ontology this binary was built with to `<dir>/pan.ttl` so other
+/// systems on the machine can read Pan's vocabulary (goodlux, 2026-09-16: the
+/// machine-wide config directory, not a store — one machine holds many stores
+/// and none of them is the ontology's home). Rewritten at every start, so the
+/// file always matches the running pand. Returns the path written.
+pub fn write_ontology_copy(dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let path = dir.join("pan.ttl");
+    write_atomic(&path, PAN_ONTOLOGY_TTL.as_bytes())?;
+    Ok(path)
+}
+
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 /// The angle-bracket form of a pan identity, as it appears everywhere a
@@ -349,6 +371,22 @@ impl Perception {
             return Err("answer is missing shortDescription or longDescription".into());
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod ontology_copy_tests {
+    use super::*;
+
+    #[test]
+    fn writes_the_compiled_ontology_verbatim() {
+        let dir = std::env::temp_dir().join(format!("pan-ontology-copy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = write_ontology_copy(&dir.join("ontology")).unwrap();
+        assert_eq!(path, dir.join("ontology").join("pan.ttl"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), PAN_ONTOLOGY_TTL);
+        assert!(!ontology_version().is_empty() && ontology_version() != "?");
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
 
