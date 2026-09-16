@@ -39,11 +39,29 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.3.4" .
+    owl:versionInfo "0.3.5" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.3.5 (2026-09-16, ruled by goodlux; corrections only, nothing new said):
+#   (1) pan:id, pan:dateCreated, pan:relatedToId are declared as THE SAME
+#       PROPERTY as git-lex:id, git-lex:dateCreated, git-lex:relatedToId
+#       (owl:equivalentProperty — the "sameAs" ruling in its form for
+#       properties; owl:sameAs itself is for individuals). A media file
+#       carries only the pan and copia namespaces (ruled 2026-09-08), so the
+#       file spells these facts pan:; the graph stores the git-lex universal.
+#       The two spellings are one fact. pand already translated on read;
+#       until now the file's spelling was undeclared here.
+#   (2) The pan:caption maxCardinality line in the pan:Media block, left over
+#       from the 0.3.4 deletion, is removed.
+#   (3) pan:importedFrom DELETED: its reader (the migration code) was removed
+#       on 2026-09-07 and nothing in src/ names it.
+#   (4) pan:captionItem's comment no longer claims pan:caption exists.
+#   Deliberately not done: the record-link redesign (how a media object holds
+#   its Caption/Pose/Region/Embedding records, pan issue #18) and every 0.4.0
+#   addition (pan issue #5). Both wait for their rulings.
+#
 # v0.3.4 (2026-09-08, ruled by goodlux after a night of reading stored files):
 #   (1) pan:shortDescription, pan:longDescription on pan:Media — any media
 #       gets described; the long one is what the embedding is built from.
@@ -305,11 +323,27 @@ pan:sceneLocation a owl:DatatypeProperty ;
     rdfs:domain pan:Image ;
     rdfs:range xsd:string .
 
-pan:importedFrom a owl:DatatypeProperty ;
-    rdfs:label "imported from" ;
-    rdfs:comment "For migrated media: the source path this object was imported from, so a re-run recognises what it already brought over." ;
+# --- identity and time, as spelled inside a media file -------------------------
+# A media file carries only the pan and copia namespaces. So the two universal
+# facts every Thing has — which Thing it is, and when it came to be — are
+# written pan:id and pan:dateCreated in the file and stored git-lex:id and
+# git-lex:dateCreated in the graph. owl:equivalentProperty says they are ONE
+# property under two names: the sameAs ruling (goodlux, 2026-09-16) in the
+# form OWL gives properties. pand translates on read; nothing else changes.
+
+pan:id a owl:ObjectProperty ;
+    owl:equivalentProperty git-lex:id ;
+    rdfs:label "id" ;
+    rdfs:comment "Which Thing this media IS, written <pan/Image/id>; the file spelling of git-lex:id. Never write the bare token." ;
     rdfs:domain pan:Media ;
-    rdfs:range xsd:string .
+    rdfs:range git-lex:Thing .
+
+pan:dateCreated a owl:DatatypeProperty ;
+    owl:equivalentProperty git-lex:dateCreated ;
+    rdfs:label "date created" ;
+    rdfs:comment "When Pan created this record, RFC3339 system local time; the file spelling of git-lex:dateCreated. Written by pand, never by hand." ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:dateTime .
 
 # -----------------------------------------------------------------------------
 # ENRICHMENT — what a model saw, where its output lives, when
@@ -386,7 +420,7 @@ pan:pose a owl:ObjectProperty ;
 
 pan:captionItem a owl:ObjectProperty ;
     rdfs:label "caption item" ;
-    rdfs:comment "One Caption record of this media. (NAME OPEN — pan:caption carries the current text on the media itself.)" ;
+    rdfs:comment "One Caption record of this media. The descriptions on the media are the current values; this record keeps the model's whole answer." ;
     rdfs:domain pan:Media ; rdfs:range pan:Caption .
 
 pan:embedding a owl:ObjectProperty ;
@@ -399,9 +433,13 @@ pan:thumbnail a owl:ObjectProperty ;
     rdfs:comment "The Thumbnail Pan made of this media." ;
     rdfs:domain pan:Media ; rdfs:range pan:Thumbnail .
 
+# The file spelling of git-lex:relatedToId — the same property (goodlux,
+# 2026-09-16), see pan:id above. The producer writes it in the file; the graph
+# may carry either spelling and a reader treats them as one.
 pan:relatedToId a owl:ObjectProperty ;
+    owl:equivalentProperty git-lex:relatedToId ;
     rdfs:label "relatedToId" ;
-    rdfs:comment "The Thing this media relates to (its Moment), written <ns/Class/id> — never the bare token." ;
+    rdfs:comment "The Thing this media relates to (its Moment), written <ns/Class/id>; the file spelling of git-lex:relatedToId. Never the bare token." ;
     rdfs:domain pan:Media ; rdfs:range git-lex:Thing .
 
 # --- shared fields -------------------------------------------------------------
@@ -517,7 +555,6 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:readyDate    ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:caption    ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] .
 
 pan:Enrichment rdfs:subClassOf

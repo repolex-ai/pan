@@ -27,7 +27,6 @@
     embedding => { },
     height => { },
     id => { },
-    importedFrom => { },
     keypoints => { },
     longDescription => { },
     maskPath => { },
