@@ -635,7 +635,7 @@ impl Pan {
 
         // Thumbnail — declared as its own node; not decodable = no thumbnail,
         // still stored, `pan state` says so.
-        let mut thumb: Option<(String, u32, u32)> = None;
+        let mut thumb: Option<xmp::ThumbRef> = None;
         let mut thumb_jpeg: Vec<u8> = Vec::new();
         let mut width = None;
         let mut height = None;
@@ -647,7 +647,8 @@ impl Pan {
                     quads.push(self.quad(&subject, "width", &t.source_width.to_string()));
                     quads.push(self.quad(&subject, "height", &t.source_height.to_string()));
                     let rel = PanLayout::thumbnail_rel_path(kind, &shard, &stem);
-                    let tnode = NamedNode::new(format!("{PAN_MEDIA_NS}Thumbnail/{}", gen_pan_id())).map_err(|e| anyhow!("thumbnail IRI: {e}"))?;
+                    let tid = gen_pan_id();
+                    let tnode = NamedNode::new(format!("{PAN_MEDIA_NS}Thumbnail/{tid}")).map_err(|e| anyhow!("thumbnail IRI: {e}"))?;
                     quads.push(Quad::new(subject.clone(), pan_iri("thumbnail"), tnode.clone(), GraphName::DefaultGraph));
                     quads.push(Quad::new(tnode.clone(), rdf_type(), pan_iri("Thumbnail"), GraphName::DefaultGraph));
                     quads.push(enrich::self_id_quad(&tnode)?);
@@ -655,7 +656,7 @@ impl Pan {
                     quads.push(self.quad(&tnode, "width", &t.width.to_string()));
                     quads.push(self.quad(&tnode, "height", &t.height.to_string()));
                     quads.push(self.quad(&tnode, "producedDate", &created_date));
-                    thumb = Some((rel, t.width, t.height));
+                    thumb = Some(xmp::ThumbRef { id: tid, path: rel, width: t.width, height: t.height });
                     thumb_jpeg = t.jpeg;
                 }
                 Err(e) => tracing::warn!(id = %id, "no thumbnail: {e:#}"),
@@ -680,7 +681,7 @@ impl Pan {
             } else {
                 write_atomic(&abs_path, bytes).with_context(|| format!("write media {}", abs_path.display()))?;
             }
-            if let Some((rel, _, _)) = &thumb {
+            if let Some(xmp::ThumbRef { path: rel, .. }) = &thumb {
                 let tabs = self.layout.abs(rel);
                 if let Some(parent) = tabs.parent() {
                     fs::create_dir_all(parent).context("create thumbnail shard dir")?;
@@ -692,7 +693,7 @@ impl Pan {
         };
         if let Err(e) = land() {
             let _ = fs::remove_file(&abs_path);
-            if let Some((rel, _, _)) = &thumb {
+            if let Some(xmp::ThumbRef { path: rel, .. }) = &thumb {
                 let _ = fs::remove_file(self.layout.abs(rel));
             }
             return Err(e);
@@ -984,10 +985,10 @@ impl Pan {
         }
         write_atomic(&abs, enrich::build_data_file(subject.as_str(), link_local, records).as_bytes()).with_context(|| format!("write {}", abs.display()))?;
         let mut quads = enrich::record_quads(subject.as_str(), link_local, records)?;
-        // pan:count only where one run yields many records in one file
-        // (regionData, poseData); caption and vector references carry none
-        // (goodlux, 2026-09-16).
-        let count = matches!(ref_local, "regionData" | "poseData").then_some(records.len());
+        // pan:count only on the segmentation reference (pan:RegionData), the
+        // one file that holds many records; caption, vector and pose
+        // references carry none (goodlux, 2026-09-16).
+        let count = (ref_local == "regionData").then_some(records.len());
         let r = enrich::EnrichmentRef::new(model, &rel, count);
         quads.extend(enrich::ref_quads(subject.as_str(), ref_local, &r)?);
         if let Err(e) = self.insert_quads(&quads) {
@@ -1362,7 +1363,7 @@ impl Pan {
             Some(t) => {
                 let f = node_fields(&t)?;
                 match (f.get("path"), f.get("width").and_then(|w| w.parse().ok()), f.get("height").and_then(|h| h.parse().ok())) {
-                    (Some(p), Some(w), Some(h)) => Some((p.clone(), w, h)),
+                    (Some(p), Some(w), Some(h)) => Some(xmp::ThumbRef { id: bare_id(&t), path: p.clone(), width: w, height: h }),
                     _ => None,
                 }
             }

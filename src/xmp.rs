@@ -65,6 +65,18 @@ fn serialize_field(prefix: &str, local: &str, value: &FieldValue, indent: &str) 
     }
 }
 
+/// The thumbnail reference as written in the image's XMP `pan:thumbnail`
+/// struct: the Thumbnail node's id (every reference in the file carries its
+/// own pan:id, goodlux 2026-09-16), its path relative to the media root, and
+/// its pixel size.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThumbRef {
+    pub id: String,
+    pub path: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ImagePacket {
     /// The media object's full IRI (`git-lex:id`).
@@ -85,8 +97,8 @@ pub struct ImagePacket {
     pub scene: Vec<(String, String)>,
     /// Set once every configured stage has a record.
     pub ready_date: Option<String>,
-    /// The thumbnail Pan made: (media-root-relative path, width, height).
-    pub thumbnail: Option<(String, u32, u32)>,
+    /// The thumbnail Pan made, with the Thumbnail node's own id.
+    pub thumbnail: Option<ThumbRef>,
     /// `(reference predicate local name, references)`, e.g.
     /// `("regionData", [...])`. Empty groups are omitted.
     pub enrichment: Vec<(String, Vec<crate::enrich::EnrichmentRef>)>,
@@ -188,11 +200,12 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
     for (local, value) in &ident {
         out.push_str(&serialize_field("pan", local, value, "      "));
     }
-    if let Some((path, w, h)) = &p.thumbnail {
+    if let Some(t) = &p.thumbnail {
         out.push_str("      <pan:thumbnail rdf:parseType=\"Resource\">\n");
-        out.push_str(&format!("       <pan:path>{}</pan:path>\n", xml_escape(path)));
-        out.push_str(&format!("       <pan:width>{w}</pan:width>\n"));
-        out.push_str(&format!("       <pan:height>{h}</pan:height>\n"));
+        out.push_str(&format!("       <pan:id>&lt;pan/Thumbnail/{}&gt;</pan:id>\n", xml_escape(&t.id)));
+        out.push_str(&format!("       <pan:path>{}</pan:path>\n", xml_escape(&t.path)));
+        out.push_str(&format!("       <pan:width>{}</pan:width>\n", t.width));
+        out.push_str(&format!("       <pan:height>{}</pan:height>\n", t.height));
         out.push_str("      </pan:thumbnail>\n");
     }
     for (local, refs) in &p.enrichment {
@@ -1020,7 +1033,7 @@ pub(crate) mod tests {
             iri: "https://repolex.ai/pan/Image/abc123xy".into(),
             media_path: "image/2026/09/04/abc123xy.png".into(),
             created_date: "2026-09-04T01:00:00-07:00".into(),
-            thumbnail: Some(("thumbnail/2026/09/04/abc123xy.jpg".into(), 341, 512)),
+            thumbnail: Some(ThumbRef { id: "th1umb01".into(), path: "thumbnail/2026/09/04/abc123xy.jpg".into(), width: 341, height: 512 }),
             ..Default::default()
         });
         let packet = compose_packet(Some(&arrived), &pan_desc);
@@ -1220,7 +1233,7 @@ mod flat_block_tests {
 
     #[test]
     fn pan_block_is_flat_and_every_id_is_in_bracket_form() {
-        let desc = build_pan_description(&ImagePacket {
+        let p = ImagePacket {
             iri: "https://repolex.ai/pan/Image/altocnif".into(),
             media_path: "image/2026/09/05/20260905-000009-altocnif.png".into(),
             created_date: "2026-09-05T00:00:09-07:00".into(),
@@ -1228,7 +1241,7 @@ mod flat_block_tests {
             long_description: Some("A grey wolf stands on a rocky ridge, lit from the left by a low sun.".into()),
             scene_objects: vec!["wolf".into(), "rock".into(), "sky".into()],
             scene: vec![("sceneMood".into(), "still".into())],
-            thumbnail: Some(("thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), 341, 512)),
+            thumbnail: Some(ThumbRef { id: "th2umb02".into(), path: "thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), width: 341, height: 512 }),
             enrichment: vec![(
                 "captionData".into(),
                 vec![crate::enrich::EnrichmentRef {
@@ -1240,10 +1253,21 @@ mod flat_block_tests {
                 }],
             )],
             ..Default::default()
-        });
+        };
+        let desc = build_pan_description(&p);
         assert!(!desc.contains("<pan:image"), "no wrapper struct: {desc}");
         assert!(desc.contains("<pan:id>&lt;pan/Image/altocnif&gt;</pan:id>"), "image id in bracket form: {desc}");
         assert!(desc.contains("<pan:id>&lt;pan/Enrichment/jz55pu47&gt;</pan:id>"), "enrichment id in bracket form: {desc}");
+        assert!(desc.contains("<pan:id>&lt;pan/Thumbnail/th2umb02&gt;</pan:id>"), "thumbnail id in bracket form inside the struct: {desc}");
+        let parsed = parse_packet(&build_packet(&p)).unwrap();
+        let th = parsed
+            .iter()
+            .flat_map(|s| s.structs.iter())
+            .find(|(pred, _)| pred.ends_with("/thumbnail"))
+            .and_then(|(_, members)| members.first())
+            .expect("the reader returns the thumbnail struct");
+        let id = th.iter().find(|(f, _)| f.ends_with("/id")).map(|(_, v)| v.value().to_string());
+        assert_eq!(id.as_deref(), Some("<pan/Thumbnail/th2umb02>"), "reader returns the thumbnail id: {th:?}");
         assert!(desc.contains("<pan:dateCreated>"), "creation time under pan:, not git-lex: {desc}");
         assert!(desc.contains("<pan:shortDescription>A wolf on a ridge at dusk.</pan:shortDescription>"), "{desc}");
         assert!(desc.contains("<pan:longDescription>"), "{desc}");
@@ -1291,7 +1315,7 @@ mod flat_block_tests {
             short_description: Some("A sample caption.".into()),
             long_description: Some("A sample caption, at length.".into()),
             scene_objects: vec!["wolf".into()],
-            thumbnail: Some(("thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), 341, 512)),
+            thumbnail: Some(ThumbRef { id: "th3umb03".into(), path: "thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), width: 341, height: 512 }),
             enrichment: vec![(
                 "captionData".into(),
                 vec![crate::enrich::EnrichmentRef {

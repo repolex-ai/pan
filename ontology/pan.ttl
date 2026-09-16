@@ -39,11 +39,32 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.3.6" .
+    owl:versionInfo "0.3.7" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.3.7 (2026-09-16, ruled by goodlux, the same evening; final word on count):
+#   (1) pan:count exists for REGIONS ONLY and lives on a class of its own.
+#       pan:RegionData (subclass of pan:Enrichment) is the reference to one
+#       segmentation run's file, the range of pan:regionData, and the only
+#       reference that carries a count: pan:count has domain pan:RegionData
+#       and cardinality 1 there, and is gone from the pan:Enrichment block.
+#       Caption and vector references name one file holding one answer,
+#       nothing to count; pose skeletons are counted by reading the file.
+#       pand types the regionData node pan:RegionData and writes no count on
+#       captionData, vectorData or poseData, in the graph or the XMP. This
+#       replaces 0.3.6 (3), which had kept a count on poseData.
+#   (2) The thumbnail reference in the file carries its id. Every reference
+#       bag entry in the XMP already wrote <pan:id>&lt;pan/Enrichment/…&gt;;
+#       the pan:thumbnail struct wrote path, width and height only, although
+#       the Thumbnail node in the graph has had git-lex:id all along. The
+#       struct now opens with <pan:id>&lt;pan/Thumbnail/…&gt;. No ontology
+#       statement changes for this; pan:id already applies to every node
+#       (0.3.6). Recorded here because the file's shape changed.
+#   Deliberately not done: the record-link redesign (#18) and everything
+#   0.4.0 (#5); the other shared record fields keep their Thing domain.
+#
 # v0.3.6 (2026-09-16, ruled by goodlux, same day, reading one stored file):
 #   (1) pan:id now applies to EVERY Pan node, not only media: its domain moves
 #       from pan:Media to git-lex:Thing. Each reference in a media file's XMP
@@ -390,7 +411,16 @@ pan:dateCreated a owl:DatatypeProperty ;
 pan:Enrichment a owl:Class ;
     rdfs:subClassOf git-lex:Thing ;
     rdfs:label "Enrichment" ;
-    rdfs:comment "A reference to one stage's output file for one media object: which model, where the file is, how many items, when produced. The image's own index of what exists for it." .
+    rdfs:comment "A reference to one stage's output file for one media object: which model, where the file is, when produced. The image's own index of what exists for it." .
+
+# The one reference that counts: a segmentation run yields one Region per
+# thing found, all in one file, so its reference says how many. Caption and
+# vector references name one file holding one answer; a pose file is counted
+# by reading it. (goodlux, 2026-09-16)
+pan:RegionData a owl:Class ;
+    rdfs:subClassOf pan:Enrichment ;
+    rdfs:label "Region data" ;
+    rdfs:comment "The reference to one segmentation run's file of regions; the only reference that carries a count." .
 
 pan:Region a owl:Class ;
     rdfs:subClassOf git-lex:Thing ;
@@ -422,7 +452,7 @@ pan:Thumbnail a owl:Class ;
 pan:regionData a owl:ObjectProperty ;
     rdfs:label "region data" ;
     rdfs:comment "Reference to a segmentation output file holding this image's regions." ;
-    rdfs:domain pan:Image ; rdfs:range pan:Enrichment .
+    rdfs:domain pan:Image ; rdfs:range pan:RegionData .
 
 pan:poseData a owl:ObjectProperty ;
     rdfs:label "pose data" ;
@@ -477,7 +507,7 @@ pan:relatedToId a owl:ObjectProperty ;
 
 # --- shared fields -------------------------------------------------------------
 # These apply to several pan classes (Enrichment, Region, Pose, Caption, …);
-# their domain is the shared parent Thing (pan:count excepted: Enrichment only) and the cardinality block below says
+# their domain is the shared parent Thing (pan:count excepted: RegionData only) and the cardinality block below says
 # which class carries which.
 
 pan:model a owl:DatatypeProperty ;
@@ -512,8 +542,8 @@ pan:path a owl:DatatypeProperty ;
 
 pan:count a owl:DatatypeProperty ;
     rdfs:label "count" ;
-    rdfs:comment "How many records the referenced file holds. Written only on region and pose references, where one run yields many; never on caption or vector references." ;
-    rdfs:domain pan:Enrichment ;
+    rdfs:comment "How many regions the referenced segmentation file holds. Only on a RegionData reference; no other reference carries a count." ;
+    rdfs:domain pan:RegionData ;
     rdfs:range xsd:integer .
 
 # --- Region fields -------------------------------------------------------------
@@ -600,11 +630,11 @@ pan:Enrichment rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:model      ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:path       ; owl:cardinality 1 ] ,
-    # count only where one run yields many records (regionData, poseData);
-    # a caption or vector reference names one file with one answer and
-    # carries no count (goodlux, 2026-09-16).
-    [ a owl:Restriction ; owl:onProperty pan:count      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:producedDate ; owl:cardinality 1 ] .
+
+# The segmentation reference alone carries a count (goodlux, 2026-09-16).
+pan:RegionData rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty pan:count      ; owl:cardinality 1 ] .
 
 pan:Region rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,

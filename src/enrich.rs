@@ -76,9 +76,9 @@ pub struct EnrichmentRef {
     pub model: String,
     /// Path relative to the store's media root.
     pub path: String,
-    /// `pan:count` — how many records the file holds. Written only where one
-    /// model run yields many records in one file: regionData and poseData
-    /// (goodlux, 2026-09-16). Caption and vector references carry none.
+    /// `pan:count` — how many regions the file holds. Only a regionData
+    /// reference (typed pan:RegionData) carries it (goodlux, 2026-09-16);
+    /// caption, vector and pose references carry none.
     pub count: Option<usize>,
     /// `pan:producedDate` — RFC3339, system local time.
     pub produced_date: String,
@@ -194,15 +194,21 @@ pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<
         Quad::new(
             node.clone(),
             rdf_type,
-            NamedNode::new(format!("{PAN_NS}Enrichment")).expect("Enrichment IRI"),
+            // The segmentation reference is its own class, the only one
+            // that counts (pan.ttl 0.3.6); every other reference is a plain
+            // Enrichment.
+            NamedNode::new(format!("{PAN_NS}{}", if ref_local == "regionData" { "RegionData" } else { "Enrichment" }))
+                .expect("reference class IRI"),
             GraphName::DefaultGraph,
         ),
         self_id_quad(&node)?,
         pan_quad(&node, "model", &r.model)?,
         pan_quad(&node, "path", &r.path)?,
     ];
-    if let Some(count) = r.count {
-        quads.push(pan_quad(&node, "count", &count.to_string())?);
+    if ref_local == "regionData" {
+        if let Some(count) = r.count {
+            quads.push(pan_quad(&node, "count", &count.to_string())?);
+        }
     }
     quads.push(pan_quad(&node, "producedDate", &r.produced_date)?);
     Ok(quads)
@@ -323,6 +329,20 @@ mod tests {
         assert!(has("path", "sam3/2026/08/17/k7m2p9x4.xml"));
         assert!(has("count", "15"));
         assert!(has("model", "sam3"));
+        assert!(
+            quads.iter().any(|q| q.predicate.as_str() == RDF_TYPE && q.object.to_string().contains("RegionData")),
+            "a regionData reference is typed pan:RegionData: {quads:?}"
+        );
+    }
+
+    /// A pose file is counted by reading it; its reference is a plain
+    /// Enrichment with no count (goodlux, 2026-09-16).
+    #[test]
+    fn pose_reference_is_plain_and_carries_no_count() {
+        let r = EnrichmentRef::new("rtmw-x-l", "image/pose/2026/09/16/abc.xml", Some(2));
+        let quads = ref_quads("https://repolex.ai/pan/Image/abcdefgh", "poseData", &r).unwrap();
+        assert!(!quads.iter().any(|q| q.predicate.as_str() == format!("{PAN_NS}count")), "{quads:?}");
+        assert!(quads.iter().any(|q| q.predicate.as_str() == RDF_TYPE && q.object.to_string().ends_with("Enrichment>")), "{quads:?}");
     }
 
     /// A caption or vector reference names one file holding one answer;

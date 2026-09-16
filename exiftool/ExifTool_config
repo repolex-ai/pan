@@ -11,6 +11,12 @@
 %panRef = (
     NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
     STRUCT_NAME => 'PanRef',
+    id => { }, model => { }, path => { }, producedDate => { },
+);
+
+%panRegionRef = (
+    NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
+    STRUCT_NAME => 'PanRegionRef',
     id => { }, model => { }, path => { }, count => { }, producedDate => { },
 );
 
@@ -66,13 +72,13 @@
         Struct => {
             NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
             STRUCT_NAME => 'PanThumb',
-            path => { }, width => { }, height => { },
+            id => { }, path => { }, width => { }, height => { },
         },
     },
     captionData => { List => 'Bag', Struct => \%panRef },
     poseData => { List => 'Bag', Struct => \%panRef },
-    regionData => { List => 'Bag', Struct => \%panRef },
     vectorData => { List => 'Bag', Struct => \%panRef },
+    regionData => { List => 'Bag', Struct => \%panRegionRef },
 );
 
 %Image::ExifTool::UserDefined::copia = (
