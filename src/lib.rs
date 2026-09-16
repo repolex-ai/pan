@@ -532,6 +532,23 @@ mod perception_tests {
     }
 
     #[test]
+    fn instance_vocabulary_is_declared_in_the_ontology() {
+        // pan.ttl 0.4.1 (goodlux, 2026-09-16): the deployment node and its
+        // six properties, declared ahead of the code that will write them.
+        for decl in [
+            "\npan:Instance a owl:Class ;\n    rdfs:subClassOf git-lex:Thing",
+            "\npan:primaryGraph a owl:DatatypeProperty",
+            "\npan:localGraph a owl:DatatypeProperty",
+            "\npan:fsRoot a owl:DatatypeProperty",
+            "\npan:sourceFormat a owl:DatatypeProperty",
+            "\npan:instanceMode a owl:DatatypeProperty",
+            "\npan:listenPort a owl:DatatypeProperty",
+        ] {
+            assert!(PAN_ONTOLOGY_TTL.contains(decl), "missing in pan.ttl: {decl}");
+        }
+    }
+
+    #[test]
     fn settable_fields_are_exactly_the_curation_fields() {
         let names: Vec<String> = settable_fields().into_iter().map(|f| f.local).collect();
         assert_eq!(names, ["isPicked", "isRejected", "rating"], "pan.ttl declares a new person-settable field: extend pan set's docs and this test");

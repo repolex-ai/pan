@@ -39,11 +39,22 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.0" .
+    owl:versionInfo "0.4.1" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.1 (2026-09-16, ruled by goodlux; pan issue #5): THE INSTANCE.
+#   + pan:Instance — one pand deployment as a node: its primary graph, an
+#     optional pan-ui cache graph, its storage root, its mode (managed or
+#     referenced), its source media format and its port. Six properties,
+#     named exactly as the expanded-scope doc of 2026-09-13 names them:
+#     pan:primaryGraph, pan:localGraph, pan:fsRoot, pan:sourceFormat,
+#     pan:instanceMode, pan:listenPort.
+#   Declared ahead of code: nothing in pand writes an Instance yet; pand will
+#   write one Instance node per daemon at start in a later release.
+#   Left open: how pan:Store relates to pan:Instance (a daemon serves many
+#   stores). No link is declared until that is ruled.
 # v0.4.0 (2026-09-16, ruled by goodlux): PHOTOSETS.
 #   (1) + pan:Photoset, a subclass of git-lex:Set (base kit 0.18.0): an
 #       unordered set of media a person curates. Each set has its own file on
@@ -521,6 +532,59 @@ pan:inPhotoset a owl:ObjectProperty ;
     rdfs:range pan:Photoset .
 
 # -----------------------------------------------------------------------------
+# THE INSTANCE (goodlux, 2026-09-16)
+# -----------------------------------------------------------------------------
+# One pand deployment as a node. A machine runs one daemon; the daemon serves
+# many stores. The Instance says where its primary graph is answered, where
+# a pan-ui cache graph sits if one exists, what root its files live under,
+# whether it manages media (copies bytes in, PNG only) or references media
+# in place, and which port it listens on. Declared ahead of code: pand will
+# write one Instance node per daemon at start in a later release. How a
+# pan:Store relates to its Instance is left open until ruled.
+# -----------------------------------------------------------------------------
+
+pan:Instance a owl:Class ;
+    rdfs:subClassOf git-lex:Thing ;
+    rdfs:label "Instance" ;
+    rdfs:comment "One pand deployment: its primary graph, an optional pan-ui cache graph, its storage root, its mode and its port. Written by pand at start; never authored." .
+
+pan:primaryGraph a owl:DatatypeProperty ;
+    rdfs:label "primary graph" ;
+    rdfs:comment "Endpoint URI or named graph of the primary persistent store. Do not put a file path here; that is pan:fsRoot." ;
+    rdfs:domain pan:Instance ;
+    rdfs:range xsd:string .
+
+pan:localGraph a owl:DatatypeProperty ;
+    rdfs:label "local graph" ;
+    rdfs:comment "The pan-ui local cache graph, in memory or ephemeral, when one exists. Absent means pan-ui reads the primary graph directly." ;
+    rdfs:domain pan:Instance ;
+    rdfs:range xsd:string .
+
+pan:fsRoot a owl:DatatypeProperty ;
+    rdfs:label "filesystem root" ;
+    rdfs:comment "Absolute storage root backing this instance: the media root when managed, the derived root when referenced. Absolute, never relative." ;
+    rdfs:domain pan:Instance ;
+    rdfs:range xsd:string .
+
+pan:sourceFormat a owl:DatatypeProperty ;
+    rdfs:label "source format" ;
+    rdfs:comment "MIME type of managed source media, image/png in the managed mode. Do not list several; a managed store has one." ;
+    rdfs:domain pan:Instance ;
+    rdfs:range xsd:string .
+
+pan:instanceMode a owl:DatatypeProperty ;
+    rdfs:label "instance mode" ;
+    rdfs:comment "managed (media copied into the store, PNG only) or referenced (media indexed where it lives). One of the two words, nothing else." ;
+    rdfs:domain pan:Instance ;
+    rdfs:range xsd:string .
+
+pan:listenPort a owl:DatatypeProperty ;
+    rdfs:label "listen port" ;
+    rdfs:comment "TCP port the daemon listens on. A number, not a URL." ;
+    rdfs:domain pan:Instance ;
+    rdfs:range xsd:integer .
+
+# -----------------------------------------------------------------------------
 # ENRICHMENT — what a model saw, where its output lives, when
 # -----------------------------------------------------------------------------
 # Every enrichment record is a first-class node with its own IRI
@@ -745,6 +809,16 @@ pan:Photoset rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty git-lex:createdDate ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty git-lex:description ; owl:maxCardinality 1 ] .
+
+# An Instance: one id, one root, one mode, one port; the rest at most once.
+pan:Instance rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:fsRoot       ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:instanceMode ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:listenPort   ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:primaryGraph ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:localGraph   ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:sourceFormat ; owl:maxCardinality 1 ] .
 
 pan:Enrichment rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
