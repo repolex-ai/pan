@@ -95,6 +95,9 @@ pub struct ImagePacket {
     pub scene_objects: Vec<String>,
     /// The scene fields, `(local name, value)`, e.g. `("sceneMood", "serene")`.
     pub scene: Vec<(String, String)>,
+    /// Facts a person set with `pan set`, `(local name, value)`, e.g.
+    /// `("rating", "4")` — the settable fields of pan.ttl.
+    pub curation: Vec<(String, String)>,
     /// Set once every configured stage has a record.
     pub ready_date: Option<String>,
     /// The thumbnail Pan made, with the Thumbnail node's own id.
@@ -192,6 +195,9 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
         ident.push(("sceneObjects".into(), FieldValue::Bag(p.scene_objects.clone())));
     }
     for (local, value) in &p.scene {
+        ident.push((local.clone(), FieldValue::Scalar(value.clone())));
+    }
+    for (local, value) in &p.curation {
         ident.push((local.clone(), FieldValue::Scalar(value.clone())));
     }
     if let Some(r) = &p.ready_date {
@@ -1033,6 +1039,7 @@ pub(crate) mod tests {
             iri: "https://repolex.ai/pan/Image/abc123xy".into(),
             media_path: "image/2026/09/04/abc123xy.png".into(),
             created_date: "2026-09-04T01:00:00-07:00".into(),
+            curation: vec![],
             thumbnail: Some(ThumbRef { id: "th1umb01".into(), path: "thumbnail/2026/09/04/abc123xy.jpg".into(), width: 341, height: 512 }),
             ..Default::default()
         });
@@ -1241,6 +1248,7 @@ mod flat_block_tests {
             long_description: Some("A grey wolf stands on a rocky ridge, lit from the left by a low sun.".into()),
             scene_objects: vec!["wolf".into(), "rock".into(), "sky".into()],
             scene: vec![("sceneMood".into(), "still".into())],
+            curation: vec![],
             thumbnail: Some(ThumbRef { id: "th2umb02".into(), path: "thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), width: 341, height: 512 }),
             enrichment: vec![(
                 "captionData".into(),
@@ -1315,6 +1323,7 @@ mod flat_block_tests {
             short_description: Some("A sample caption.".into()),
             long_description: Some("A sample caption, at length.".into()),
             scene_objects: vec!["wolf".into()],
+            curation: vec![],
             thumbnail: Some(ThumbRef { id: "th3umb03".into(), path: "thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), width: 341, height: 512 }),
             enrichment: vec![(
                 "captionData".into(),

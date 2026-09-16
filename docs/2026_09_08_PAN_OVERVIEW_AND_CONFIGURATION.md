@@ -190,6 +190,34 @@ ontologies: [pan]                        # what vocabulary a model answer may us
 A soul store gets its id from the repo and its vocabulary from the kits
 installed in the repo, so it needs none of the planned lines.
 
+### Setting facts by hand
+
+Three facts on an image belong to a person, not a model: a star rating, a
+pick, and a reject. They are written onto the image like every other pan
+fact, into the graph and into the file's XMP, so a rating travels with the
+file and needs no second database (goodlux, 2026-09-16).
+
+```sh
+pan set   '<pan/Image/k7m2p9x4>' rating=4 isPicked=true
+pan unset '<pan/Image/k7m2p9x4>' rating
+```
+
+| property | value | meaning |
+|---|---|---|
+| `rating` | whole number 0 to 5 | star rating |
+| `isPicked` | `true` or `false` | a pick |
+| `isRejected` | `true` or `false` | a reject |
+
+Setting overwrites: an image has at most one of each. Over HTTP the same
+request is `POST /media/{id}/set` with one JSON object keyed by property name,
+and `POST /media/{id}/unset` with a list of names. pand checks every key
+against pan.ttl before writing anything: a name that is not one of the three
+is refused with the list of what is allowed, and a value outside the declared
+range (a rating of 6, a pick of `yes`) is refused naming the expected type.
+The fields the caption stage owns and the fields Pan writes itself cannot be
+set by hand. A new person-settable field is declared in pan.ttl first; the
+command reads the list from the ontology.
+
 ### How a model answer becomes metadata
 
 The caption prompt asks the model for one JSON object whose keys are Pan

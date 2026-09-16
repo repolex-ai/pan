@@ -312,6 +312,122 @@ pub const PERCEPTION_FIELDS: [&str; 15] = [
     "sceneEnergy", "sceneMood", "sceneLighting", "sceneStyle", "sceneMedium", "sceneLocation",
 ];
 
+/// Fields Pan itself writes about a media object at ingest or at stage
+/// completion. A person may never set these by hand.
+pub const STRUCTURAL_FIELDS: [&str; 6] = ["mediaPath", "mediaType", "width", "height", "createdDate", "readyDate"];
+
+/// One property a person may set on a media object: its local name and the
+/// datatype the ontology declares for it (`xsd:integer`, `xsd:boolean`,
+/// `xsd:string`, `xsd:dateTime`, `xsd:decimal`, or a bounded datatype such
+/// as `pan:RatingValue`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettableField {
+    pub local: String,
+    pub range: String,
+}
+
+/// The properties a person may set with `pan set`, read from the compiled
+/// ontology: every `owl:DatatypeProperty` whose domain is pan:Media or
+/// pan:Image, minus the fields the caption stage owns (PERCEPTION_FIELDS)
+/// and the fields Pan itself writes (STRUCTURAL_FIELDS). Today that is
+/// rating, isPicked, isRejected (pan.ttl 0.3.8, goodlux 2026-09-16). A new
+/// settable field is declared in pan.ttl, never added here.
+pub fn settable_fields() -> Vec<SettableField> {
+    let mut out = Vec::new();
+    for chunk in PAN_ONTOLOGY_TTL.split("\npan:").skip(1) {
+        let Some(name_end) = chunk.find(' ') else { continue };
+        let local = &chunk[..name_end];
+        let rest = &chunk[name_end..];
+        if !rest.starts_with(" a owl:DatatypeProperty") {
+            continue;
+        }
+        let block = match rest.find(" .\n") {
+            Some(e) => &rest[..e],
+            None => rest,
+        };
+        let token_after = |key: &str| -> Option<&str> {
+            let k = block.find(key)? + key.len();
+            block[k..].split(|c: char| c.is_whitespace() || c == ';').next().filter(|t| !t.is_empty())
+        };
+        let domain = token_after("rdfs:domain ").unwrap_or("");
+        if domain != "pan:Media" && domain != "pan:Image" {
+            continue;
+        }
+        if PERCEPTION_FIELDS.contains(&local) || STRUCTURAL_FIELDS.contains(&local) {
+            continue;
+        }
+        out.push(SettableField { local: local.to_string(), range: token_after("rdfs:range ").unwrap_or("xsd:string").to_string() });
+    }
+    out.sort_by(|a, b| a.local.cmp(&b.local));
+    out
+}
+
+/// The inclusive bounds a bounded integer datatype declares in pan.ttl
+/// (`owl:withRestrictions ( [ xsd:minInclusive 0 ] [ xsd:maxInclusive 5 ] )`).
+fn integer_bounds(datatype_local: &str) -> Option<(i64, i64)> {
+    let start = PAN_ONTOLOGY_TTL.find(&format!("\npan:{datatype_local} a rdfs:Datatype"))?;
+    let block = &PAN_ONTOLOGY_TTL[start..];
+    let block = &block[..block.find(" .\n").unwrap_or(block.len())];
+    let num = |key: &str| -> Option<i64> {
+        let k = block.find(key)? + key.len();
+        block[k..].split(|c: char| !c.is_ascii_digit() && c != '-').find(|t| !t.is_empty())?.parse().ok()
+    };
+    Some((num("xsd:minInclusive ")?, num("xsd:maxInclusive ")?))
+}
+
+const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+
+/// Turn a JSON value into the RDF literal the declared range asks for, or say
+/// plainly what was expected. A JSON string holding a number or `true`/`false`
+/// is accepted, so the command line can pass everything as text.
+fn literal_for(field: &SettableField, value: &serde_json::Value) -> std::result::Result<Literal, String> {
+    let as_text = || match value {
+        serde_json::Value::String(s) => s.trim().to_string(),
+        other => other.to_string(),
+    };
+    let typed = |v: String, dt: &str| Literal::new_typed_literal(v, NamedNode::new_unchecked(format!("{XSD_NS}{dt}")));
+    match field.range.as_str() {
+        "xsd:integer" => match as_text().parse::<i64>() {
+            Ok(n) => Ok(typed(n.to_string(), "integer")),
+            Err(_) => Err(format!("{} expects a whole number, got {value}", field.local)),
+        },
+        "xsd:boolean" => match as_text().as_str() {
+            "true" => Ok(typed("true".into(), "boolean")),
+            "false" => Ok(typed("false".into(), "boolean")),
+            _ => Err(format!("{} expects true or false, got {value}", field.local)),
+        },
+        "xsd:decimal" => match as_text().parse::<f64>() {
+            Ok(_) => Ok(typed(as_text(), "decimal")),
+            Err(_) => Err(format!("{} expects a number, got {value}", field.local)),
+        },
+        "xsd:dateTime" => match value {
+            serde_json::Value::String(s) if !s.trim().is_empty() => Ok(typed(s.trim().to_string(), "dateTime")),
+            _ => Err(format!("{} expects an RFC3339 date-time string, got {value}", field.local)),
+        },
+        "xsd:string" => match value {
+            serde_json::Value::String(s) => Ok(Literal::new_simple_literal(s.as_str())),
+            _ => Err(format!("{} expects text, got {value}", field.local)),
+        },
+        other => {
+            // A pan-declared bounded datatype, e.g. pan:RatingValue.
+            let local = other.strip_prefix("pan:").unwrap_or(other);
+            match integer_bounds(local) {
+                Some((lo, hi)) => match as_text().parse::<i64>() {
+                    Ok(n) if (lo..=hi).contains(&n) => Ok(typed(n.to_string(), "integer")),
+                    Ok(n) => Err(format!("{} expects a whole number from {lo} to {hi}, got {n}", field.local)),
+                    Err(_) => Err(format!("{} expects a whole number from {lo} to {hi}, got {value}", field.local)),
+                },
+                None => Err(format!("{} has range {other}, which pan set does not know how to write", field.local)),
+            }
+        }
+    }
+}
+
+fn not_settable(local: &str) -> anyhow::Error {
+    let names: Vec<String> = settable_fields().into_iter().map(|f| f.local).collect();
+    anyhow!("{local} is not a property a person may set; settable: {}", names.join(", "))
+}
+
 /// What the caption stage learned about one object: the model's JSON answer,
 /// checked against the vocabulary.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -413,6 +529,26 @@ mod perception_tests {
         ] {
             assert!(PAN_ONTOLOGY_TTL.contains(decl), "missing in pan.ttl: {decl}");
         }
+    }
+
+    #[test]
+    fn settable_fields_are_exactly_the_curation_fields() {
+        let names: Vec<String> = settable_fields().into_iter().map(|f| f.local).collect();
+        assert_eq!(names, ["isPicked", "isRejected", "rating"], "pan.ttl declares a new person-settable field: extend pan set's docs and this test");
+        let rating = settable_fields().into_iter().find(|f| f.local == "rating").unwrap();
+        assert_eq!(rating.range, "pan:RatingValue");
+        assert_eq!(integer_bounds("RatingValue"), Some((0, 5)));
+    }
+
+    #[test]
+    fn values_are_checked_against_the_declared_range() {
+        let rating = SettableField { local: "rating".into(), range: "pan:RatingValue".into() };
+        assert_eq!(literal_for(&rating, &serde_json::json!(4)).unwrap().value(), "4");
+        assert_eq!(literal_for(&rating, &serde_json::json!("3")).unwrap().value(), "3");
+        assert!(literal_for(&rating, &serde_json::json!(6)).unwrap_err().contains("0 to 5"));
+        let picked = SettableField { local: "isPicked".into(), range: "xsd:boolean".into() };
+        assert_eq!(literal_for(&picked, &serde_json::json!(true)).unwrap().value(), "true");
+        assert!(literal_for(&picked, &serde_json::json!("yes")).unwrap_err().contains("true or false"));
     }
 
     #[test]
@@ -1078,6 +1214,71 @@ impl Pan {
         self.restamp(id)
     }
 
+    /// Set facts a person owns on a media object — rating, isPicked,
+    /// isRejected (pan.ttl 0.3.8; goodlux 2026-09-16: a rating lives on the
+    /// image, in its XMP, not in a second database). Every key must be a
+    /// settable field (see `settable_fields`) and every value must fit the
+    /// declared range; one bad key refuses the whole request before anything
+    /// is written. Old values of each key are deleted first, so setting
+    /// overwrites. Graph and XMP change together: the restamp rewrites the
+    /// image's packet.
+    pub fn set_fields(&self, id: &str, fields: &[(String, serde_json::Value)]) -> Result<()> {
+        let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
+        if fields.is_empty() {
+            return Err(anyhow!("nothing to set; give at least one key=value"));
+        }
+        let settable = settable_fields();
+        let mut literals: Vec<(String, Literal)> = Vec::with_capacity(fields.len());
+        for (local, value) in fields {
+            let Some(f) = settable.iter().find(|f| &f.local == local) else { return Err(not_settable(local)) };
+            let lit = literal_for(f, value).map_err(|m| anyhow!("invalid value: {m}"))?;
+            literals.push((local.clone(), lit));
+        }
+        let mut t = self.store.start_transaction().context("start transaction")?;
+        for (local, lit) in &literals {
+            let old: Vec<Quad> = self
+                .store
+                .quads_for_pattern(Some((&subject).into()), Some(pan_iri(local).as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+                .collect::<std::result::Result<_, _>>()
+                .with_context(|| format!("read {local}"))?;
+            for q in &old {
+                t.remove(q.as_ref());
+            }
+            t.insert(Quad::new(subject.clone(), pan_iri(local), lit.clone(), GraphName::DefaultGraph).as_ref());
+        }
+        t.commit().context("commit set")?;
+        self.restamp(id)
+    }
+
+    /// Remove facts a person set. Only settable fields may be unset; the
+    /// caption stage's fields and Pan's own are refused the same way `set`
+    /// refuses them. Unsetting a field that has no value is not an error.
+    pub fn unset_fields(&self, id: &str, locals: &[String]) -> Result<()> {
+        let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
+        if locals.is_empty() {
+            return Err(anyhow!("nothing to unset; give at least one property name"));
+        }
+        let settable = settable_fields();
+        for local in locals {
+            if !settable.iter().any(|f| &f.local == local) {
+                return Err(not_settable(local));
+            }
+        }
+        let mut t = self.store.start_transaction().context("start transaction")?;
+        for local in locals {
+            let old: Vec<Quad> = self
+                .store
+                .quads_for_pattern(Some((&subject).into()), Some(pan_iri(local).as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+                .collect::<std::result::Result<_, _>>()
+                .with_context(|| format!("read {local}"))?;
+            for q in &old {
+                t.remove(q.as_ref());
+            }
+        }
+        t.commit().context("commit unset")?;
+        self.restamp(id)
+    }
+
     /// Delete an object: media, thumbnail, data files, vector sidecars +
     /// index entries, and every statement about it or its records.
     pub fn delete(&self, id: &str) -> Result<()> {
@@ -1399,6 +1600,7 @@ impl Pan {
             long_description: pan_field("longDescription"),
             scene_objects: facts.iter().find(|(p, _)| p == &format!("{PAN_NS}sceneObjects")).map(|(_, v)| v.clone()).unwrap_or_default(),
             scene: SCENE_FIELDS.iter().filter_map(|l| pan_field(l).map(|v| (l.to_string(), v))).collect(),
+            curation: settable_fields().iter().filter_map(|f| pan_field(&f.local).map(|v| (f.local.clone(), v))).collect(),
             ready_date: pan_field("readyDate"),
             thumbnail,
             enrichment,

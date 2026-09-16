@@ -179,6 +179,9 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("search where-clause")
         || msg.contains("XMP")
         || msg.contains("ambiguous")
+        || msg.contains("not a property a person may set")
+        || msg.contains("nothing to set")
+        || msg.contains("nothing to unset")
     {
         ApiError(StatusCode::BAD_REQUEST, msg)
     } else {
@@ -334,6 +337,42 @@ async fn ingest(d: &Daemon, store_id: Option<&str>, headers: &axum::http::Header
             statements: res.statements,
         }),
     ))
+}
+
+#[utoipa::path(post, path = "/media/{id}/set", tag = "media", params(("id" = String, Path)),
+    request_body(content = HashMap<String, serde_json::Value>, description = "One JSON object keyed by property local name; only the person-settable fields of pan.ttl (rating, isPicked, isRejected)"),
+    responses((status = 200, body = FactsResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn set_fields(State(d): State<Shared>, AxPath(given): AxPath<String>, Json(body): Json<HashMap<String, serde_json::Value>>) -> Result<Json<FactsResponse>, ApiError> {
+    let (store, id) = locate(&d, &given)?;
+    let mut fields: Vec<(String, serde_json::Value)> = body.into_iter().collect();
+    fields.sort_by(|a, b| a.0.cmp(&b.0));
+    let s2 = store.clone();
+    let id2 = id.clone();
+    tokio::task::spawn_blocking(move || s2.pan.set_fields(&id2, &fields))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(map_err)?;
+    facts_response(&store, &id).map(Json)
+}
+
+#[utoipa::path(post, path = "/media/{id}/unset", tag = "media", params(("id" = String, Path)),
+    request_body(content = Vec<String>, description = "The property local names to remove"),
+    responses((status = 200, body = FactsResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn unset_fields(State(d): State<Shared>, AxPath(given): AxPath<String>, Json(body): Json<Vec<String>>) -> Result<Json<FactsResponse>, ApiError> {
+    let (store, id) = locate(&d, &given)?;
+    let s2 = store.clone();
+    let id2 = id.clone();
+    tokio::task::spawn_blocking(move || s2.pan.unset_fields(&id2, &body))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(map_err)?;
+    facts_response(&store, &id).map(Json)
+}
+
+fn facts_response(store: &Arc<super::StoreHandle>, id: &str) -> Result<FactsResponse, ApiError> {
+    let facts = store.pan.facts_for(id).map_err(map_err)?;
+    let iri = store.pan.subject_for(id).map_err(map_err)?.map(|n| n.into_string()).unwrap_or_default();
+    Ok(FactsResponse { id: media_iri_bracket(&iri), store: store.entry.id.clone(), facts: facts.into_iter().collect() })
 }
 
 fn locate(d: &Daemon, given: &str) -> Result<(Arc<super::StoreHandle>, String), ApiError> {
@@ -592,7 +631,7 @@ async fn search(State(d): State<Shared>, Json(body): Json<SearchBody>) -> Result
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
-    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, delete_media, get_facts, get_state, query, search, store_sparql_get, store_sparql_post),
+    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_sparql_get, store_sparql_post),
     components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody)),
     tags(
         (name = "meta", description = "Daemon + store status"),
@@ -611,6 +650,8 @@ pub fn router(d: Shared) -> Router {
         .route("/media/{id}/thumbnail", get(get_thumbnail))
         .route("/media/{id}/facts", get(get_facts))
         .route("/media/{id}/state", get(get_state))
+        .route("/media/{id}/set", post(set_fields))
+        .route("/media/{id}/unset", post(unset_fields))
         .route("/query", post(query))
         .route("/search", post(search))
         .route("/stores/{id}/media", post(deliver_to))

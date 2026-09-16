@@ -6,6 +6,8 @@
 //!   pan state <pan/Image/id>         → what has been done to it (per stage)
 //!   pan query [<user-id>] "<sparql>" → W3C results JSON
 //!   pan stores                       → the stores this machine's pand manages
+//!   pan set   <pan/Image/id> key=value … → write facts a person owns (rating=4 isPicked=true)
+//!   pan unset <pan/Image/id> key …       → remove them
 //!
 //! `<user-id>` names a store (a soul's genesis SHA or a bare store id);
 //! absent = pand's configured default. No flags.
@@ -21,7 +23,9 @@ fn usage() -> ! {
            pan info  <pan/Image/id>\n  \
            pan state <pan/Image/id>\n  \
            pan query [<user-id>] \"<sparql>\"\n  \
-           pan stores\n\n\
+           pan stores\n  \
+           pan set   <pan/Image/id> rating=4 isPicked=true isRejected=false\n  \
+           pan unset <pan/Image/id> rating\n\n\
          pand must be running (start it with: pand). Config: {}",
         env!("CARGO_PKG_VERSION"),
         pan::daemon::config::config_dir().join("config.yml").display()
@@ -69,6 +73,19 @@ fn check(resp: reqwest::blocking::Response) -> Result<serde_json::Value> {
         return Err(anyhow!("{status}: {msg}"));
     }
     serde_json::from_str(&text).context("pand answered with something that is not JSON")
+}
+
+/// `true`/`false` become booleans, whole numbers become numbers, anything
+/// else stays text; pand checks the value against the ontology either way.
+fn json_value(v: &str) -> serde_json::Value {
+    match v {
+        "true" => serde_json::Value::Bool(true),
+        "false" => serde_json::Value::Bool(false),
+        _ => match v.parse::<i64>() {
+            Ok(n) => serde_json::Value::from(n),
+            Err(_) => serde_json::Value::String(v.to_string()),
+        },
+    }
 }
 
 fn encode_id(id: &str) -> String {
@@ -133,6 +150,31 @@ fn main() -> Result<()> {
                 return Err(anyhow!("{status}: {text}"));
             }
             println!("{text}");
+            Ok(())
+        }
+        "set" => {
+            let Some((id, pairs)) = rest.split_first() else { usage() };
+            if pairs.is_empty() {
+                usage();
+            }
+            let mut body = serde_json::Map::new();
+            for pair in pairs {
+                let Some((k, v)) = pair.split_once('=') else {
+                    return Err(anyhow!("expected key=value, got {pair} (example: rating=4)"));
+                };
+                body.insert(k.to_string(), json_value(v));
+            }
+            let v = check(c.post(format!("{base}/media/{}/set", encode_id(id))).json(&body).send().map_err(not_running)?)?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+            Ok(())
+        }
+        "unset" => {
+            let Some((id, keys)) = rest.split_first() else { usage() };
+            if keys.is_empty() {
+                usage();
+            }
+            let v = check(c.post(format!("{base}/media/{}/unset", encode_id(id))).json(&keys).send().map_err(not_running)?)?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
             Ok(())
         }
         "stores" => {

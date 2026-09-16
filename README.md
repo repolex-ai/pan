@@ -25,14 +25,17 @@ pan store ~/Pictures/sample.png
 pan state '<https://repolex.ai/pan/Image/k7m2p9x4>'
 pan info  '<https://repolex.ai/pan/Image/k7m2p9x4>'
 
-# 4. Query the knowledge graph via SPARQL
+# 4. Rate it; the rating lands in the graph and in the file's XMP
+pan set '<https://repolex.ai/pan/Image/k7m2p9x4>' rating=4 isPicked=true
+
+# 5. Query the knowledge graph via SPARQL
 pan query 'SELECT ?s ?r WHERE { ?s pan:rating ?r . FILTER(?r >= 4) }'
 
-# 5. Check daemon health and registered stores
+# 6. Check daemon health and registered stores
 pand status
 pan stores
 
-# 6. Open interactive API docs
+# 7. Open interactive API docs
 open http://127.0.0.1:7401/swagger-ui
 ```
 
