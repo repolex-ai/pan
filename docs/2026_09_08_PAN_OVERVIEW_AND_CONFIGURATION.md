@@ -45,8 +45,7 @@ kind, then by what the file is.
 ├── pan.yml                            the store's own settings (today: its id)
 └── _ignore/
     ├── oxigraph/                      the graph: every fact about every file
-    ├── hnsw/<model>/                  the vector index, one per embedding model
-    └── pan.ttl                        reference copy of the Pan ontology
+    └── hnsw/<model>/                  the vector index, one per embedding model
 ```
 
 A bare store puts its media root inside `_ignore/media/`. When a media volume

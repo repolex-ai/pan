@@ -45,8 +45,7 @@ pub use config::{now_local, PanConfig, GIT_LEX_NS, PAN_MEDIA_NS, PAN_NS};
 pub use facts::Facts;
 pub use layout::PanLayout;
 
-/// The Pan base ontology, shipped with the binary. Written to `<root>/pan.ttl`
-/// as a reference copy at open; NOT loaded into the media graph.
+/// The Pan base ontology, shipped with the binary; NOT loaded into the media graph.
 pub const PAN_ONTOLOGY_TTL: &str = include_str!("../ontology/pan.ttl");
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -437,13 +436,6 @@ impl Pan {
         fs::create_dir_all(&layout.oxigraph_root).context("create oxigraph root")?;
         fs::create_dir_all(&layout.hnsw_root).context("create hnsw root")?;
         fs::create_dir_all(&layout.media_root).with_context(|| format!("create media root {}", layout.media_root.display()))?;
-        // Reference copy of the ontology, in the POCKET: it is machine-local
-        // documentation, not a committable file (the kit installs the real one
-        // under .lex/ontology/pan/).
-        let ttl_path = layout.pocket.join("pan.ttl");
-        if fs::read_to_string(&ttl_path).ok().as_deref() != Some(PAN_ONTOLOGY_TTL) {
-            fs::write(&ttl_path, PAN_ONTOLOGY_TTL).context("write pan.ttl reference copy")?;
-        }
         let store = Store::open(&layout.oxigraph_root)
             .with_context(|| format!("open oxigraph at {}", layout.oxigraph_root.display()))?;
         let pan = Pan { cfg, layout, store_id: store_id.to_string(), store, indexes: Mutex::new(HashMap::new()) };
