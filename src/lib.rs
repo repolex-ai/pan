@@ -402,6 +402,20 @@ mod perception_tests {
     }
 
     #[test]
+    fn photoset_vocabulary_is_declared_in_the_ontology() {
+        // pan.ttl 0.4.0 (goodlux, 2026-09-16): the set class and the three
+        // properties the photoset file and the image XMP will carry.
+        for decl in [
+            "\npan:Photoset a owl:Class ;\n    rdfs:subClassOf git-lex:Set",
+            "\npan:inPhotoset a owl:ObjectProperty",
+            "\npan:member a owl:ObjectProperty",
+            "\npan:description a owl:DatatypeProperty",
+        ] {
+            assert!(PAN_ONTOLOGY_TTL.contains(decl), "missing in pan.ttl: {decl}");
+        }
+    }
+
+    #[test]
     fn parses_the_answer_and_refuses_undeclared_keys() {
         let p = Perception::parse("```json\n{\"shortDescription\": \"A wolf.\", \"longDescription\": \"A grey wolf on a ridge.\", \"sceneObjects\": [\"Wolf\", \"rock\", \"wolf\", \"\"], \"sceneMood\": \"still\", \"sceneGaze\": null}\n```").unwrap();
         assert_eq!(p.scene_objects, ["wolf", "rock"]);
