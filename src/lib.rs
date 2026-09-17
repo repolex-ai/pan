@@ -1038,9 +1038,14 @@ impl Pan {
         // segmentation is prompted with the scene objects, and the embedding
         // is built from the image AND its XMP, so both wait for the caption
         // stage to have written its fields.
+        // Each is an EXISTS test, never a join: joined, an image with N
+        // scene objects came back N times and was handed to sam3 N times
+        // before the first result landed (issue #29, 2026-09-17: four
+        // references and 240 regions for 60). DISTINCT below is the second
+        // lock on the same door.
         let needs = match ref_local {
-            "regionData" => "?s pan:sceneObjects ?obj .",
-            "vectorData" => "?s pan:longDescription ?ld .",
+            "regionData" => "FILTER EXISTS { ?s pan:sceneObjects ?obj }",
+            "vectorData" => "FILTER EXISTS { ?s pan:longDescription ?ld }",
             _ => "",
         };
         let model_lit = model.replace('\\', "\\\\").replace('"', "\\\"");
@@ -1049,7 +1054,7 @@ impl Pan {
             None => String::new(),
         };
         let q = format!(
-            "SELECT ?s ?path ?type ?d WHERE {{
+            "SELECT DISTINCT ?s ?path ?type ?d WHERE {{
                ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; pan:createdDate ?d .
                {needs}
                FILTER NOT EXISTS {{ ?s pan:{ref_local} ?e . ?e pan:model \"{model_lit}\" }}
