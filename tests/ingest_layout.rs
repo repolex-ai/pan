@@ -111,3 +111,37 @@ fn a_tiff_arrival_converts_to_png_with_the_same_pixels() {
     let b = image::load_from_memory(&source).unwrap().to_rgb8();
     assert_eq!(a.as_raw(), b.as_raw(), "same pixels in the PNG as in the TIFF");
 }
+
+/// pan issue #27: the Thumbnail's producedDate was in the graph but not in
+/// the image's XMP thumbnail struct. File and graph must say the same.
+#[test]
+fn the_thumbnail_struct_in_the_file_carries_the_produced_date_the_graph_has() {
+    let (_dir, store) = open();
+    let r = store.put(&png(64, 40), Some("image/png")).unwrap();
+
+    // The graph: the Thumbnail node's pan:producedDate.
+    let q = "PREFIX pan: <https://repolex.ai/ontology/pan/> SELECT ?d WHERE { ?img pan:thumbnail ?t . ?t pan:producedDate ?d }";
+    let mut graph_dates = Vec::new();
+    if let pan::QueryResults::Solutions(sols) = store.query(q).unwrap() {
+        for s in sols {
+            let s = s.unwrap();
+            let pan::Term::Literal(l) = s.get("d").unwrap().clone() else { panic!("producedDate is a literal") };
+            graph_dates.push(l.value().to_string());
+        }
+    }
+    assert_eq!(graph_dates.len(), 1, "one Thumbnail node with one producedDate: {graph_dates:?}");
+    assert_eq!(graph_dates[0], r.created_date, "the thumbnail is produced when the image is created");
+
+    // The file: the pan:thumbnail struct inside the source PNG's XMP.
+    let source = std::fs::read(store.layout.abs(&r.media_path)).unwrap();
+    let packet = pan::xmp::read_xmp_packet_from_bytes(&source).unwrap().expect("Pan's XMP is inside the source");
+    let parsed = pan::xmp::parse_packet(&packet).unwrap();
+    let thumb = parsed
+        .iter()
+        .flat_map(|s| s.structs.iter())
+        .find(|(pred, _)| pred.ends_with("/thumbnail"))
+        .and_then(|(_, members)| members.first())
+        .expect("the file carries the thumbnail struct");
+    let file_date = thumb.iter().find(|(f, _)| f.ends_with("/producedDate")).map(|(_, v)| v.value().to_string());
+    assert_eq!(file_date.as_deref(), Some(graph_dates[0].as_str()), "pan:producedDate in the file's thumbnail struct equals the graph's: {thumb:?}");
+}

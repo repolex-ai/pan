@@ -859,7 +859,7 @@ impl Pan {
                     quads.push(self.quad(&tnode, "width", &t.width.to_string()));
                     quads.push(self.quad(&tnode, "height", &t.height.to_string()));
                     quads.push(self.quad(&tnode, "producedDate", &created_date));
-                    thumb = Some(xmp::ThumbRef { id: tid, path: rel, width: t.width, height: t.height });
+                    thumb = Some(xmp::ThumbRef { id: tid, path: rel, width: t.width, height: t.height, produced_date: created_date.clone() });
                     thumb_jpeg = t.jpeg;
                 }
                 Err(e) => tracing::warn!(id = %id, "no thumbnail: {e:#}"),
@@ -1666,7 +1666,15 @@ impl Pan {
             Some(t) => {
                 let f = node_fields(&t)?;
                 match (f.get("path"), f.get("width").and_then(|w| w.parse().ok()), f.get("height").and_then(|h| h.parse().ok())) {
-                    (Some(p), Some(w), Some(h)) => Some(xmp::ThumbRef { id: bare_id(&t), path: p.clone(), width: w, height: h }),
+                    // producedDate rides into the file's thumbnail struct from the
+                    // Thumbnail node, so file and graph say the same (pan issue #27).
+                    (Some(p), Some(w), Some(h)) => Some(xmp::ThumbRef {
+                        id: bare_id(&t),
+                        path: p.clone(),
+                        width: w,
+                        height: h,
+                        produced_date: f.get("producedDate").cloned().unwrap_or_default(),
+                    }),
                     _ => None,
                 }
             }

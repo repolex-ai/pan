@@ -67,14 +67,16 @@ fn serialize_field(prefix: &str, local: &str, value: &FieldValue, indent: &str) 
 
 /// The thumbnail reference as written in the image's XMP `pan:thumbnail`
 /// struct: the Thumbnail node's id (every reference in the file carries its
-/// own pan:id, goodlux 2026-09-16), its path relative to the media root, and
-/// its pixel size.
+/// own pan:id, goodlux 2026-09-16), its path relative to the media root,
+/// its pixel size, and when Pan made it — the same pan:producedDate the
+/// Thumbnail node carries in the graph (pan issue #27: the file had lacked it).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ThumbRef {
     pub id: String,
     pub path: String,
     pub width: u32,
     pub height: u32,
+    pub produced_date: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -228,6 +230,7 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
         out.push_str(&format!("       <pan:path>{}</pan:path>\n", xml_escape(&t.path)));
         out.push_str(&format!("       <pan:width>{}</pan:width>\n", t.width));
         out.push_str(&format!("       <pan:height>{}</pan:height>\n", t.height));
+        out.push_str(&format!("       <pan:producedDate>{}</pan:producedDate>\n", xml_escape(&t.produced_date)));
         out.push_str("      </pan:thumbnail>\n");
     }
     for (local, refs) in &p.enrichment {
@@ -1059,7 +1062,7 @@ pub(crate) mod tests {
             source_file: String::new(),
             created_date: "2026-09-04T01:00:00-07:00".into(),
             curation: vec![],
-            thumbnail: Some(ThumbRef { id: "th1umb01".into(), path: "image/img/jpg/2026/09/04/abc123xy_512.jpg".into(), width: 341, height: 512 }),
+            thumbnail: Some(ThumbRef { id: "th1umb01".into(), path: "image/img/jpg/2026/09/04/abc123xy_512.jpg".into(), width: 341, height: 512, produced_date: "2026-09-04T00:00:00-07:00".into() }),
             ..Default::default()
         });
         let packet = compose_packet(Some(&arrived), &pan_desc);
@@ -1269,7 +1272,7 @@ mod flat_block_tests {
             scene_objects: vec!["wolf".into(), "rock".into(), "sky".into()],
             scene: vec![("sceneMood".into(), "still".into())],
             curation: vec![],
-            thumbnail: Some(ThumbRef { id: "th2umb02".into(), path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(), width: 341, height: 512 }),
+            thumbnail: Some(ThumbRef { id: "th2umb02".into(), path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(), width: 341, height: 512, produced_date: "2026-09-05T00:00:09-07:00".into() }),
             enrichment: vec![(
                 "captionData".into(),
                 vec![crate::enrich::EnrichmentRef {
@@ -1296,6 +1299,8 @@ mod flat_block_tests {
             .expect("the reader returns the thumbnail struct");
         let id = th.iter().find(|(f, _)| f.ends_with("/id")).map(|(_, v)| v.value().to_string());
         assert_eq!(id.as_deref(), Some("<pan/Thumbnail/th2umb02>"), "reader returns the thumbnail id: {th:?}");
+        let produced = th.iter().find(|(f, _)| f.ends_with("/producedDate")).map(|(_, v)| v.value().to_string());
+        assert_eq!(produced.as_deref(), Some("2026-09-05T00:00:09-07:00"), "the thumbnail struct carries pan:producedDate (#27): {th:?}");
         assert!(desc.contains("<pan:createdDate>"), "creation time under pan:, not git-lex: {desc}");
         assert!(desc.contains("<pan:shortDescription>A wolf on a ridge at dusk.</pan:shortDescription>"), "{desc}");
         assert!(desc.contains("<pan:longDescription>"), "{desc}");
@@ -1345,7 +1350,7 @@ mod flat_block_tests {
             long_description: Some("A sample caption, at length.".into()),
             scene_objects: vec!["wolf".into()],
             curation: vec![],
-            thumbnail: Some(ThumbRef { id: "th3umb03".into(), path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(), width: 341, height: 512 }),
+            thumbnail: Some(ThumbRef { id: "th3umb03".into(), path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(), width: 341, height: 512, produced_date: "2026-09-05T00:00:09-07:00".into() }),
             enrichment: vec![(
                 "captionData".into(),
                 vec![crate::enrich::EnrichmentRef {
