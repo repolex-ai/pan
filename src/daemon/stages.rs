@@ -201,9 +201,7 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
     // probed again the moment its hold expires, so the door gets the traffic
     // back as soon as it is up.
     let held = |key: &str| -> bool {
-        d.stage_hold
-            .lock()
-            .unwrap()
+        crate::locked(&d.stage_hold)
             .get(key)
             .map(|u| *u > Instant::now())
             .unwrap_or(false)
@@ -331,16 +329,12 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                 log_call(outcome, Some(&msg));
                 d.record_attempt(&store.entry.id, &item.id, stage, msg, terminal);
                 if quota {
-                    d.stage_hold
-                        .lock()
-                        .unwrap()
+                    crate::locked(&d.stage_hold)
                         .insert(hold_key.clone(), Instant::now() + QUOTA_HOLD);
                     tracing::warn!(stage, url = %target.url, "provider account out of credit — holding the stage for {}s; add credits at the provider", QUOTA_HOLD.as_secs());
                     set.abort_all();
                 } else if server_down {
-                    d.stage_hold
-                        .lock()
-                        .unwrap()
+                    crate::locked(&d.stage_hold)
                         .insert(hold_key.clone(), Instant::now() + SERVER_DOWN_HOLD);
                     let next = if target.via == "primary" && ep.fallback.is_some() {
                         "switching to fallback"

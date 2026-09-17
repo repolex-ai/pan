@@ -29,7 +29,7 @@ use oxigraph::store::Store;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 
 pub mod config;
@@ -45,6 +45,25 @@ pub mod pngchunk;
 pub mod thumbnail;
 pub mod wire;
 pub mod xmp;
+
+/// Take a mutex, recovering if a previous holder panicked.
+///
+/// A poisoned mutex means some thread panicked while holding it. The default
+/// `lock().unwrap()` turns that one panic into a panic on every later lock, so
+/// one bad stage answer would take the whole daemon down. Every mutex in pand
+/// guards state that stays usable after a panic — in-memory vector-index
+/// handles, the per-stage attempt map, a hold map, an open log file — and
+/// pand is the single writer, so nothing else can have half-applied a change.
+/// Recover the guard, say so once per call site in the log, and carry on.
+/// (m4rq's rlex audit of pan, 2026-09-17.)
+pub fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!(
+            "a mutex was poisoned by an earlier panic; recovering its guard and continuing"
+        );
+        poisoned.into_inner()
+    })
+}
 
 pub use config::{now_local, PanConfig, GIT_LEX_NS, PAN_MEDIA_NS, PAN_NS};
 pub use facts::Facts;
@@ -254,7 +273,13 @@ impl VectorIndex {
         let mut next_key = 0u64;
         let mut true_dim = dim;
         if path.exists() {
-            index.load(path.to_str().unwrap())?;
+            let path_text = path.to_str().ok_or_else(|| {
+                anyhow!(
+                    "vector index path {} is not valid UTF-8; the index library needs a UTF-8 path",
+                    path.display()
+                )
+            })?;
+            index.load(path_text)?;
             let loaded = index.dimensions();
             if loaded != 0 {
                 true_dim = loaded;
@@ -282,8 +307,20 @@ impl VectorIndex {
     }
 
     fn save(&self) -> Result<()> {
-        self.index.save(self.path.to_str().unwrap())?;
-        let map_path = self.path.parent().unwrap().join("keymap.json");
+        let path_text = self.path.to_str().ok_or_else(|| {
+            anyhow!(
+                "vector index path {} is not valid UTF-8; the index library needs a UTF-8 path",
+                self.path.display()
+            )
+        })?;
+        self.index.save(path_text)?;
+        let dir = self.path.parent().ok_or_else(|| {
+            anyhow!(
+                "vector index path {} has no parent directory to hold keymap.json",
+                self.path.display()
+            )
+        })?;
+        let map_path = dir.join("keymap.json");
         fs::write(&map_path, serde_json::to_string(&self.id_to_key)?)?;
         Ok(())
     }
@@ -853,7 +890,7 @@ impl Pan {
         self.store
             .update(&up)
             .map_err(|e| anyhow!("wipe embeddings: {e}"))?;
-        self.indexes.lock().unwrap().clear();
+        locked(&self.indexes).clear();
         if self.layout.hnsw_root.exists() {
             fs::remove_dir_all(&self.layout.hnsw_root)
                 .with_context(|| format!("remove {}", self.layout.hnsw_root.display()))?;
@@ -1818,7 +1855,7 @@ impl Pan {
                     .collect()
             })
             .unwrap_or_default();
-        let mut indexes = self.indexes.lock().unwrap();
+        let mut indexes = locked(&self.indexes);
         for name in index_names {
             if !indexes.contains_key(&name) {
                 let known =
@@ -1860,7 +1897,7 @@ impl Pan {
     /// (id, index): `Ok(false)` when already present.
     pub fn add_vector(&self, id: &str, index_name: &str, vec: &[f32]) -> Result<bool> {
         validate_pan_id(id)?;
-        let mut indexes = self.indexes.lock().unwrap();
+        let mut indexes = locked(&self.indexes);
         if !indexes.contains_key(index_name) {
             indexes.insert(
                 index_name.to_string(),
@@ -1901,7 +1938,7 @@ impl Pan {
     }
 
     pub fn contains_id(&self, id: &str, index_name: &str) -> bool {
-        let indexes = self.indexes.lock().unwrap();
+        let indexes = locked(&self.indexes);
         indexes
             .get(index_name)
             .map(|vi| vi.id_to_key.contains_key(id))
@@ -1910,7 +1947,7 @@ impl Pan {
 
     /// `(dim, count)` for every index visible on disk or in memory.
     pub fn index_stats(&self) -> Vec<(String, IndexStats)> {
-        let indexes = self.indexes.lock().unwrap();
+        let indexes = locked(&self.indexes);
         let mut out: Vec<(String, IndexStats)> = indexes
             .iter()
             .map(|(name, vi)| {
@@ -1981,7 +2018,7 @@ impl Pan {
         if candidate_ids.is_empty() {
             return Ok(vec![]);
         }
-        let mut indexes = self.indexes.lock().unwrap();
+        let mut indexes = locked(&self.indexes);
         if !indexes.contains_key(index_name)
             && self
                 .layout
@@ -2218,7 +2255,7 @@ impl Pan {
 
     /// Persist dirty vector indexes. Called on Drop too.
     pub fn flush(&self) -> Result<()> {
-        let mut indexes = self.indexes.lock().unwrap();
+        let mut indexes = locked(&self.indexes);
         for vi in indexes.values_mut() {
             if vi.dirty {
                 vi.save()?;
@@ -2241,5 +2278,34 @@ impl Pan {
 impl Drop for Pan {
     fn drop(&mut self) {
         let _ = self.flush();
+    }
+}
+
+#[cfg(test)]
+mod locked_tests {
+    use super::locked;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn a_poisoned_mutex_is_recovered_not_repanicked() {
+        let m = Arc::new(Mutex::new(vec![1u8]));
+        let poisoner = Arc::clone(&m);
+        let _ = std::thread::spawn(move || {
+            let mut g = poisoner.lock().unwrap();
+            g.push(2);
+            panic!("holder dies while holding the lock");
+        })
+        .join();
+        assert!(
+            m.is_poisoned(),
+            "the thread's panic must have poisoned the mutex"
+        );
+        assert!(m.lock().is_err(), "plain lock() reports the poison");
+
+        let mut g = locked(&m);
+        assert_eq!(*g, vec![1, 2], "the state the holder wrote is still there");
+        g.push(3);
+        drop(g);
+        assert_eq!(*locked(&m), vec![1, 2, 3]);
     }
 }

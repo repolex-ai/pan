@@ -580,6 +580,7 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
     // longer errors and is recognizable as the root by matching this base.
     store
         .load_from_reader(
+            // XMP_BASE is a literal absolute IRI; with_base_iri cannot fail on it.
             oxigraph::io::RdfParser::from_format(RdfFormat::RdfXml)
                 .with_base_iri(XMP_BASE)
                 .unwrap(),

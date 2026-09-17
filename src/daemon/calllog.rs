@@ -51,10 +51,10 @@ impl Meter {
         Self::default()
     }
     pub fn set(&self, m: CallMeta) {
-        *self.0.lock().unwrap() = Some(m);
+        *crate::locked(&self.0) = Some(m);
     }
     pub fn take(&self) -> Option<CallMeta> {
-        self.0.lock().unwrap().take()
+        crate::locked(&self.0).take()
     }
 }
 
@@ -131,7 +131,7 @@ impl CallLog {
 
     fn append(&self, line: &CallLine<'_>) -> io::Result<()> {
         let today = Local::now().format("%Y-%m-%d").to_string();
-        let mut g = self.open.lock().unwrap();
+        let mut g = crate::locked(&self.open);
         let rolled = g.as_ref().map(|(d, _)| d != &today).unwrap_or(true);
         if rolled {
             fs::create_dir_all(&self.dir)?;

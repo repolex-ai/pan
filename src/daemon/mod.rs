@@ -285,7 +285,7 @@ impl Daemon {
         error: String,
         terminal: bool,
     ) {
-        let mut a = self.attempts.lock().unwrap();
+        let mut a = crate::locked(&self.attempts);
         a.insert(
             (store.to_string(), media.to_string(), stage.to_string()),
             Attempt {
@@ -297,14 +297,14 @@ impl Daemon {
     }
 
     pub fn clear_attempt(&self, store: &str, media: &str, stage: &str) {
-        let mut a = self.attempts.lock().unwrap();
+        let mut a = crate::locked(&self.attempts);
         a.remove(&(store.to_string(), media.to_string(), stage.to_string()));
     }
 
     /// Whether a stage should be skipped for now: a terminal refusal, or a
     /// transient failure still inside its backoff.
     pub fn holding(&self, store: &str, media: &str, stage: &str) -> Option<Attempt> {
-        let a = self.attempts.lock().unwrap();
+        let a = crate::locked(&self.attempts);
         let att = a.get(&(store.to_string(), media.to_string(), stage.to_string()))?;
         if att.terminal || att.at.elapsed() < TRANSIENT_BACKOFF {
             Some(att.clone())
@@ -314,7 +314,7 @@ impl Daemon {
     }
 
     pub fn last_attempt(&self, store: &str, media: &str, stage: &str) -> Option<Attempt> {
-        let a = self.attempts.lock().unwrap();
+        let a = crate::locked(&self.attempts);
         a.get(&(store.to_string(), media.to_string(), stage.to_string()))
             .cloned()
     }
