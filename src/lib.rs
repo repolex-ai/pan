@@ -97,6 +97,15 @@ pub fn write_ontology_copy(dir: &Path) -> Result<PathBuf> {
 }
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+/// Every spelling of the universal identity a Pan node may have been given
+/// by an earlier binary. Pan writes only `pan:id` (goodlux, 2026-09-17); the
+/// other two are `owl:equivalentProperty` bridges in pan.ttl and are what a
+/// store from before that ruling still carries.
+const IDENTITY_PREDICATES: [&str; 3] = [
+    "https://repolex.ai/ontology/pan/id",
+    "https://repolex.ai/ontology/git-lex/id",
+    "https://repolex.ai/ontology/subtexture/id",
+];
 
 /// The angle-bracket form of a pan identity, as it appears everywhere a
 /// person or another tool sees it: `<pan/Image/k7m2p9x4>` — the same notation
@@ -926,16 +935,25 @@ impl Pan {
             .store
             .start_transaction()
             .context("start transaction")?;
+        // Rewrite, never accumulate: the media root from this config, and
+        // the identity in this binary's spelling. A store opened by an older
+        // binary carries `git-lex:id` on this node (pan issue #33); every
+        // identity spelling — pan, git-lex, subtexture — is removed before
+        // `pan:id` goes in, so the node has exactly one.
         let old: Vec<Quad> = self
             .store
             .quads_for_pattern(
                 Some((&node).into()),
-                Some(pan_iri("mediaRoot").as_ref()),
+                None,
                 None,
                 Some(GraphName::DefaultGraph.as_ref()),
             )
-            .collect::<std::result::Result<_, _>>()
-            .context("read store node")?;
+            .filter_map(|q| q.ok())
+            .filter(|q| {
+                let p = q.predicate.as_str();
+                p == pan_iri("mediaRoot").as_str() || IDENTITY_PREDICATES.contains(&p)
+            })
+            .collect();
         for q in &old {
             t.remove(q.as_ref());
         }
@@ -2279,6 +2297,48 @@ impl Pan {
 impl Drop for Pan {
     fn drop(&mut self) {
         let _ = self.flush();
+    }
+}
+
+#[cfg(test)]
+mod declare_store_tests {
+    use super::*;
+
+    /// pan issue #33: a store opened by the pre-ruling binary carries
+    /// `git-lex:id` on its Store node; reopening must leave exactly one
+    /// identity, spelled `pan:id`.
+    #[test]
+    fn reopening_a_store_rewrites_a_stale_identity_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let node = NamedNode::new(format!("{PAN_MEDIA_NS}Store/{}", pan.store_id)).unwrap();
+        let stale = Quad::new(
+            node.clone(),
+            NamedNode::new(format!("{GIT_LEX_NS}id")).unwrap(),
+            node.clone(),
+            GraphName::DefaultGraph,
+        );
+        pan.store.insert(stale.as_ref()).unwrap();
+
+        pan.declare_store().unwrap();
+
+        let ids: Vec<String> = pan
+            .store
+            .quads_for_pattern(
+                Some((&node).into()),
+                None,
+                None,
+                Some(GraphName::DefaultGraph.as_ref()),
+            )
+            .filter_map(|q| q.ok())
+            .map(|q| q.predicate.as_str().to_string())
+            .filter(|p| p.ends_with("/id"))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![format!("{PAN_NS}id")],
+            "exactly one identity predicate, spelled pan:id: {ids:?}"
+        );
     }
 }
 
