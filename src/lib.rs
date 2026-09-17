@@ -1223,36 +1223,52 @@ impl Pan {
         Ok(rel)
     }
 
-    /// Record an embedding: vector into the index + `.npy` sidecar, an
-    /// Embedding node and a vectorData reference, XMP refreshed.
+    /// Record an embedding: vector into the index + `.npy` sidecar, the
+    /// Embedding record in its own data file beside the `.npy`, a vectorData
+    /// reference on the image, XMP refreshed.
     /// `details` is everything the server said besides the vector (its own
     /// model id, precision, provider, …). Two things happen with it, per Rob
     /// 2026-09-05: `precision` and `provider` become data on the Embedding
     /// record (declared, pan.ttl 0.3.2), and the WHOLE of it is written
     /// verbatim to `<vector>.json` beside the `.npy` — "save all the data".
-    /// `model` stays the functional label = the index name.
-    pub fn write_embedding(&self, id: &str, model: &str, index_name: &str, vec: &[f32], details: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
+    /// `model` stays the functional label = the index name; the server's own
+    /// model id has no declared property yet and stays in the `.json` only.
+    ///
+    /// The record lives in `vectors/<index>/<id>.xml`, the same RDF/XML shape
+    /// caption, pose, sam3 and depth write (reference node, `pan:item`, the
+    /// record in full), so a rebuild from disk recovers its id, dim and
+    /// producedDate (issue #31). The reference's `pan:path` names that file;
+    /// the record's `pan:vectorPath` names the `.npy`.
+    pub fn write_embedding(&self, id: &str, model: &str, index_name: &str, vec: &[f32], details: &serde_json::Map<String, serde_json::Value>) -> Result<String> {
         let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
         self.add_vector(id, index_name, vec)?;
         self.flush()?;
-        let rel = PanLayout::vector_rel_path(&self.media_kind_of(id)?, index_name, id);
+        let media_kind = self.media_kind_of(id)?;
+        let npy_rel = PanLayout::vector_rel_path(&media_kind, index_name, id);
         if !details.is_empty() {
-            let side = self.layout.abs(&rel).with_extension("json");
+            let side = self.layout.abs(&npy_rel).with_extension("json");
             write_atomic(&side, serde_json::to_string_pretty(details)?.as_bytes()).with_context(|| format!("write {}", side.display()))?;
         }
         let mut rec = enrich::EnrichmentRecord::new(gen_pan_id(), "Embedding", model)
             .field("dim", vec.len().to_string())
-            .field("vectorPath", &rel);
+            .field("vectorPath", &npy_rel);
         for key in ["precision", "provider"] {
             if let Some(v) = details.get(key).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
                 rec = rec.field(key, v);
             }
         }
+        let rel = PanLayout::vector_record_rel_path(&media_kind, index_name, id);
+        let abs = self.layout.abs(&rel);
         let r = enrich::EnrichmentRef::new(model, &rel, None);
+        write_atomic(&abs, enrich::build_data_file(&r.iri(), std::slice::from_ref(&rec)).as_bytes()).with_context(|| format!("write {}", abs.display()))?;
         let mut quads = enrich::ref_quads(subject.as_str(), "vectorData", &r)?;
         quads.extend(enrich::record_quads(&r.iri(), std::slice::from_ref(&rec))?);
-        self.insert_quads(&quads)?;
-        self.restamp(id)
+        if let Err(e) = self.insert_quads(&quads) {
+            let _ = fs::remove_file(&abs);
+            return Err(e);
+        }
+        self.restamp(id)?;
+        Ok(rel)
     }
 
     /// Write what the caption stage learned onto the object (pan.ttl 0.3.4):

@@ -351,7 +351,7 @@ async fn run_one(
                 // Everything the server said besides the vector rides along:
                 // its HF model id, precision, provider … (m3rc's Salad answers
                 // label themselves). precision/provider land on the record.
-                s.pan.write_embedding(&id, &model, &model, &r.vector, &r.extra)
+                s.pan.write_embedding(&id, &model, &model, &r.vector, &r.extra).map(|_| ())
             })
             .await??;
         }

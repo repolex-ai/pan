@@ -1,0 +1,16 @@
+{
+  "vector": [
+    -0.5,
+    -0.1337,
+    0.2327,
+    -0.401,
+    -0.0347,
+    0.3317,
+    -0.302,
+    0.0644
+  ],
+  "dim": 8,
+  "model": "Qwen/Qwen3-VL-Embedding-2B",
+  "precision": "bf16-cuda",
+  "provider": "salad"
+}

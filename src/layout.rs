@@ -30,7 +30,7 @@
 //!           ├── pose/YYYY/MM/DD/<id>.xml (+ <id>.<model>.png overlay)
 //!           ├── sam3/YYYY/MM/DD/<id>.xml
 //!           ├── depth/YYYY/MM/DD/<id>.xml (+ <id>.<model>.png map, <id>.<model>.json sidecar)
-//!           └── vectors/<model>/<id>.npy (+ .json)
+//!           └── vectors/<model>/<id>.xml (+ <id>.npy vector, <id>.json server answer)
 //! ```
 //!
 //! Pixels under `img/`, records under `data/` (goodlux, 2026-09-16): one glob
@@ -192,6 +192,14 @@ impl PanLayout {
         self.media_root.join(Self::vector_rel_path(media_kind, index_name, id))
     }
 
+    /// Media-root-relative path of the embedding's data file — the vectorData
+    /// reference and its Embedding record, beside the `.npy` it describes:
+    /// `<kind>/data/vectors/<index>/<id>.xml`. The same shape every other
+    /// stage's record has, so the record is rebuildable from disk (issue #31).
+    pub fn vector_record_rel_path(media_kind: &str, index_name: &str, id: &str) -> String {
+        Self::data_rel_path(media_kind, Self::VECTORS_SUBDIR, &format!("{}/{id}.xml", Self::file_safe_model(index_name)))
+    }
+
     /// Media-root-relative path of an enricher's data file:
     /// `<kind>/data/<stage>/YYYY/MM/DD/<id>[.<variant>].xml`. The variant is a
     /// model id and is flattened for the path.
@@ -246,6 +254,7 @@ mod tests {
         assert_eq!(PanLayout::jpg_rel_path("image", "2026/09/04", &stem, 2048), "image/img/jpg/2026/09/04/20260904-034953-k7m2p9x4_2048.jpg");
         assert_eq!(PanLayout::upscale_rel_path("image", "2026/09/04", &stem, 4096), "image/img/upscale/2026/09/04/20260904-034953-k7m2p9x4_4096.png", "an upscale is PNG, beside jpg/, named by its long edge");
         assert_eq!(PanLayout::vector_rel_path("image", "m", "k7m2p9x4"), "image/data/vectors/m/k7m2p9x4.npy");
+        assert_eq!(PanLayout::vector_record_rel_path("image", "m", "k7m2p9x4"), "image/data/vectors/m/k7m2p9x4.xml");
         assert_eq!(PanLayout::enrichment_rel_path("image", "caption", "2026/09/04", "k7m2p9x4", Some("m")), "image/data/caption/2026/09/04/k7m2p9x4.m.xml");
         assert_eq!(PanLayout::enrichment_rel_path("image", "sam3", "2026/09/04", "k7m2p9x4", None), "image/data/sam3/2026/09/04/k7m2p9x4.xml");
         assert_eq!(PanLayout::overlay_rel_path("image", "pose", "2026/09/04", "k7m2p9x4", "rtmw-x-l"), "image/data/pose/2026/09/04/k7m2p9x4.rtmw-x-l.png");

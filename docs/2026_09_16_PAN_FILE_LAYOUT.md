@@ -46,6 +46,7 @@ configured.
         │   └── abcd1234.depth-anything-Depth-Anything-V2-Base-hf.json
         └── vectors/
             └── qwen3-vl-embedding-2b/
+                ├── abcd1234.xml
                 ├── abcd1234.npy
                 └── abcd1234.json
 ```
@@ -88,9 +89,14 @@ finds all of either, and neither side needs to know the other's folder names.
   depth map as an 8-bit grayscale PNG beside it (bright is near: 255 is the
   nearest point, 0 the farthest, normalized per image from the record's
   min and max), and everything else the node said as `.json` (issue #24).
-- **`data/vectors/<model>/`** — one `.npy` vector per image per embedding
-  model, with the server's full answer beside it as `.json`. The searchable
-  copy lives in the store's index; these files are the rebuild source.
+- **`data/vectors/<model>/`** — one XML file per image per embedding model
+  holding the vectorData reference and its Embedding record (id, model,
+  dim, precision, provider, producedDate, vectorPath), the `.npy` vector it
+  names beside it, and the server's full answer as `.json` (issue #31). The
+  searchable copy lives in the store's index; these files are the rebuild
+  source. Here `<model>` is the index name pand embeds with, not the
+  server's own model id; that id sits in the `.json` until a property for
+  it is declared.
 
 ## Naming rules
 
