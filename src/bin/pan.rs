@@ -8,11 +8,11 @@
 //!   pan stores                       → the stores this machine's pand manages
 //!   pan set   <pan/Image/id> key=value … → write facts a person owns (rating=4 isPicked=true)
 //!   pan unset <pan/Image/id> key …       → remove them
-//!   pan photoset create [<user-id>] "<description>" → <pan/Photoset/id>
-//!   pan photoset list   [<user-id>]                 → every set in the store
-//!   pan photoset show   <pan/Photoset/id>           → its facts and its media
-//!   pan photoset add    <pan/Photoset/id> <pan/Image/id>
-//!   pan photoset remove <pan/Photoset/id> <pan/Image/id>
+//!   pan imageset create [<user-id>] "<description>" → <pan/ImageSet/id>
+//!   pan imageset list   [<user-id>]                 → every set in the store
+//!   pan imageset show   <pan/ImageSet/id>           → its facts and its media
+//!   pan imageset add    <pan/ImageSet/id> <pan/Image/id>
+//!   pan imageset remove <pan/ImageSet/id> <pan/Image/id>
 //!
 //! `<user-id>` names a store (a soul's genesis SHA or a bare store id);
 //! absent = pand's configured default. No flags.
@@ -31,11 +31,11 @@ fn usage() -> ! {
            pan stores\n  \
            pan set   <pan/Image/id> rating=4 isPicked=true isRejected=false\n  \
            pan unset <pan/Image/id> rating\n  \
-           pan photoset create [<user-id>] \"<description>\"\n  \
-           pan photoset list   [<user-id>]\n  \
-           pan photoset show   <pan/Photoset/id>\n  \
-           pan photoset add    <pan/Photoset/id> <pan/Image/id>\n  \
-           pan photoset remove <pan/Photoset/id> <pan/Image/id>\n\n\
+           pan imageset create [<user-id>] \"<description>\"\n  \
+           pan imageset list   [<user-id>]\n  \
+           pan imageset show   <pan/ImageSet/id>\n  \
+           pan imageset add    <pan/ImageSet/id> <pan/Image/id>\n  \
+           pan imageset remove <pan/ImageSet/id> <pan/Image/id>\n\n\
          pand must be running (start it with: pand). Config: {}",
         env!("CARGO_PKG_VERSION"),
         pan::daemon::config::config_dir().join("config.yml").display()
@@ -187,7 +187,7 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&v)?);
             Ok(())
         }
-        "photoset" => {
+        "imageset" => {
             let Some((sub, args)) = rest.split_first() else { usage() };
             match (sub.as_str(), args) {
                 ("create", args) => {
@@ -197,8 +197,8 @@ fn main() -> Result<()> {
                         _ => usage(),
                     };
                     let url = match &user {
-                        Some(u) => format!("{base}/stores/{u}/photosets"),
-                        None => format!("{base}/photosets"),
+                        Some(u) => format!("{base}/stores/{u}/imagesets"),
+                        None => format!("{base}/imagesets"),
                     };
                     let v = check(c.post(url).json(&serde_json::json!({ "description": description })).send().map_err(not_running)?)?;
                     println!("{}", v.get("id").and_then(|i| i.as_str()).unwrap_or("?"));
@@ -206,8 +206,8 @@ fn main() -> Result<()> {
                 }
                 ("list", args) => {
                     let url = match args {
-                        [] => format!("{base}/photosets"),
-                        [user] => format!("{base}/stores/{user}/photosets"),
+                        [] => format!("{base}/imagesets"),
+                        [user] => format!("{base}/stores/{user}/imagesets"),
                         _ => usage(),
                     };
                     let v = check(c.get(url).send().map_err(not_running)?)?;
@@ -222,13 +222,13 @@ fn main() -> Result<()> {
                     Ok(())
                 }
                 ("show", [id]) => {
-                    let v = check(c.get(format!("{base}/photosets/{}", encode_id(id))).send().map_err(not_running)?)?;
+                    let v = check(c.get(format!("{base}/imagesets/{}", encode_id(id))).send().map_err(not_running)?)?;
                     println!("{}", serde_json::to_string_pretty(&v)?);
                     Ok(())
                 }
                 ("add" | "remove", [set, media]) => {
                     let v = check(
-                        c.post(format!("{base}/photosets/{}/{sub}", encode_id(set)))
+                        c.post(format!("{base}/imagesets/{}/{sub}", encode_id(set)))
                             .json(&serde_json::json!({ "media": media }))
                             .send()
                             .map_err(not_running)?,

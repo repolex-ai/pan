@@ -98,9 +98,9 @@ fn full_store_describe_query_search_roundtrip() {
     let facts_map: HashMap<String, Vec<String>> = facts.into_iter().collect();
     assert_eq!(facts_map["http://purl.org/dc/elements/1.1/subject"], vec!["wolf"]);
     assert_eq!(
-        facts_map["https://repolex.ai/ontology/git-lex/id"],
+        facts_map["https://repolex.ai/ontology/pan/id"],
         vec![wolf.iri.clone()],
-        "git-lex:id identity fact present (the IRI itself)"
+        "pan:id identity fact present (the IRI itself)"
     );
     assert_eq!(
         facts_map["http://www.w3.org/1999/02/22-rdf-syntax-ns#type"],
@@ -140,7 +140,7 @@ fn full_store_describe_query_search_roundtrip() {
     // ── graph-only query mode (no vectors anywhere yet) ──
     {
         let results = store
-            .query("SELECT ?id WHERE { ?s dc:subject \"wolf\" ; git-lex:id ?id }")
+            .query("SELECT ?id WHERE { ?s dc:subject \"wolf\" ; pan:id ?id }")
             .unwrap();
         let ids: Vec<String> = match results {
             pan::QueryResults::Solutions(sols) => sols
@@ -253,5 +253,5 @@ fn travel_copy_ingests_on_put_into_fresh_store() {
         "facts traveled inside the file and ingested on put"
     );
     // The receiving store's identity is its OWN, not the source's.
-    assert_eq!(facts["https://repolex.ai/ontology/git-lex/id"], vec![put_b.iri.clone()]);
+    assert_eq!(facts["https://repolex.ai/ontology/pan/id"], vec![put_b.iri.clone()], "pan:id is the receiving store's own, never the source's");
 }

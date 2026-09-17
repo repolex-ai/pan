@@ -24,7 +24,7 @@ use oxigraph::io::RdfFormat;
 use oxigraph::model::{GraphName, Literal, NamedNode, Quad, Term};
 use std::path::Path;
 
-use crate::config::{now_local, GIT_LEX_NS, PAN_MEDIA_NS, PAN_NS};
+use crate::config::{now_local, PAN_MEDIA_NS, PAN_NS};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
@@ -221,12 +221,15 @@ pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<
     Ok(quads)
 }
 
-/// `<node> git-lex:id <node>` — the universal identity, an IRI pointing at
-/// the Thing itself (base kit convention; every Thing carries one).
+/// `<node> pan:id <node>` — the identity, an IRI pointing at the Thing
+/// itself. Spelled pan: in the graph exactly as in the file (goodlux,
+/// 2026-09-17: every fact Pan writes is pan:); pan:id is the universal id by
+/// owl:equivalentProperty in pan.ttl, so a git-lex or subtexture query still
+/// finds it. Every Pan node carries one.
 pub fn self_id_quad(node: &NamedNode) -> Result<Quad> {
     Ok(Quad::new(
         node.clone(),
-        NamedNode::new(format!("{GIT_LEX_NS}id")).map_err(|e| anyhow!("git-lex:id IRI: {e}"))?,
+        NamedNode::new(format!("{PAN_NS}id")).map_err(|e| anyhow!("pan:id IRI: {e}"))?,
         node.clone(),
         GraphName::DefaultGraph,
     ))

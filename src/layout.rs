@@ -7,7 +7,7 @@
 //! ```text
 //! <root>/                          soul repo: <repo>/.pan   bare store: the dir itself
 //!   pan.yml                        committable config (optional)
-//!   photosets/<id>.xml             one file per curated set; committed, the graph is rebuilt from them
+//!   imagesets/<id>.xml             one file per curated set; committed, the graph is rebuilt from them
 //!   _ignore/                       machine-local pocket
 //!     oxigraph/                    the graph — always here, never relocated
 //!     hnsw/<model>/                vector index per embedding model — always here
@@ -29,6 +29,7 @@
 //!           ├── caption/YYYY/MM/DD/<id>.<model>.xml
 //!           ├── pose/YYYY/MM/DD/<id>.xml (+ <id>.<model>.png overlay)
 //!           ├── sam3/YYYY/MM/DD/<id>.xml
+//!           ├── depth/YYYY/MM/DD/<id>.xml (+ <id>.<model>.png map, <id>.<model>.json sidecar)
 //!           └── vectors/<model>/<id>.npy (+ .json)
 //! ```
 //!
@@ -138,7 +139,7 @@ impl PanLayout {
 
     /// The file stem: the date and time plus the pan id, never a content hash
     /// (goodlux, 2026-09-04): `YYYYMMDD-HHMMSS-<id>`, the time being
-    /// `git-lex:createdDate` in system local time, as every Pan date.
+    /// `pan:createdDate` in system local time, as every Pan date.
     /// Readers never parse it back — `pan:mediaPath` in the graph is the path.
     pub fn file_stem(created_date: &str, id: &str) -> String {
         // created_date is RFC 3339 with offset: 2026-09-04T03:49:53-07:00

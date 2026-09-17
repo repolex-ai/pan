@@ -14,7 +14,7 @@ configured.
 ```
 <store root>/                       <repo>/.pan, or the bare store directory
 ├── pan.yml                         config (optional)
-├── photosets/                      one file per curated set; committed
+├── imagesets/                      one file per curated set; committed
 │   └── abcd2345.xml
 └── _ignore/                        machine-local, never committed
     ├── oxigraph/                   the graph
@@ -40,6 +40,10 @@ configured.
         │   └── abcd1234.rtmw-x-l.png
         ├── sam3/YYYY/MM/DD/
         │   └── abcd1234.xml
+        ├── depth/YYYY/MM/DD/
+        │   ├── abcd1234.xml
+        │   ├── abcd1234.depth-anything-Depth-Anything-V2-Base-hf.png
+        │   └── abcd1234.depth-anything-Depth-Anything-V2-Base-hf.json
         └── vectors/
             └── qwen3-vl-embedding-2b/
                 ├── abcd1234.npy
@@ -51,7 +55,7 @@ finds all of either, and neither side needs to know the other's folder names.
 
 ## Each folder
 
-- **`photosets/`** — one XMP-style file per set a person curates, named by
+- **`imagesets/`** — one XMP-style file per set a person curates, named by
   the set's id. A set carries exactly its id, its description and its
   created date; it keeps no member list. Membership is `pan:relatedToId`
   on the image, written into the image's XMP and the graph. On every open
@@ -80,6 +84,10 @@ finds all of either, and neither side needs to know the other's folder names.
   plus the model's skeleton overlay as a PNG beside it.
 - **`data/sam3/`** — one XML file per segmentation run, one Region record per
   thing outlined.
+- **`data/depth/`** — one XML file per depth run with one Depth record, the
+  depth map as an 8-bit grayscale PNG beside it (bright is near: 255 is the
+  nearest point, 0 the farthest, normalized per image from the record's
+  min and max), and everything else the node said as `.json` (issue #24).
 - **`data/vectors/<model>/`** — one `.npy` vector per image per embedding
   model, with the server's full answer beside it as `.json`. The searchable
   copy lives in the store's index; these files are the rebuild source.

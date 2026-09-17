@@ -289,6 +289,16 @@ impl Iris {
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see_pose shape: {e}")))
     }
 
+    /// `/percept/depth` (m3rc's door → Depth Anything V2 on Salad, percept-v1.7,
+    /// 2026-09-16): image → one normalized 8-bit map plus its raw range. The
+    /// answer is handed back whole; `crate::depth` reads it.
+    pub async fn depth(&self, t: &Target, bytes: &[u8], media_type: &str, meter: &Meter) -> std::result::Result<crate::depth::DepthAnswer, CallError> {
+        let form = Form::new()
+            .part("image", Self::image_part(bytes, media_type).map_err(|e| CallError::Terminal(e.to_string()))?);
+        let v = self.post(t, form, bytes.len() as u64, meter).await?;
+        serde_json::from_value(v).map_err(|e| CallError::Transient(format!("depth shape: {e}")))
+    }
+
     /// `/percept/segment` (m3rc's door → SAM3 on Salad): `prompts` is one
     /// comma-separated string of nouns. Returns the parsed regions AND the
     /// whole response as it came, so the caller can keep everything the
