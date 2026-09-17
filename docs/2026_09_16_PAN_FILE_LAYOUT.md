@@ -14,8 +14,10 @@ migrated.
     │   │   └── 20260916-101500-abcd1234.jpg
     │   ├── source/YYYY/MM/DD/
     │   │   └── 20260916-101500-abcd1234.png
-    │   └── jpg/YYYY/MM/DD/
-    │       └── 20260916-101500-abcd1234_512.jpg
+    │   ├── jpg/YYYY/MM/DD/
+    │   │   └── 20260916-101500-abcd1234_512.jpg
+    │   └── upscale/YYYY/MM/DD/
+    │       └── 20260916-101500-abcd1234_4096.png
     └── data/                       MODEL OUTPUT: records about the pictures
         ├── caption/YYYY/MM/DD/
         │   └── abcd1234.qwen-qwen3.8-27b.xml
@@ -48,6 +50,10 @@ finds all of either, and neither side needs to know the other's folder names.
   cannot be set by hand.
 - **`img/jpg/`** — derived JPEG renditions. Today there is one, the 512 px
   thumbnail. Other sizes go in the same folder with their own suffix.
+- **`img/upscale/`** — upscaled renditions, named by their long edge like
+  every other size. An upscale stays PNG, like the source, so nothing is
+  lost between the model that made it and the reader. Reserved (goodlux,
+  2026-09-16); no stage writes here yet.
 - **`data/caption/`** — one XML file per caption run: the reference, the
   Caption record, and the model's whole answer verbatim.
 - **`data/pose/`** — one XML file per pose run, one Pose record per person,
@@ -67,9 +73,9 @@ graph's `pan:mediaPath` is the path.
 
 **Sizes are suffixes, never folders.** A derived rendition carries its long
 edge in the file name: `_512`, `_1024`, `_2048`. There is no `thumbnail/`, no
-`large/`, no `preview/`. A folder names a format (`jpg/`, and `png/` if a PNG
-rendition such as an upscale is ever made); the suffix names the size. When
-a size changes, nothing is renamed but the file.
+`large/`, no `preview/`. A folder names a format or a kind of rendition
+(`jpg/`, `upscale/`); the suffix names the size. When a size changes,
+nothing is renamed but the file.
 
 **Square crops, reserved.** If a grid ever needs a square crop, it is
 `_<edge>_sq`, for example `…_512_sq.jpg`. Not built.

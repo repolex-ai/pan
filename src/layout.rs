@@ -22,7 +22,8 @@
 //!       ├── img/                   PIXELS: the pictures themselves and their renditions
 //!       │   ├── original/YYYY/MM/DD/<stem>.<ext>       what arrived, when it was not PNG; kept, never read again
 //!       │   ├── source/YYYY/MM/DD/<stem>.png           THE image: always PNG, XMP inside, what every stage reads
-//!       │   └── jpg/YYYY/MM/DD/<stem>_<longEdge>.jpg   derived JPEG renditions; the thumbnail is _512
+//!       │   ├── jpg/YYYY/MM/DD/<stem>_<longEdge>.jpg   derived JPEG renditions; the thumbnail is _512
+//!       │   └── upscale/YYYY/MM/DD/<stem>_<longEdge>.png upscaled renditions, PNG like the source; reserved, nothing writes here yet
 //!       └── data/                  MODEL OUTPUT: records about the picture
 //!           ├── caption/YYYY/MM/DD/<id>.<model>.xml
 //!           ├── pose/YYYY/MM/DD/<id>.xml (+ <id>.<model>.png overlay)
@@ -34,9 +35,10 @@
 //! finds every picture, another every record, and neither has to know the
 //! other's folder names. A derived size is named by its long edge in the file
 //! name (`_512`, `_2048`), never by a role word in a folder — roles drift, a
-//! number does not. A derived PNG rendition, if one is ever made, sits at
-//! `img/png/<shard>/<stem>_<longEdge>.png` by the same rule. `_<edge>_sq` is
-//! reserved for a square crop, when a grid needs one.
+//! number does not. An upscaled rendition sits under `img/upscale/` by the
+//! same rule, `<stem>_<longEdge>.png` — an upscale stays PNG like the source
+//! (goodlux, 2026-09-16). `_<edge>_sq` is reserved for a square crop, when a
+//! grid needs one.
 //!
 //! `<model>` in a FILE NAME is the model id with every `/` turned into `-`
 //! (`qwen/qwen3.8-27b` → `qwen-qwen3.8-27b`); the graph's `pan:model` keeps
@@ -77,6 +79,8 @@ impl PanLayout {
     pub const ORIGINAL_SUBDIR: &'static str = "original";
     pub const SOURCE_SUBDIR: &'static str = "source";
     pub const JPG_SUBDIR: &'static str = "jpg";
+    /// `<kind>/img/upscale/` — upscaled renditions, PNG like the source.
+    pub const UPSCALE_SUBDIR: &'static str = "upscale";
     pub const VECTORS_SUBDIR: &'static str = "vectors";
 
     /// The top folder for a media type: `image`, `video`, `audio` — from the
@@ -162,6 +166,14 @@ impl PanLayout {
         Self::img_rel_path(media_kind, Self::JPG_SUBDIR, &format!("{shard}/{stem}_{long_edge}.jpg"))
     }
 
+    /// Media-root-relative path of an upscaled rendition, named by its long
+    /// edge and kept as PNG like the source:
+    /// `<kind>/img/upscale/YYYY/MM/DD/<stem>_<longEdge>.png`. The place is
+    /// reserved (goodlux, 2026-09-16); no stage writes here yet.
+    pub fn upscale_rel_path(media_kind: &str, shard: &str, stem: &str, long_edge: u32) -> String {
+        Self::img_rel_path(media_kind, Self::UPSCALE_SUBDIR, &format!("{shard}/{stem}_{long_edge}.png"))
+    }
+
     /// The thumbnail is the `long_edge` JPEG rendition; no folder of its own.
     pub fn thumbnail_rel_path(media_kind: &str, shard: &str, stem: &str, long_edge: u32) -> String {
         Self::jpg_rel_path(media_kind, shard, stem, long_edge)
@@ -230,6 +242,7 @@ mod tests {
         assert_eq!(PanLayout::original_rel_path("image", "2026/09/04", &stem, "jpg"), "image/img/original/2026/09/04/20260904-034953-k7m2p9x4.jpg");
         assert_eq!(PanLayout::thumbnail_rel_path("image", "2026/09/04", &stem, 512), "image/img/jpg/2026/09/04/20260904-034953-k7m2p9x4_512.jpg");
         assert_eq!(PanLayout::jpg_rel_path("image", "2026/09/04", &stem, 2048), "image/img/jpg/2026/09/04/20260904-034953-k7m2p9x4_2048.jpg");
+        assert_eq!(PanLayout::upscale_rel_path("image", "2026/09/04", &stem, 4096), "image/img/upscale/2026/09/04/20260904-034953-k7m2p9x4_4096.png", "an upscale is PNG, beside jpg/, named by its long edge");
         assert_eq!(PanLayout::vector_rel_path("image", "m", "k7m2p9x4"), "image/data/vectors/m/k7m2p9x4.npy");
         assert_eq!(PanLayout::enrichment_rel_path("image", "caption", "2026/09/04", "k7m2p9x4", Some("m")), "image/data/caption/2026/09/04/k7m2p9x4.m.xml");
         assert_eq!(PanLayout::enrichment_rel_path("image", "sam3", "2026/09/04", "k7m2p9x4", None), "image/data/sam3/2026/09/04/k7m2p9x4.xml");
