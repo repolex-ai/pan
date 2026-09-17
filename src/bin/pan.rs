@@ -38,7 +38,9 @@ fn usage() -> ! {
            pan imageset remove <pan/ImageSet/id> <pan/Image/id>\n\n\
          pand must be running (start it with: pand). Config: {}",
         env!("CARGO_PKG_VERSION"),
-        pan::daemon::config::config_dir().join("config.yml").display()
+        pan::daemon::config::config_dir()
+            .join("config.yml")
+            .display()
     );
     std::process::exit(2);
 }
@@ -63,7 +65,12 @@ fn not_running(e: reqwest::Error) -> anyhow::Error {
 }
 
 fn media_type_for(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("webp") => "image/webp",
         Some("gif") => "image/gif",
@@ -100,7 +107,10 @@ fn json_value(v: &str) -> serde_json::Value {
 
 fn encode_id(id: &str) -> String {
     // The bracket form travels in a URL path; encode what a path cannot hold.
-    id.replace('%', "%25").replace('/', "%2F").replace('<', "%3C").replace('>', "%3E")
+    id.replace('%', "%25")
+        .replace('/', "%2F")
+        .replace('<', "%3C")
+        .replace('>', "%3E")
 }
 
 fn main() -> Result<()> {
@@ -139,7 +149,11 @@ fn main() -> Result<()> {
         "info" | "state" => {
             let [id] = rest.as_slice() else { usage() };
             let tail = if cmd == "info" { "facts" } else { "state" };
-            let v = check(c.get(format!("{base}/media/{}/{tail}", encode_id(id))).send().map_err(not_running)?)?;
+            let v = check(
+                c.get(format!("{base}/media/{}/{tail}", encode_id(id)))
+                    .send()
+                    .map_err(not_running)?,
+            )?;
             println!("{}", serde_json::to_string_pretty(&v)?);
             Ok(())
         }
@@ -163,32 +177,50 @@ fn main() -> Result<()> {
             Ok(())
         }
         "set" => {
-            let Some((id, pairs)) = rest.split_first() else { usage() };
+            let Some((id, pairs)) = rest.split_first() else {
+                usage()
+            };
             if pairs.is_empty() {
                 usage();
             }
             let mut body = serde_json::Map::new();
             for pair in pairs {
                 let Some((k, v)) = pair.split_once('=') else {
-                    return Err(anyhow!("expected key=value, got {pair} (example: rating=4)"));
+                    return Err(anyhow!(
+                        "expected key=value, got {pair} (example: rating=4)"
+                    ));
                 };
                 body.insert(k.to_string(), json_value(v));
             }
-            let v = check(c.post(format!("{base}/media/{}/set", encode_id(id))).json(&body).send().map_err(not_running)?)?;
+            let v = check(
+                c.post(format!("{base}/media/{}/set", encode_id(id)))
+                    .json(&body)
+                    .send()
+                    .map_err(not_running)?,
+            )?;
             println!("{}", serde_json::to_string_pretty(&v)?);
             Ok(())
         }
         "unset" => {
-            let Some((id, keys)) = rest.split_first() else { usage() };
+            let Some((id, keys)) = rest.split_first() else {
+                usage()
+            };
             if keys.is_empty() {
                 usage();
             }
-            let v = check(c.post(format!("{base}/media/{}/unset", encode_id(id))).json(&keys).send().map_err(not_running)?)?;
+            let v = check(
+                c.post(format!("{base}/media/{}/unset", encode_id(id)))
+                    .json(&keys)
+                    .send()
+                    .map_err(not_running)?,
+            )?;
             println!("{}", serde_json::to_string_pretty(&v)?);
             Ok(())
         }
         "imageset" => {
-            let Some((sub, args)) = rest.split_first() else { usage() };
+            let Some((sub, args)) = rest.split_first() else {
+                usage()
+            };
             match (sub.as_str(), args) {
                 ("create", args) => {
                     let (user, description) = match args {
@@ -200,7 +232,12 @@ fn main() -> Result<()> {
                         Some(u) => format!("{base}/stores/{u}/imagesets"),
                         None => format!("{base}/imagesets"),
                     };
-                    let v = check(c.post(url).json(&serde_json::json!({ "description": description })).send().map_err(not_running)?)?;
+                    let v = check(
+                        c.post(url)
+                            .json(&serde_json::json!({ "description": description }))
+                            .send()
+                            .map_err(not_running)?,
+                    )?;
                     println!("{}", v.get("id").and_then(|i| i.as_str()).unwrap_or("?"));
                     Ok(())
                 }
@@ -215,14 +252,20 @@ fn main() -> Result<()> {
                         println!(
                             "{}  {}  {}",
                             s.get("id").and_then(|x| x.as_str()).unwrap_or("?"),
-                            s.get("created_date").and_then(|x| x.as_str()).unwrap_or("?"),
+                            s.get("created_date")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("?"),
                             s.get("description").and_then(|x| x.as_str()).unwrap_or(""),
                         );
                     }
                     Ok(())
                 }
                 ("show", [id]) => {
-                    let v = check(c.get(format!("{base}/imagesets/{}", encode_id(id))).send().map_err(not_running)?)?;
+                    let v = check(
+                        c.get(format!("{base}/imagesets/{}", encode_id(id)))
+                            .send()
+                            .map_err(not_running)?,
+                    )?;
                     println!("{}", serde_json::to_string_pretty(&v)?);
                     Ok(())
                 }
@@ -240,12 +283,23 @@ fn main() -> Result<()> {
             }
         }
         "stores" => {
-            let v = check(c.get(format!("{base}/stores")).send().map_err(not_running)?)?;
+            let v = check(
+                c.get(format!("{base}/stores"))
+                    .send()
+                    .map_err(not_running)?,
+            )?;
             for s in v.as_array().into_iter().flatten() {
                 println!(
                     "{}{}  {}",
                     s.get("id").and_then(|x| x.as_str()).unwrap_or("?"),
-                    if s.get("is_default").and_then(|x| x.as_bool()).unwrap_or(false) { " (default)" } else { "" },
+                    if s.get("is_default")
+                        .and_then(|x| x.as_bool())
+                        .unwrap_or(false)
+                    {
+                        " (default)"
+                    } else {
+                        ""
+                    },
                     s.get("root").and_then(|x| x.as_str()).unwrap_or("?"),
                 );
             }

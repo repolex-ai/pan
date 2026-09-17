@@ -119,7 +119,9 @@ impl Pan {
             return Err(anyhow!("depth answer carries no map"));
         }
         let (Some(min), Some(max)) = (answer.min, answer.max) else {
-            return Err(anyhow!("depth answer carries no min/max; the map cannot be read back without its range"));
+            return Err(anyhow!(
+                "depth answer carries no min/max; the map cannot be read back without its range"
+            ));
         };
         let png = answer.map_png()?;
         let created = self.created_date_of(id)?;
@@ -132,8 +134,11 @@ impl Pan {
         }
         write_atomic(&map_abs, &png).with_context(|| format!("write {}", map_abs.display()))?;
         let side = map_abs.with_extension("json");
-        write_atomic(&side, serde_json::to_string_pretty(&answer.sidecar(&map_rel))?.as_bytes())
-            .with_context(|| format!("write {}", side.display()))?;
+        write_atomic(
+            &side,
+            serde_json::to_string_pretty(&answer.sidecar(&map_rel))?.as_bytes(),
+        )
+        .with_context(|| format!("write {}", side.display()))?;
 
         let mut rec = EnrichmentRecord::new(gen_pan_id(), CLASS, model)
             .field(F_MAP_PATH, &map_rel)
@@ -151,7 +156,14 @@ impl Pan {
         if let Some(p) = answer.provider.as_deref().filter(|s| !s.trim().is_empty()) {
             rec = rec.field("provider", p);
         }
-        self.write_enrichment(id, STAGE, REF_LOCAL, model, std::slice::from_ref(&rec), None)
+        self.write_enrichment(
+            id,
+            STAGE,
+            REF_LOCAL,
+            model,
+            std::slice::from_ref(&rec),
+            None,
+        )
     }
 }
 
@@ -167,7 +179,10 @@ mod tests {
         assert_eq!(a.min, Some(-1.2637));
         assert_eq!(a.max, Some(9.3984));
         assert_eq!((a.width, a.height), (Some(4), Some(4)));
-        assert_eq!(a.model.as_deref(), Some("depth-anything/Depth-Anything-V2-Base-hf"));
+        assert_eq!(
+            a.model.as_deref(),
+            Some("depth-anything/Depth-Anything-V2-Base-hf")
+        );
         assert_eq!(a.precision.as_deref(), Some("fp16-cuda"));
         assert_eq!(a.provider.as_deref(), Some("salad"));
         let png = a.map_png().unwrap();

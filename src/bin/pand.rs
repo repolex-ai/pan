@@ -25,7 +25,12 @@ const LAUNCHD_LABEL: &str = "ai.repolex.pand";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
         [] => serve(),
         ["start"] => {
             stop_all();
@@ -39,7 +44,9 @@ fn main() -> Result<()> {
         _ => {
             eprintln!(
                 "usage: pand | pand start | pand stop | pand status\n  (no flags; configure in {})",
-                pan::daemon::config::config_dir().join("config.yml").display()
+                pan::daemon::config::config_dir()
+                    .join("config.yml")
+                    .display()
             );
             std::process::exit(2);
         }
@@ -55,12 +62,20 @@ fn serve() -> Result<()> {
     let log_dir = pan::daemon::config::default_store_dir().join("logs");
     std::fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join("pand.log");
-    let file = std::fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=info".into());
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=info".into());
     tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_writer(std::io::stderr))
-        .with(fmt::layer().with_ansi(false).with_writer(std::sync::Mutex::new(file)))
+        .with(
+            fmt::layer()
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(file)),
+        )
         .init();
     tracing::info!(log = %log_path.display(), "pand logging here as well as to this terminal");
 
@@ -78,16 +93,36 @@ fn serve() -> Result<()> {
 fn status() -> Result<()> {
     let cfg = pan::daemon::config::DaemonConfig::load()?;
     let url = format!("{}/health", cfg.base_url());
-    let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(3)).build()?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()?;
     let pids: Vec<String> = std::process::Command::new("pgrep")
         .args(["-x", "pand"])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).filter(|p| !p.is_empty() && *p != std::process::id().to_string()).collect())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|p| !p.is_empty() && *p != std::process::id().to_string())
+                .collect()
+        })
         .unwrap_or_default();
-    match client.get(&url).send().and_then(|r| r.error_for_status()).and_then(|r| r.json::<serde_json::Value>()) {
+    match client
+        .get(&url)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.json::<serde_json::Value>())
+    {
         Ok(h) => {
             let up = h["uptime_secs"].as_u64().unwrap_or(0);
-            let stages: Vec<String> = h["stages"].as_object().map(|m| m.iter().map(|(k, v)| format!("{k}: {}", v.as_str().unwrap_or("?"))).collect()).unwrap_or_default();
+            let stages: Vec<String> = h["stages"]
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, v)| format!("{k}: {}", v.as_str().unwrap_or("?")))
+                        .collect()
+                })
+                .unwrap_or_default();
             println!(
                 "pand is RUNNING — pid {}, up {}h {:02}m {:02}s, version {}",
                 h["pid"].as_u64().unwrap_or(0),
@@ -96,21 +131,46 @@ fn status() -> Result<()> {
                 up % 60,
                 h["version"].as_str().unwrap_or("?")
             );
-            println!("  serving {} for {} store(s), default {}", cfg.base_url(), h["stores"].as_array().map(|a| a.len()).unwrap_or(0), h["default"].as_str().unwrap_or("?"));
-            println!("  since start: {} image(s) stored, {} model call(s) made", h["images_stored"].as_u64().unwrap_or(0), h["model_calls"].as_u64().unwrap_or(0));
+            println!(
+                "  serving {} for {} store(s), default {}",
+                cfg.base_url(),
+                h["stores"].as_array().map(|a| a.len()).unwrap_or(0),
+                h["default"].as_str().unwrap_or("?")
+            );
+            println!(
+                "  since start: {} image(s) stored, {} model call(s) made",
+                h["images_stored"].as_u64().unwrap_or(0),
+                h["model_calls"].as_u64().unwrap_or(0)
+            );
             if let Some(w) = h["windows"].as_object() {
-                let mut ws: Vec<String> = w.iter().map(|(k, v)| format!("{k} {}", v.as_str().unwrap_or("?"))).collect();
+                let mut ws: Vec<String> = w
+                    .iter()
+                    .map(|(k, v)| format!("{k} {}", v.as_str().unwrap_or("?")))
+                    .collect();
                 ws.sort();
                 println!("  in flight (window/ceiling): {}", ws.join(", "));
             }
             if let Some(rows) = h["counts"].as_array() {
-                println!("  {:<8} {:>7} {:>7} {:>8} {:>7} {:>6} {:>7}", "store", "images", "thumbs", "captions", "embeds", "poses", "regions");
+                println!(
+                    "  {:<8} {:>7} {:>7} {:>8} {:>7} {:>6} {:>7}",
+                    "store", "images", "thumbs", "captions", "embeds", "poses", "regions"
+                );
                 for r in rows {
                     let g = |k: &str| r[k].as_u64().unwrap_or(0);
                     println!(
                         "  {:<8} {:>7} {:>7} {:>8} {:>7} {:>6} {:>7}",
-                        r["store"].as_str().unwrap_or("?").chars().take(6).collect::<String>(),
-                        g("images"), g("thumbnails"), g("captions"), g("embeddings"), g("poses"), g("regions")
+                        r["store"]
+                            .as_str()
+                            .unwrap_or("?")
+                            .chars()
+                            .take(6)
+                            .collect::<String>(),
+                        g("images"),
+                        g("thumbnails"),
+                        g("captions"),
+                        g("embeddings"),
+                        g("poses"),
+                        g("regions")
                     );
                 }
             }
@@ -119,9 +179,19 @@ fn status() -> Result<()> {
             } else {
                 println!("  model stages: {}", stages.join("; "));
             }
-            println!("  log: {}", pan::daemon::config::default_store_dir().join("logs").join("pand.log").display());
+            println!(
+                "  log: {}",
+                pan::daemon::config::default_store_dir()
+                    .join("logs")
+                    .join("pand.log")
+                    .display()
+            );
             if pids.len() > 1 {
-                println!("  WARNING: {} pand processes exist ({}); `pand stop` kills them all", pids.len(), pids.join(", "));
+                println!(
+                    "  WARNING: {} pand processes exist ({}); `pand stop` kills them all",
+                    pids.len(),
+                    pids.join(", ")
+                );
             }
             Ok(())
         }
@@ -147,9 +217,13 @@ fn stop_all() {
     // 1. The launchd job, so it cannot respawn what we are about to kill.
     let uid = unsafe { libc_getuid() };
     let target = format!("gui/{uid}/{LAUNCHD_LABEL}");
-    let out = Command::new("launchctl").args(["bootout", &target]).output();
+    let out = Command::new("launchctl")
+        .args(["bootout", &target])
+        .output();
     match out {
-        Ok(o) if o.status.success() => eprintln!("pand stop: launchd job {LAUNCHD_LABEL} booted out (it will not respawn)"),
+        Ok(o) if o.status.success() => {
+            eprintln!("pand stop: launchd job {LAUNCHD_LABEL} booted out (it will not respawn)")
+        }
         Ok(_) => eprintln!("pand stop: no launchd job {LAUNCHD_LABEL} was loaded"),
         Err(e) => eprintln!("pand stop: could not run launchctl: {e}"),
     }
@@ -160,7 +234,13 @@ fn stop_all() {
         Command::new("pgrep")
             .args(["-x", "pand"])
             .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| l.trim().parse::<u32>().ok()).filter(|p| *p != me).collect())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter_map(|l| l.trim().parse::<u32>().ok())
+                    .filter(|p| *p != me)
+                    .collect()
+            })
             .unwrap_or_default()
     };
     let first = pids();
@@ -169,7 +249,9 @@ fn stop_all() {
         return;
     }
     for p in &first {
-        let _ = Command::new("kill").args(["-TERM", &p.to_string()]).status();
+        let _ = Command::new("kill")
+            .args(["-TERM", &p.to_string()])
+            .status();
     }
     eprintln!("pand stop: sent SIGTERM to pand process(es) {:?}", first);
     for _ in 0..50 {
@@ -181,7 +263,9 @@ fn stop_all() {
     }
     let left = pids();
     for p in &left {
-        let _ = Command::new("kill").args(["-KILL", &p.to_string()]).status();
+        let _ = Command::new("kill")
+            .args(["-KILL", &p.to_string()])
+            .status();
     }
     eprintln!("pand stop: {:?} did not exit in 5 s; sent SIGKILL", left);
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -189,7 +273,15 @@ fn stop_all() {
     if still.is_empty() {
         eprintln!("pand stop: all pand processes have exited");
     } else {
-        eprintln!("pand stop: STILL RUNNING after SIGKILL: {:?} — check `ps -p {}`", still, still.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(","));
+        eprintln!(
+            "pand stop: STILL RUNNING after SIGKILL: {:?} — check `ps -p {}`",
+            still,
+            still
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
     }
 }
 

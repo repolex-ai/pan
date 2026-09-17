@@ -52,7 +52,9 @@ mod tests {
     use super::*;
 
     fn png(w: u32, h: u32) -> Vec<u8> {
-        let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 7]));
+        let img = image::RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 7])
+        });
         let mut out = Vec::new();
         image::DynamicImage::ImageRgb8(img)
             .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)

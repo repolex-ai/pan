@@ -55,7 +55,12 @@ impl Facts {
     /// LOUD: any unresolvable predicate (unknown prefix, invalid IRI) fails the
     /// whole call — nothing is partially written by this fn (the caller inserts
     /// the returned quads only on Ok).
-    pub fn into_quads(self, subject: &NamedNode, prefixes: &HashMap<String, String>, default_prefix: &str) -> Result<Vec<Quad>> {
+    pub fn into_quads(
+        self,
+        subject: &NamedNode,
+        prefixes: &HashMap<String, String>,
+        default_prefix: &str,
+    ) -> Result<Vec<Quad>> {
         let mut out = Vec::new();
         for (pred, values) in self.map {
             let p = resolve_predicate(&pred, prefixes, default_prefix)
@@ -109,8 +114,14 @@ mod tests {
 
     fn prefixes() -> HashMap<String, String> {
         let mut m = HashMap::new();
-        m.insert("pan".to_string(), "https://repolex.ai/ontology/pan/".to_string());
-        m.insert("dc".to_string(), "http://purl.org/dc/elements/1.1/".to_string());
+        m.insert(
+            "pan".to_string(),
+            "https://repolex.ai/ontology/pan/".to_string(),
+        );
+        m.insert(
+            "dc".to_string(),
+            "http://purl.org/dc/elements/1.1/".to_string(),
+        );
         m
     }
 
@@ -118,7 +129,9 @@ mod tests {
     fn resolves_all_three_forms() {
         let p = prefixes();
         assert_eq!(
-            resolve_predicate("https://x.io/p", &p, "pan").unwrap().as_str(),
+            resolve_predicate("https://x.io/p", &p, "pan")
+                .unwrap()
+                .as_str(),
             "https://x.io/p"
         );
         assert_eq!(
@@ -138,7 +151,10 @@ mod tests {
         let facts = Facts::new().with("copai:sceneMood", "calm");
         let subj = NamedNode::new("https://repolex.ai/pan/Image/abc123xy").unwrap();
         let err = facts.into_quads(&subj, &prefixes(), "pan").unwrap_err();
-        assert!(err.to_string().contains("unknown prefix 'copai'"), "got: {err}");
+        assert!(
+            err.to_string().contains("unknown prefix 'copai'"),
+            "got: {err}"
+        );
     }
 
     #[test]

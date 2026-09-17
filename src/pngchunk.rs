@@ -52,11 +52,19 @@ pub fn read_chunks(png: &[u8]) -> Result<Vec<Chunk>> {
         let mut kind = [0u8; 4];
         kind.copy_from_slice(&png[i + 4..i + 8]);
         let start = i + 8;
-        let end = start.checked_add(len).ok_or_else(|| anyhow!("PNG chunk length overflow"))?;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| anyhow!("PNG chunk length overflow"))?;
         if end + 4 > png.len() {
-            return Err(anyhow!("truncated PNG chunk {}", std::str::from_utf8(&kind).unwrap_or("????")));
+            return Err(anyhow!(
+                "truncated PNG chunk {}",
+                std::str::from_utf8(&kind).unwrap_or("????")
+            ));
         }
-        chunks.push(Chunk { kind, data: png[start..end].to_vec() });
+        chunks.push(Chunk {
+            kind,
+            data: png[start..end].to_vec(),
+        });
         i = end + 4; // skip CRC; recomputed on write
         if &kind == b"IEND" {
             break;
@@ -96,7 +104,10 @@ fn xmp_itxt(packet: &str) -> Chunk {
     data.push(0); // language tag (empty) terminator
     data.push(0); // translated keyword (empty) terminator
     data.extend_from_slice(packet.as_bytes());
-    Chunk { kind: *b"iTXt", data }
+    Chunk {
+        kind: *b"iTXt",
+        data,
+    }
 }
 
 /// Return the PNG with its XMP chunk replaced by `packet`. Every other chunk
@@ -149,11 +160,21 @@ pub fn read_xmp(png: &[u8]) -> Result<Option<String>> {
                 let mut p = kw_end + 1;
                 let flag = *c.data.get(p).ok_or_else(|| anyhow!("short iTXt"))?;
                 p += 2;
-                let lang_end = p + c.data[p..].iter().position(|b| *b == 0).ok_or_else(|| anyhow!("short iTXt"))?;
+                let lang_end = p + c.data[p..]
+                    .iter()
+                    .position(|b| *b == 0)
+                    .ok_or_else(|| anyhow!("short iTXt"))?;
                 p = lang_end + 1;
-                let tr_end = p + c.data[p..].iter().position(|b| *b == 0).ok_or_else(|| anyhow!("short iTXt"))?;
+                let tr_end = p + c.data[p..]
+                    .iter()
+                    .position(|b| *b == 0)
+                    .ok_or_else(|| anyhow!("short iTXt"))?;
                 let text = &c.data[tr_end + 1..];
-                let bytes = if flag == 1 { inflate(text)? } else { text.to_vec() };
+                let bytes = if flag == 1 {
+                    inflate(text)?
+                } else {
+                    text.to_vec()
+                };
                 return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
             }
             _ => {}
@@ -169,7 +190,9 @@ fn latin1(b: &[u8]) -> String {
 fn inflate(z: &[u8]) -> Result<Vec<u8>> {
     use std::io::Read;
     let mut out = Vec::new();
-    flate2::read::ZlibDecoder::new(z).read_to_end(&mut out).map_err(|e| anyhow!("inflate text chunk: {e}"))?;
+    flate2::read::ZlibDecoder::new(z)
+        .read_to_end(&mut out)
+        .map_err(|e| anyhow!("inflate text chunk: {e}"))?;
     Ok(out)
 }
 
@@ -184,9 +207,11 @@ mod tests {
             let mut enc = png::Encoder::new(&mut out, 2, 2);
             enc.set_color(png::ColorType::Rgb);
             enc.set_depth(png::BitDepth::Eight);
-            enc.add_text_chunk("parameters".into(), "a cat, Steps: 20, Seed: 42".into()).unwrap();
+            enc.add_text_chunk("parameters".into(), "a cat, Steps: 20, Seed: 42".into())
+                .unwrap();
             let mut w = enc.write_header().unwrap();
-            w.write_image_data(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]).unwrap();
+            w.write_image_data(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+                .unwrap();
         }
         out
     }
@@ -198,21 +223,37 @@ mod tests {
         let out = replace_xmp(&src, "<x:xmpmeta/>").unwrap();
         let after = read_chunks(&out).unwrap();
         assert_eq!(after.len(), before.len() + 1, "exactly one chunk added");
-        let idat_before: Vec<_> = before.iter().filter(|c| &c.kind == b"IDAT").map(|c| c.data.clone()).collect();
-        let idat_after: Vec<_> = after.iter().filter(|c| &c.kind == b"IDAT").map(|c| c.data.clone()).collect();
+        let idat_before: Vec<_> = before
+            .iter()
+            .filter(|c| &c.kind == b"IDAT")
+            .map(|c| c.data.clone())
+            .collect();
+        let idat_after: Vec<_> = after
+            .iter()
+            .filter(|c| &c.kind == b"IDAT")
+            .map(|c| c.data.clone())
+            .collect();
         assert_eq!(idat_before, idat_after, "pixel data untouched");
-        assert!(after.iter().any(|c| c.text_keyword() == Some("parameters")), "sdapi parameters kept");
+        assert!(
+            after.iter().any(|c| c.text_keyword() == Some("parameters")),
+            "sdapi parameters kept"
+        );
         assert_eq!(read_xmp(&out).unwrap().as_deref(), Some("<x:xmpmeta/>"));
         // Second replace swaps, never duplicates.
         let out2 = replace_xmp(&out, "<x:xmpmeta v='2'/>").unwrap();
         assert_eq!(read_chunks(&out2).unwrap().len(), after.len());
-        assert_eq!(read_xmp(&out2).unwrap().as_deref(), Some("<x:xmpmeta v='2'/>"));
+        assert_eq!(
+            read_xmp(&out2).unwrap().as_deref(),
+            Some("<x:xmpmeta v='2'/>")
+        );
     }
 
     #[test]
     fn output_is_a_valid_png_for_a_real_decoder() {
         let out = replace_xmp(&tiny_png_with_text(), "<x:xmpmeta/>").unwrap();
-        let mut r = png::Decoder::new(std::io::Cursor::new(&out)).read_info().unwrap();
+        let mut r = png::Decoder::new(std::io::Cursor::new(&out))
+            .read_info()
+            .unwrap();
         let mut buf = vec![0; r.output_buffer_size()];
         r.next_frame(&mut buf).unwrap();
         assert_eq!(&buf[..3], &[1, 2, 3]);

@@ -12,7 +12,9 @@ fn make_png(w: u32, h: u32, seed: u8) -> Vec<u8> {
         enc.set_color(png::ColorType::Rgb);
         enc.set_depth(png::BitDepth::Eight);
         let mut writer = enc.write_header().unwrap();
-        let px: Vec<u8> = (0..w * h * 3).map(|i| (i as u8).wrapping_mul(37).wrapping_add(seed)).collect();
+        let px: Vec<u8> = (0..w * h * 3)
+            .map(|i| (i as u8).wrapping_mul(37).wrapping_add(seed))
+            .collect();
         writer.write_image_data(&px).unwrap();
         writer.finish().unwrap();
     }
@@ -27,14 +29,29 @@ fn graph_spells_identity_and_creation_pan_and_nothing_git_lex_or_subtexture() {
     let set = store.imageset_create(Some("spelling")).unwrap();
     store.imageset_add(&set.id, &put.id).unwrap();
 
-    let facts: std::collections::HashMap<String, Vec<String>> = store.facts_for(&put.id).unwrap().into_iter().collect();
-    assert_eq!(facts["https://repolex.ai/ontology/pan/id"], vec![put.iri.clone()], "pan:id is the Image's identity in the graph");
-    assert_eq!(facts["https://repolex.ai/ontology/pan/createdDate"], vec![put.created_date.clone()], "pan:createdDate in the graph, as in the file");
-    assert!(facts.contains_key("https://repolex.ai/ontology/pan/relatedToId"), "membership is pan:relatedToId");
+    let facts: std::collections::HashMap<String, Vec<String>> =
+        store.facts_for(&put.id).unwrap().into_iter().collect();
+    assert_eq!(
+        facts["https://repolex.ai/ontology/pan/id"],
+        vec![put.iri.clone()],
+        "pan:id is the Image's identity in the graph"
+    );
+    assert_eq!(
+        facts["https://repolex.ai/ontology/pan/createdDate"],
+        vec![put.created_date.clone()],
+        "pan:createdDate in the graph, as in the file"
+    );
+    assert!(
+        facts.contains_key("https://repolex.ai/ontology/pan/relatedToId"),
+        "membership is pan:relatedToId"
+    );
 
     // The whole store: no predicate pand wrote lives under git-lex or subtexture.
     let mut foreign = Vec::new();
-    for ns in ["https://repolex.ai/ontology/git-lex/", "https://repolex.ai/ontology/subtexture/"] {
+    for ns in [
+        "https://repolex.ai/ontology/git-lex/",
+        "https://repolex.ai/ontology/subtexture/",
+    ] {
         let q = format!("SELECT ?s ?p WHERE {{ ?s ?p ?o . FILTER(STRSTARTS(STR(?p), \"{ns}\")) }}");
         if let pan::QueryResults::Solutions(sols) = store.query(&q).unwrap() {
             for s in sols {
@@ -43,5 +60,8 @@ fn graph_spells_identity_and_creation_pan_and_nothing_git_lex_or_subtexture() {
             }
         }
     }
-    assert!(foreign.is_empty(), "pand wrote predicates outside pan: {foreign:?}");
+    assert!(
+        foreign.is_empty(),
+        "pand wrote predicates outside pan: {foreign:?}"
+    );
 }

@@ -23,7 +23,8 @@ pub fn to_png(bytes: &[u8]) -> Result<Vec<u8>> {
         .decode()
         .context("decode image for PNG conversion")?;
     let mut out = Cursor::new(Vec::new());
-    img.write_to(&mut out, image::ImageFormat::Png).context("encode PNG")?;
+    img.write_to(&mut out, image::ImageFormat::Png)
+        .context("encode PNG")?;
     Ok(out.into_inner())
 }
 
@@ -32,9 +33,12 @@ mod tests {
     use super::*;
 
     fn jpeg(w: u32, h: u32) -> Vec<u8> {
-        let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x * 7) as u8, (y * 3) as u8, 128]));
+        let img =
+            image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x * 7) as u8, (y * 3) as u8, 128]));
         let mut out = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92).encode_image(&img).unwrap();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92)
+            .encode_image(&img)
+            .unwrap();
         out
     }
 
@@ -46,6 +50,10 @@ mod tests {
         let a = image::load_from_memory(&j).unwrap().to_rgb8();
         let b = image::load_from_memory(&p).unwrap().to_rgb8();
         assert_eq!(a.dimensions(), b.dimensions());
-        assert_eq!(a.as_raw(), b.as_raw(), "the PNG holds exactly what the decoder saw");
+        assert_eq!(
+            a.as_raw(),
+            b.as_raw(),
+            "the PNG holds exactly what the decoder saw"
+        );
     }
 }

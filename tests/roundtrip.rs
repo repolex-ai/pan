@@ -72,7 +72,10 @@ fn full_store_describe_query_search_roundtrip() {
     );
     let wolf = store.put(&wolf_png, Some("image/png")).unwrap();
     let sea = store.put(&sea_png, Some("image/png")).unwrap();
-    assert_eq!(wolf.statements, 2, "both dc facts read out of the file's XMP");
+    assert_eq!(
+        wolf.statements, 2,
+        "both dc facts read out of the file's XMP"
+    );
     assert_ne!(wolf.id, sea.id);
     assert_eq!(wolf.id.len(), 8, "panId is a short assigned id");
     assert_eq!(
@@ -84,7 +87,10 @@ fn full_store_describe_query_search_roundtrip() {
     // The identity model: putting the SAME bytes again is a NEW media object —
     // panIds are assigned, never content-derived, and there is no dedup.
     let wolf2 = store.put(&wolf_png, Some("image/png")).unwrap();
-    assert_ne!(wolf2.id, wolf.id, "same bytes, different object, different panId");
+    assert_ne!(
+        wolf2.id, wolf.id,
+        "same bytes, different object, different panId"
+    );
     store.delete(&wolf2.id).unwrap();
 
     // ── get: bytes come back, pixels stable across the stamp ──
@@ -96,7 +102,10 @@ fn full_store_describe_query_search_roundtrip() {
         "the stamp never touches the pixels"
     );
     let facts_map: HashMap<String, Vec<String>> = facts.into_iter().collect();
-    assert_eq!(facts_map["http://purl.org/dc/elements/1.1/subject"], vec!["wolf"]);
+    assert_eq!(
+        facts_map["http://purl.org/dc/elements/1.1/subject"],
+        vec!["wolf"]
+    );
     assert_eq!(
         facts_map["https://repolex.ai/ontology/pan/id"],
         vec![wolf.iri.clone()],
@@ -109,15 +118,29 @@ fn full_store_describe_query_search_roundtrip() {
     );
 
     // ── Pan's block is in the image XMP ──
-    let packet = pan::xmp::read_xmp_packet_from_bytes(&bytes).unwrap().expect("XMP written");
+    let packet = pan::xmp::read_xmp_packet_from_bytes(&bytes)
+        .unwrap()
+        .expect("XMP written");
     assert!(
         packet.contains(&format!("&lt;pan/Image/{}&gt;", wolf.id)),
         "pan: identity block present, id in angle-bracket form"
     );
-    assert!(!packet.contains(&wolf.iri), "the expanded IRI is never written into the file");
-    assert!(packet.contains("<pan:createdDate>"), "the Thing's creation time in the packet, under pan:");
-    assert!(!packet.contains("git-lex:"), "Pan writes no git-lex names into the file");
-    assert!(!packet.contains("pan:dateCreated"), "the old spelling is gone (pan.ttl 0.3.9)");
+    assert!(
+        !packet.contains(&wolf.iri),
+        "the expanded IRI is never written into the file"
+    );
+    assert!(
+        packet.contains("<pan:createdDate>"),
+        "the Thing's creation time in the packet, under pan:"
+    );
+    assert!(
+        !packet.contains("git-lex:"),
+        "Pan writes no git-lex names into the file"
+    );
+    assert!(
+        !packet.contains("pan:dateCreated"),
+        "the old spelling is gone (pan.ttl 0.3.9)"
+    );
 
     // ── describe: merge facts, loud failure on unknown prefix ──
     store
@@ -126,11 +149,16 @@ fn full_store_describe_query_search_roundtrip() {
     let err = store
         .describe(&wolf.id, Facts::new().with("nope:field", "x"))
         .unwrap_err();
-    assert!(err.to_string().contains("unknown prefix"), "loud, not silent: {err}");
+    assert!(
+        err.to_string().contains("unknown prefix"),
+        "loud, not silent: {err}"
+    );
 
     // Re-stamp rewrote the XMP without touching pixels.
     let (bytes_after, _) = store.get(&wolf.id).unwrap();
-    let _packet_after = pan::xmp::read_xmp_packet_from_bytes(&bytes_after).unwrap().unwrap();
+    let _packet_after = pan::xmp::read_xmp_packet_from_bytes(&bytes_after)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         pan::xmp::pixel_hash(&bytes_after).unwrap(),
         pan::xmp::pixel_hash(&wolf_png).unwrap(),
@@ -154,7 +182,11 @@ fn full_store_describe_query_search_roundtrip() {
                 .collect(),
             _ => panic!("expected solutions"),
         };
-        assert_eq!(ids, vec![wolf.iri.clone()], "graph-only mode is a complete product");
+        assert_eq!(
+            ids,
+            vec![wolf.iri.clone()],
+            "graph-only mode is a complete product"
+        );
     }
 
     // ── attach vectors (the two-call flow) + fusion search ──
@@ -169,14 +201,24 @@ fn full_store_describe_query_search_roundtrip() {
     );
 
     // Raw sidecars landed (reembed source of truth).
-    let sidecar = store.layout.vector_sidecar_path("image", "test-idx", &wolf.id);
-    assert!(sidecar.exists(), "npy sidecar written at {}", sidecar.display());
+    let sidecar = store
+        .layout
+        .vector_sidecar_path("image", "test-idx", &wolf.id);
+    assert!(
+        sidecar.exists(),
+        "npy sidecar written at {}",
+        sidecar.display()
+    );
     assert_eq!(pan::npy::read_f32_1d(&sidecar).unwrap().len(), dim);
 
     // Ungated search: nearest to wolf_vec is wolf.
     let hits = store.search("", &wolf_vec, 2, "test-idx").unwrap();
     assert_eq!(hits[0].id, wolf.id);
-    assert!(hits[0].score > 0.99, "self-similarity ~1.0, got {}", hits[0].score);
+    assert!(
+        hits[0].score > 0.99,
+        "self-similarity ~1.0, got {}",
+        hits[0].score
+    );
     assert_eq!(hits.len(), 2);
 
     // THE crown jewel: graph pattern gates the candidate set, kNN ranks.
@@ -189,7 +231,9 @@ fn full_store_describe_query_search_roundtrip() {
     assert_eq!(hits[0].id, sea.id);
 
     // Dim mismatch is loud.
-    let err = store.search("", &unit_vec(32, 1), 5, "test-idx").unwrap_err();
+    let err = store
+        .search("", &unit_vec(32, 1), 5, "test-idx")
+        .unwrap_err();
     assert!(err.to_string().contains("does not match index"), "{err}");
 
     // ── persistence: reopen from disk, search still works (lazy index load) ──
@@ -202,11 +246,17 @@ fn full_store_describe_query_search_roundtrip() {
     // Graph survived too.
     let (_, facts) = reopened.get(&wolf.id).unwrap();
     let facts_map: HashMap<String, Vec<String>> = facts.into_iter().collect();
-    assert_eq!(facts_map["http://purl.org/dc/elements/1.1/creator"], vec!["w4r3z"]);
+    assert_eq!(
+        facts_map["http://purl.org/dc/elements/1.1/creator"],
+        vec!["w4r3z"]
+    );
 
     // ── delete: everything about the sea image goes ──
     reopened.delete(&sea.id).unwrap();
-    assert!(reopened.facts_for(&sea.id).unwrap().is_empty(), "triples gone");
+    assert!(
+        reopened.facts_for(&sea.id).unwrap().is_empty(),
+        "triples gone"
+    );
     assert!(reopened.get(&sea.id).is_err(), "blob gone");
     let hits = reopened.search("", &sea_vec, 5, "test-idx").unwrap();
     assert!(
@@ -253,5 +303,9 @@ fn travel_copy_ingests_on_put_into_fresh_store() {
         "facts traveled inside the file and ingested on put"
     );
     // The receiving store's identity is its OWN, not the source's.
-    assert_eq!(facts["https://repolex.ai/ontology/pan/id"], vec![put_b.iri.clone()], "pan:id is the receiving store's own, never the source's");
+    assert_eq!(
+        facts["https://repolex.ai/ontology/pan/id"],
+        vec![put_b.iri.clone()],
+        "pan:id is the receiving store's own, never the source's"
+    );
 }

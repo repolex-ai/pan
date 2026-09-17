@@ -85,8 +85,7 @@ impl PanConfig {
         let yml: PanYml = if yml_path.exists() {
             let raw = std::fs::read_to_string(&yml_path)
                 .with_context(|| format!("read {}", yml_path.display()))?;
-            serde_yaml::from_str(&raw)
-                .with_context(|| format!("parse {}", yml_path.display()))?
+            serde_yaml::from_str(&raw).with_context(|| format!("parse {}", yml_path.display()))?
         } else {
             PanYml::default()
         };
@@ -104,7 +103,9 @@ impl PanConfig {
 
         Ok(PanConfig {
             root: root.to_path_buf(),
-            storage_id: yml.storage_id.unwrap_or_else(|| DEFAULT_STORAGE_ID.to_string()),
+            storage_id: yml
+                .storage_id
+                .unwrap_or_else(|| DEFAULT_STORAGE_ID.to_string()),
             storage_root_override: yml.storage_root,
             index_id: yml.index_id.unwrap_or_else(|| DEFAULT_INDEX_ID.to_string()),
             prefixes,
@@ -139,11 +140,17 @@ mod tests {
         .unwrap();
         let cfg = PanConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.storage_id, "my-store");
-        assert_eq!(cfg.storage_root_override, Some(PathBuf::from("/Volumes/big")));
+        assert_eq!(
+            cfg.storage_root_override,
+            Some(PathBuf::from("/Volumes/big"))
+        );
         assert_eq!(cfg.index_id, "clip-768");
         assert!(cfg.prefixes.contains_key("pan"), "pan: always registered");
         assert!(cfg.prefixes.contains_key("copia"));
-        assert_eq!(cfg.detectors.get("embed").unwrap(), "http://127.0.0.1:1215/embed");
+        assert_eq!(
+            cfg.detectors.get("embed").unwrap(),
+            "http://127.0.0.1:1215/embed"
+        );
     }
 
     #[test]

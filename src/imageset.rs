@@ -27,7 +27,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::config::{PAN_MEDIA_NS, PAN_NS};
-use crate::{bare_id, enrich, gen_pan_id, now_local, pan_iri, validate_pan_id, write_atomic, xmp, Pan, PanLayout};
+use crate::{
+    bare_id, enrich, gen_pan_id, now_local, pan_iri, validate_pan_id, write_atomic, xmp, Pan,
+    PanLayout,
+};
 
 /// The ontology class and the IRI path segment: `<pan/ImageSet/id>`.
 pub const IMAGESET_CLASS: &str = "ImageSet";
@@ -48,7 +51,8 @@ pub struct ImageSet {
 
 pub fn imageset_iri(id: &str) -> Result<NamedNode> {
     validate_pan_id(id)?;
-    NamedNode::new(format!("{PAN_MEDIA_NS}{IMAGESET_CLASS}/{id}")).map_err(|e| anyhow!("imageset IRI: {e}"))
+    NamedNode::new(format!("{PAN_MEDIA_NS}{IMAGESET_CLASS}/{id}"))
+        .map_err(|e| anyhow!("imageset IRI: {e}"))
 }
 
 /// The set's file, `imagesets/<id>.xml`: one root Description about the set,
@@ -58,10 +62,19 @@ pub fn build_imageset_file(p: &ImageSet) -> String {
     let mut desc = String::with_capacity(512);
     desc.push_str("    <rdf:Description rdf:about=\"\"");
     desc.push_str(&format!(" xmlns:pan=\"{PAN_NS}\">\n"));
-    desc.push_str(&format!("      <pan:id>{}</pan:id>\n", xml_escape(&xmp::bracket_of_iri(&p.iri))));
-    desc.push_str(&format!("      <pan:createdDate>{}</pan:createdDate>\n", xml_escape(&p.created_date)));
+    desc.push_str(&format!(
+        "      <pan:id>{}</pan:id>\n",
+        xml_escape(&xmp::bracket_of_iri(&p.iri))
+    ));
+    desc.push_str(&format!(
+        "      <pan:createdDate>{}</pan:createdDate>\n",
+        xml_escape(&p.created_date)
+    ));
     if let Some(d) = &p.description {
-        desc.push_str(&format!("      <pan:description>{}</pan:description>\n", xml_escape(d)));
+        desc.push_str(&format!(
+            "      <pan:description>{}</pan:description>\n",
+            xml_escape(d)
+        ));
     }
     desc.push_str("    </rdf:Description>\n");
     xmp::compose_packet(None, &desc)
@@ -72,7 +85,10 @@ pub fn build_imageset_file(p: &ImageSet) -> String {
 /// a file that says less is an error, never a half-set.
 pub fn read_imageset_file(text: &str) -> Result<ImageSet> {
     let subjects = xmp::parse_packet(text).context("parse imageset file")?;
-    let root = subjects.iter().find(|s| s.subject.is_none()).ok_or_else(|| anyhow!("imageset file has no root Description"))?;
+    let root = subjects
+        .iter()
+        .find(|s| s.subject.is_none())
+        .ok_or_else(|| anyhow!("imageset file has no root Description"))?;
     let one = |local: &str| -> Option<String> {
         root.facts
             .iter()
@@ -81,18 +97,28 @@ pub fn read_imageset_file(text: &str) -> Result<ImageSet> {
             .map(|t| t.value().to_string())
     };
     let id_text = one("id").ok_or_else(|| anyhow!("imageset file has no pan:id"))?;
-    let iri = crate::iri_from_bracket(&id_text).ok_or_else(|| anyhow!("imageset pan:id is not <pan/ImageSet/id>: {id_text}"))?;
+    let iri = crate::iri_from_bracket(&id_text)
+        .ok_or_else(|| anyhow!("imageset pan:id is not <pan/ImageSet/id>: {id_text}"))?;
     let id = iri
         .strip_prefix(&format!("{PAN_MEDIA_NS}{IMAGESET_CLASS}/"))
         .ok_or_else(|| anyhow!("imageset pan:id is not <pan/ImageSet/id>: {id_text}"))?
         .to_string();
     validate_pan_id(&id)?;
-    let created_date = one("createdDate").ok_or_else(|| anyhow!("imageset file has no pan:createdDate"))?;
-    Ok(ImageSet { id, iri, description: one("description"), created_date })
+    let created_date =
+        one("createdDate").ok_or_else(|| anyhow!("imageset file has no pan:createdDate"))?;
+    Ok(ImageSet {
+        id,
+        iri,
+        description: one("description"),
+        created_date,
+    })
 }
 
 fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 impl Pan {
@@ -113,7 +139,12 @@ impl Pan {
         let node = imageset_iri(id)?;
         let exists = self
             .store
-            .quads_for_pattern(Some((&node).into()), Some(crate::rdf_type().as_ref()), Some(pan_iri(IMAGESET_CLASS).as_ref().into()), Some(GraphName::DefaultGraph.as_ref()))
+            .quads_for_pattern(
+                Some((&node).into()),
+                Some(crate::rdf_type().as_ref()),
+                Some(pan_iri(IMAGESET_CLASS).as_ref().into()),
+                Some(GraphName::DefaultGraph.as_ref()),
+            )
             .next()
             .is_some();
         Ok(exists.then_some(node))
@@ -125,12 +156,27 @@ impl Pan {
     fn imageset_quads(p: &ImageSet) -> Result<Vec<Quad>> {
         let node = imageset_iri(&p.id)?;
         let mut quads = vec![
-            Quad::new(node.clone(), crate::rdf_type(), pan_iri(IMAGESET_CLASS), GraphName::DefaultGraph),
+            Quad::new(
+                node.clone(),
+                crate::rdf_type(),
+                pan_iri(IMAGESET_CLASS),
+                GraphName::DefaultGraph,
+            ),
             enrich::self_id_quad(&node)?,
-            Quad::new(node.clone(), pan_iri("createdDate"), Literal::new_simple_literal(&p.created_date), GraphName::DefaultGraph),
+            Quad::new(
+                node.clone(),
+                pan_iri("createdDate"),
+                Literal::new_simple_literal(&p.created_date),
+                GraphName::DefaultGraph,
+            ),
         ];
         if let Some(d) = &p.description {
-            quads.push(Quad::new(node, pan_iri("description"), Literal::new_simple_literal(d), GraphName::DefaultGraph));
+            quads.push(Quad::new(
+                node,
+                pan_iri("description"),
+                Literal::new_simple_literal(d),
+                GraphName::DefaultGraph,
+            ));
         }
         Ok(quads)
     }
@@ -141,10 +187,18 @@ impl Pan {
         let node = imageset_iri(&p.id)?;
         let old: Vec<Quad> = self
             .store
-            .quads_for_pattern(Some((&node).into()), None, None, Some(GraphName::DefaultGraph.as_ref()))
+            .quads_for_pattern(
+                Some((&node).into()),
+                None,
+                None,
+                Some(GraphName::DefaultGraph.as_ref()),
+            )
             .collect::<std::result::Result<_, _>>()
             .context("read imageset node")?;
-        let mut t = self.store.start_transaction().context("start transaction")?;
+        let mut t = self
+            .store
+            .start_transaction()
+            .context("start transaction")?;
         for q in &old {
             t.remove(q.as_ref());
         }
@@ -160,16 +214,28 @@ impl Pan {
     /// anything is written if the file cannot be; removes the file if the
     /// graph refuses.
     pub fn imageset_create(&self, description: Option<&str>) -> Result<ImageSet> {
-        let description = description.map(str::trim).filter(|d| !d.is_empty()).map(String::from);
+        let description = description
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(String::from);
         let id = loop {
             let cand = gen_pan_id();
-            if self.subject_for(&cand)?.is_none() && self.imageset_subject(&cand)?.is_none() && !self.imageset_file(&cand).exists() {
+            if self.subject_for(&cand)?.is_none()
+                && self.imageset_subject(&cand)?.is_none()
+                && !self.imageset_file(&cand).exists()
+            {
                 break cand;
             }
         };
-        let p = ImageSet { iri: imageset_iri(&id)?.into_string(), id, description, created_date: now_local() };
+        let p = ImageSet {
+            iri: imageset_iri(&id)?.into_string(),
+            id,
+            description,
+            created_date: now_local(),
+        };
         let path = self.imageset_file(&p.id);
-        fs::create_dir_all(self.imagesets_root()).with_context(|| format!("create {}", self.imagesets_root().display()))?;
+        fs::create_dir_all(self.imagesets_root())
+            .with_context(|| format!("create {}", self.imagesets_root().display()))?;
         write_atomic(&path, build_imageset_file(&p).as_bytes())?;
         if let Err(e) = self.write_imageset_node(&p) {
             let _ = fs::remove_file(&path);
@@ -181,9 +247,16 @@ impl Pan {
     /// Every set in the graph, oldest first.
     pub fn imageset_list(&self) -> Result<Vec<ImageSet>> {
         let mut out = Vec::new();
-        for q in self.store.quads_for_pattern(None, Some(crate::rdf_type().as_ref()), Some(pan_iri(IMAGESET_CLASS).as_ref().into()), Some(GraphName::DefaultGraph.as_ref())) {
+        for q in self.store.quads_for_pattern(
+            None,
+            Some(crate::rdf_type().as_ref()),
+            Some(pan_iri(IMAGESET_CLASS).as_ref().into()),
+            Some(GraphName::DefaultGraph.as_ref()),
+        ) {
             let q = q.context("list imagesets")?;
-            let oxigraph::model::NamedOrBlankNode::NamedNode(node) = &q.subject else { continue };
+            let oxigraph::model::NamedOrBlankNode::NamedNode(node) = &q.subject else {
+                continue;
+            };
             if let Some(p) = self.imageset_of(node)? {
                 out.push(p);
             }
@@ -203,7 +276,12 @@ impl Pan {
     fn imageset_of(&self, node: &NamedNode) -> Result<Option<ImageSet>> {
         let mut created_date = None;
         let mut description = None;
-        for q in self.store.quads_for_pattern(Some(node.into()), None, None, Some(GraphName::DefaultGraph.as_ref())) {
+        for q in self.store.quads_for_pattern(
+            Some(node.into()),
+            None,
+            None,
+            Some(GraphName::DefaultGraph.as_ref()),
+        ) {
             let q = q.context("read imageset")?;
             let value = match &q.object {
                 Term::Literal(l) => l.value().to_string(),
@@ -215,15 +293,29 @@ impl Pan {
                 _ => {}
             }
         }
-        let Some(created_date) = created_date else { return Ok(None) };
-        Ok(Some(ImageSet { id: bare_id(node.as_str()), iri: node.as_str().to_string(), description, created_date }))
+        let Some(created_date) = created_date else {
+            return Ok(None);
+        };
+        Ok(Some(ImageSet {
+            id: bare_id(node.as_str()),
+            iri: node.as_str().to_string(),
+            description,
+            created_date,
+        }))
     }
 
     /// The IRIs of every media object whose `pan:relatedToId` names the set.
     pub fn imageset_members(&self, id: &str) -> Result<Vec<String>> {
-        let Some(node) = self.imageset_subject(id)? else { return Err(anyhow!("imageset not found: {id}")) };
+        let Some(node) = self.imageset_subject(id)? else {
+            return Err(anyhow!("imageset not found: {id}"));
+        };
         let mut out = Vec::new();
-        for q in self.store.quads_for_pattern(None, Some(pan_iri("relatedToId").as_ref()), Some((&node).into()), Some(GraphName::DefaultGraph.as_ref())) {
+        for q in self.store.quads_for_pattern(
+            None,
+            Some(pan_iri("relatedToId").as_ref()),
+            Some((&node).into()),
+            Some(GraphName::DefaultGraph.as_ref()),
+        ) {
             let q = q.context("read members")?;
             if let oxigraph::model::NamedOrBlankNode::NamedNode(s) = &q.subject {
                 out.push(s.as_str().to_string());
@@ -239,16 +331,33 @@ impl Pan {
     /// a `pan:Image`: an ImageSet holds images only, so anything else is
     /// refused before anything is written.
     pub fn imageset_add(&self, set_id: &str, media_id: &str) -> Result<()> {
-        let Some(set) = self.imageset_subject(set_id)? else { return Err(anyhow!("imageset not found: {set_id}")) };
-        let Some(media) = self.subject_for(media_id)? else { return Err(anyhow!("id not found: {media_id}")) };
+        let Some(set) = self.imageset_subject(set_id)? else {
+            return Err(anyhow!("imageset not found: {set_id}"));
+        };
+        let Some(media) = self.subject_for(media_id)? else {
+            return Err(anyhow!("id not found: {media_id}"));
+        };
         let is_image = self
             .store
-            .contains(Quad::new(media.clone(), crate::rdf_type(), pan_iri("Image"), GraphName::DefaultGraph).as_ref())
+            .contains(
+                Quad::new(
+                    media.clone(),
+                    crate::rdf_type(),
+                    pan_iri("Image"),
+                    GraphName::DefaultGraph,
+                )
+                .as_ref(),
+            )
             .context("check media class")?;
         if !is_image {
             let class = self
                 .store
-                .quads_for_pattern(Some((&media).into()), Some(crate::rdf_type().as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+                .quads_for_pattern(
+                    Some((&media).into()),
+                    Some(crate::rdf_type().as_ref()),
+                    None,
+                    Some(GraphName::DefaultGraph.as_ref()),
+                )
                 .filter_map(|q| q.ok())
                 .find_map(|q| match q.object {
                     Term::NamedNode(n) => n.as_str().strip_prefix(PAN_NS).map(str::to_string),
@@ -260,7 +369,11 @@ impl Pan {
             ));
         }
         let edge = Quad::new(media, pan_iri("relatedToId"), set, GraphName::DefaultGraph);
-        if self.store.contains(edge.as_ref()).context("check membership")? {
+        if self
+            .store
+            .contains(edge.as_ref())
+            .context("check membership")?
+        {
             return Ok(());
         }
         self.insert_quads(&[edge])?;
@@ -269,13 +382,24 @@ impl Pan {
 
     /// Take a media object out of a set. Not a member = no change.
     pub fn imageset_remove(&self, set_id: &str, media_id: &str) -> Result<()> {
-        let Some(set) = self.imageset_subject(set_id)? else { return Err(anyhow!("imageset not found: {set_id}")) };
-        let Some(media) = self.subject_for(media_id)? else { return Err(anyhow!("id not found: {media_id}")) };
+        let Some(set) = self.imageset_subject(set_id)? else {
+            return Err(anyhow!("imageset not found: {set_id}"));
+        };
+        let Some(media) = self.subject_for(media_id)? else {
+            return Err(anyhow!("id not found: {media_id}"));
+        };
         let edge = Quad::new(media, pan_iri("relatedToId"), set, GraphName::DefaultGraph);
-        if !self.store.contains(edge.as_ref()).context("check membership")? {
+        if !self
+            .store
+            .contains(edge.as_ref())
+            .context("check membership")?
+        {
             return Ok(());
         }
-        let mut t = self.store.start_transaction().context("start transaction")?;
+        let mut t = self
+            .store
+            .start_transaction()
+            .context("start transaction")?;
         t.remove(edge.as_ref());
         t.commit().context("commit remove")?;
         self.restamp(media_id)
@@ -295,12 +419,21 @@ impl Pan {
         let mut entries: Vec<PathBuf> = fs::read_dir(&root)
             .with_context(|| format!("read {}", root.display()))?
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("xml") && !p.file_name().and_then(|f| f.to_str()).unwrap_or("").starts_with('.'))
+            .filter(|p| {
+                p.extension().and_then(|e| e.to_str()) == Some("xml")
+                    && !p
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or("")
+                        .starts_with('.')
+            })
             .collect();
         entries.sort();
         for path in entries {
-            let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-            let p = read_imageset_file(&text).with_context(|| format!("imageset file {}", path.display()))?;
+            let text =
+                fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+            let p = read_imageset_file(&text)
+                .with_context(|| format!("imageset file {}", path.display()))?;
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             if stem != p.id {
                 return Err(anyhow!("imageset file {} carries pan:id <pan/ImageSet/{}>; the file name and the id must agree", path.display(), p.id));
@@ -335,11 +468,23 @@ mod tests {
             created_date: "2026-09-16T12:00:00-07:00".into(),
         };
         let text = build_imageset_file(&p);
-        assert!(text.contains("<pan:id>&lt;pan/ImageSet/abcd2345&gt;</pan:id>"), "{text}");
-        assert!(text.contains("<pan:createdDate>2026-09-16T12:00:00-07:00</pan:createdDate>"), "{text}");
-        assert!(text.contains("<pan:description>portraits &amp; &lt;tests&gt;</pan:description>"), "{text}");
+        assert!(
+            text.contains("<pan:id>&lt;pan/ImageSet/abcd2345&gt;</pan:id>"),
+            "{text}"
+        );
+        assert!(
+            text.contains("<pan:createdDate>2026-09-16T12:00:00-07:00</pan:createdDate>"),
+            "{text}"
+        );
+        assert!(
+            text.contains("<pan:description>portraits &amp; &lt;tests&gt;</pan:description>"),
+            "{text}"
+        );
         assert!(!text.contains("git-lex"), "the file carries pan: only");
-        assert!(!text.contains("member") && !text.contains("inPhotoset"), "no member list on a set");
+        assert!(
+            !text.contains("member") && !text.contains("inPhotoset"),
+            "no member list on a set"
+        );
         assert_eq!(read_imageset_file(&text).unwrap(), p);
     }
 

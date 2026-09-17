@@ -52,7 +52,10 @@ fn xml_escape(s: &str) -> String {
 fn serialize_field(prefix: &str, local: &str, value: &FieldValue, indent: &str) -> String {
     match value {
         FieldValue::Scalar(s) => {
-            format!("{indent}<{prefix}:{local}>{}</{prefix}:{local}>\n", xml_escape(s))
+            format!(
+                "{indent}<{prefix}:{local}>{}</{prefix}:{local}>\n",
+                xml_escape(s)
+            )
         }
         FieldValue::Bag(members) => {
             let mut out = format!("{indent}<{prefix}:{local}><rdf:Bag>");
@@ -132,19 +135,35 @@ pub fn bracket_of_iri(iri: &str) -> String {
 }
 
 /// Serialize one enrichment reference bag as a flat property of the media object.
-fn serialize_enrichment(local: &str, refs: &[crate::enrich::EnrichmentRef], indent: &str) -> String {
+fn serialize_enrichment(
+    local: &str,
+    refs: &[crate::enrich::EnrichmentRef],
+    indent: &str,
+) -> String {
     let mut out = format!("{indent}<pan:{local}>\n{indent} <rdf:Bag>\n");
     for r in refs {
         out.push_str(&format!("{indent}  <rdf:li rdf:parseType=\"Resource\">\n"));
-        out.push_str(&format!("{indent}   <pan:id>&lt;pan/Enrichment/{}&gt;</pan:id>\n", xml_escape(&r.id)));
+        out.push_str(&format!(
+            "{indent}   <pan:id>&lt;pan/Enrichment/{}&gt;</pan:id>\n",
+            xml_escape(&r.id)
+        ));
         if !r.model.is_empty() {
-            out.push_str(&format!("{indent}   <pan:model>{}</pan:model>\n", xml_escape(&r.model)));
+            out.push_str(&format!(
+                "{indent}   <pan:model>{}</pan:model>\n",
+                xml_escape(&r.model)
+            ));
         }
-        out.push_str(&format!("{indent}   <pan:path>{}</pan:path>\n", xml_escape(&r.path)));
+        out.push_str(&format!(
+            "{indent}   <pan:path>{}</pan:path>\n",
+            xml_escape(&r.path)
+        ));
         if let Some(count) = r.count {
             out.push_str(&format!("{indent}   <pan:count>{count}</pan:count>\n"));
         }
-        out.push_str(&format!("{indent}   <pan:producedDate>{}</pan:producedDate>\n", xml_escape(&r.produced_date)));
+        out.push_str(&format!(
+            "{indent}   <pan:producedDate>{}</pan:producedDate>\n",
+            xml_escape(&r.produced_date)
+        ));
         out.push_str(&format!("{indent}  </rdf:li>\n"));
     }
     out.push_str(&format!("{indent} </rdf:Bag>\n{indent}</pan:{local}>\n"));
@@ -180,16 +199,24 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str("    <rdf:Description rdf:about=\"\"");
     out.push_str(&format!(" xmlns:pan=\"{PAN_NS}\">\n"));
-    out.push_str(&format!("      <pan:id>{}</pan:id>\n", xml_escape(&bracket_of_iri(&p.iri))));
-    out.push_str(&format!("      <pan:createdDate>{}</pan:createdDate>\n", xml_escape(&p.created_date)));
-    let mut ident: Vec<(String, FieldValue)> = vec![
-        ("mediaPath".into(), FieldValue::Scalar(p.media_path.clone())),
-    ];
+    out.push_str(&format!(
+        "      <pan:id>{}</pan:id>\n",
+        xml_escape(&bracket_of_iri(&p.iri))
+    ));
+    out.push_str(&format!(
+        "      <pan:createdDate>{}</pan:createdDate>\n",
+        xml_escape(&p.created_date)
+    ));
+    let mut ident: Vec<(String, FieldValue)> =
+        vec![("mediaPath".into(), FieldValue::Scalar(p.media_path.clone()))];
     if !p.media_type.is_empty() {
         ident.push(("mediaType".into(), FieldValue::Scalar(p.media_type.clone())));
     }
     if !p.source_file.is_empty() {
-        ident.push(("sourceFile".into(), FieldValue::Scalar(p.source_file.clone())));
+        ident.push((
+            "sourceFile".into(),
+            FieldValue::Scalar(p.source_file.clone()),
+        ));
     }
     if let Some(w) = p.width {
         ident.push(("width".into(), FieldValue::Scalar(w.to_string())));
@@ -204,7 +231,10 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
         ident.push(("longDescription".into(), FieldValue::Scalar(c.clone())));
     }
     if !p.scene_objects.is_empty() {
-        ident.push(("sceneObjects".into(), FieldValue::Bag(p.scene_objects.clone())));
+        ident.push((
+            "sceneObjects".into(),
+            FieldValue::Bag(p.scene_objects.clone()),
+        ));
     }
     for (local, value) in &p.scene {
         ident.push((local.clone(), FieldValue::Scalar(value.clone())));
@@ -226,11 +256,20 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
     }
     if let Some(t) = &p.thumbnail {
         out.push_str("      <pan:thumbnail rdf:parseType=\"Resource\">\n");
-        out.push_str(&format!("       <pan:id>&lt;pan/Thumbnail/{}&gt;</pan:id>\n", xml_escape(&t.id)));
-        out.push_str(&format!("       <pan:path>{}</pan:path>\n", xml_escape(&t.path)));
+        out.push_str(&format!(
+            "       <pan:id>&lt;pan/Thumbnail/{}&gt;</pan:id>\n",
+            xml_escape(&t.id)
+        ));
+        out.push_str(&format!(
+            "       <pan:path>{}</pan:path>\n",
+            xml_escape(&t.path)
+        ));
         out.push_str(&format!("       <pan:width>{}</pan:width>\n", t.width));
         out.push_str(&format!("       <pan:height>{}</pan:height>\n", t.height));
-        out.push_str(&format!("       <pan:producedDate>{}</pan:producedDate>\n", xml_escape(&t.produced_date)));
+        out.push_str(&format!(
+            "       <pan:producedDate>{}</pan:producedDate>\n",
+            xml_escape(&t.produced_date)
+        ));
         out.push_str("      </pan:thumbnail>\n");
     }
     for (local, refs) in &p.enrichment {
@@ -272,8 +311,12 @@ pub fn read_xmp_packet_from_bytes(png_bytes: &[u8]) -> Result<Option<String>> {
 /// Pan re-authors on every write; every OTHER Description is someone else's
 /// and is preserved exactly as found.
 pub fn split_descriptions(packet: &str) -> Vec<(bool, String)> {
-    let Some(start) = find_rdf_open(packet) else { return Vec::new() };
-    let Some(end) = packet.rfind("</rdf:RDF>") else { return Vec::new() };
+    let Some(start) = find_rdf_open(packet) else {
+        return Vec::new();
+    };
+    let Some(end) = packet.rfind("</rdf:RDF>") else {
+        return Vec::new();
+    };
     let body = &packet[start..end];
     let mut out = Vec::new();
     let mut i = 0;
@@ -325,7 +368,8 @@ pub fn split_descriptions(packet: &str) -> Vec<(bool, String)> {
         // and is replaced, not kept as a producer's. A producer's block never
         // names a pan Image, whatever pan: fields it tries to write.
         let pan_authored = elem.contains(PAN_NS)
-            && (elem.contains("<pan:id>&lt;pan/Image/") || elem.contains("<git-lex:id>&lt;pan/Image/"));
+            && (elem.contains("<pan:id>&lt;pan/Image/")
+                || elem.contains("<git-lex:id>&lt;pan/Image/"));
         out.push((pan_authored, elem.to_string()));
         i = c;
     }
@@ -383,11 +427,15 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
     Store::new()
         .context("scratch store")?
         .load_from_reader(
-            oxigraph::io::RdfParser::from_format(RdfFormat::RdfXml).with_base_iri(media_iri).map_err(|e| anyhow!("base IRI: {e}"))?,
+            oxigraph::io::RdfParser::from_format(RdfFormat::RdfXml)
+                .with_base_iri(media_iri)
+                .map_err(|e| anyhow!("base IRI: {e}"))?,
             hoisted.as_bytes(),
         )
         .map_err(|e| anyhow!("XMP in the file is not valid RDF/XML: {e}"))?;
-    let Some(root_end) = hoisted.find('>') else { return Err(anyhow!("XMP packet: unterminated rdf:RDF tag")) };
+    let Some(root_end) = hoisted.find('>') else {
+        return Err(anyhow!("XMP packet: unterminated rdf:RDF tag"));
+    };
     let root_tag = &hoisted[..=root_end];
     let mut body = String::new();
     for (pan_authored, elem) in split_descriptions(&hoisted) {
@@ -400,7 +448,9 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
     let store = Store::new().context("scratch store")?;
     store
         .load_from_reader(
-            oxigraph::io::RdfParser::from_format(RdfFormat::RdfXml).with_base_iri(media_iri).map_err(|e| anyhow!("base IRI: {e}"))?,
+            oxigraph::io::RdfParser::from_format(RdfFormat::RdfXml)
+                .with_base_iri(media_iri)
+                .map_err(|e| anyhow!("base IRI: {e}"))?,
             rebuilt.as_bytes(),
         )
         .map_err(|e| anyhow!("XMP in the file is not valid RDF/XML: {e}"))?;
@@ -417,7 +467,10 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
     // pan: statement in an arriving file is a previous store's and stays out.
     let pan_related_to = format!("{PAN_NS}relatedToId");
     let git_lex_related_to = format!("{}relatedToId", crate::config::GIT_LEX_NS);
-    let all: Vec<oxigraph::model::Quad> = store.iter().collect::<std::result::Result<_, _>>().context("read packet quads")?;
+    let all: Vec<oxigraph::model::Quad> = store
+        .iter()
+        .collect::<std::result::Result<_, _>>()
+        .context("read packet quads")?;
     let quads: Vec<oxigraph::model::Quad> = all
         .into_iter()
         .filter(|q| {
@@ -434,9 +487,18 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
             if p != pan_related_to && p != git_lex_related_to {
                 return q;
             }
-            let Term::Literal(lit) = &q.object else { return q };
-            match crate::iri_from_bracket(lit.value()).and_then(|iri| oxigraph::model::NamedNode::new(iri).ok()) {
-                Some(node) => oxigraph::model::Quad::new(q.subject.clone(), q.predicate.clone(), node, q.graph_name.clone()),
+            let Term::Literal(lit) = &q.object else {
+                return q;
+            };
+            match crate::iri_from_bracket(lit.value())
+                .and_then(|iri| oxigraph::model::NamedNode::new(iri).ok())
+            {
+                Some(node) => oxigraph::model::Quad::new(
+                    q.subject.clone(),
+                    q.predicate.clone(),
+                    node,
+                    q.graph_name.clone(),
+                ),
                 None => q,
             }
         })
@@ -497,8 +559,8 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
     // bare RDF/XML, so slice the rdf:RDF element out. Match on the FULL tag
     // (with its `<` and a following space or `>`) so an rdf:RDF string sitting
     // inside a literal value can't fool the slice.
-    let start = find_rdf_open(packet)
-        .ok_or_else(|| anyhow!("XMP packet has no <rdf:RDF> element"))?;
+    let start =
+        find_rdf_open(packet).ok_or_else(|| anyhow!("XMP packet has no <rdf:RDF> element"))?;
     let end = packet
         .rfind("</rdf:RDF>")
         .ok_or_else(|| anyhow!("XMP packet has no </rdf:RDF> close"))?
@@ -515,7 +577,9 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
     // longer errors and is recognizable as the root by matching this base.
     store
         .load_from_reader(
-            oxigraph::io::RdfParser::from_format(RdfFormat::RdfXml).with_base_iri(XMP_BASE).unwrap(),
+            oxigraph::io::RdfParser::from_format(RdfFormat::RdfXml)
+                .with_base_iri(XMP_BASE)
+                .unwrap(),
             rdf_xml.as_bytes(),
         )
         .context("parse XMP RDF/XML")?;
@@ -581,7 +645,12 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
 
         let pred = quad.predicate.as_str();
         // rdf:_N and container rdf:type were consumed in pass one.
-        if pred.strip_prefix(RDF_NS).and_then(|l| l.strip_prefix('_')).and_then(|n| n.parse::<u32>().ok()).is_some() {
+        if pred
+            .strip_prefix(RDF_NS)
+            .and_then(|l| l.strip_prefix('_'))
+            .and_then(|n| n.parse::<u32>().ok())
+            .is_some()
+        {
             continue;
         }
 
@@ -602,7 +671,10 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
             other => vec![obj_term(other)],
         };
         let _ = subj_key; // (kept for parity with the container pass keys)
-        by_subject.entry(subject_out).or_default().push((pred.to_string(), values));
+        by_subject
+            .entry(subject_out)
+            .or_default()
+            .push((pred.to_string(), values));
     }
 
     // ── Third pass: nested structs (rdf:parseType="Resource"). ──
@@ -648,8 +720,10 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
     // Owner key: None = the media object (rdf:about=""), Some(iri) = a named
     // subject, Some("_:x") = a struct node (the `pan:image` wrapper owns the
     // reference bags, so it must be a valid owner or its contents vanish).
-    let mut structs_by_subject: HashMap<Option<String>, Vec<(String, Vec<Vec<(String, ObjTerm)>>)>> =
-        HashMap::new();
+    let mut structs_by_subject: HashMap<
+        Option<String>,
+        Vec<(String, Vec<Vec<(String, ObjTerm)>>)>,
+    > = HashMap::new();
     for quad in store.iter() {
         let quad = quad.context("XMP quad (struct-attach pass)")?;
         let owner: Option<String> = match &quad.subject {
@@ -657,7 +731,9 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
             oxigraph::model::NamedOrBlankNode::NamedNode(n) => Some(n.as_str().to_string()),
             oxigraph::model::NamedOrBlankNode::BlankNode(b) => Some(format!("_:{}", b.as_str())),
         };
-        let Term::BlankNode(b) = &quad.object else { continue };
+        let Term::BlankNode(b) = &quad.object else {
+            continue;
+        };
         let key = format!("_:{}", b.as_str());
         let pred = quad.predicate.as_str().to_string();
 
@@ -723,7 +799,11 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
             facts.sort_by(|a, b| a.0.cmp(&b.0));
             let mut structs = structs_by_subject.remove(&subject).unwrap_or_default();
             structs.sort_by(|a, b| a.0.cmp(&b.0));
-            ParsedSubject { subject, facts, structs }
+            ParsedSubject {
+                subject,
+                facts,
+                structs,
+            }
         })
         .collect();
     // Root (None) first, then named subjects in stable order.
@@ -736,7 +816,6 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
 /// to `None` (= the media object itself). Never stored — a parse-time marker
 /// only (kept in the pan namespace family; no urn: anywhere in Pan).
 const XMP_BASE: &str = "https://repolex.ai/ontology/pan/xmp-root";
-
 
 /// Re-declare every namespace prefix the packet defines onto the `<rdf:RDF>`
 /// element, so a prefix declared inside one element is usable by its SIBLINGS.
@@ -762,9 +841,15 @@ fn hoist_namespaces(rdf_xml: &str) -> String {
     while let Some(rel) = rdf_xml[i..].find("xmlns:") {
         let at = i + rel;
         let after = at + "xmlns:".len();
-        let Some(eq) = rdf_xml[after..].find('=') else { break };
+        let Some(eq) = rdf_xml[after..].find('=') else {
+            break;
+        };
         let prefix = &rdf_xml[after..after + eq];
-        if prefix.is_empty() || !prefix.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        if prefix.is_empty()
+            || !prefix
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
             i = after;
             continue;
         }
@@ -777,7 +862,9 @@ fn hoist_namespaces(rdf_xml: &str) -> String {
                 continue;
             }
         };
-        let Some(vend) = rdf_xml[vstart + 1..].find(quote) else { break };
+        let Some(vend) = rdf_xml[vstart + 1..].find(quote) else {
+            break;
+        };
         let ns = &rdf_xml[vstart + 1..vstart + 1 + vend];
         match bindings.get(prefix) {
             Some(existing) if existing != ns => {
@@ -791,7 +878,9 @@ fn hoist_namespaces(rdf_xml: &str) -> String {
     }
 
     // Nothing to widen if the root already declares everything.
-    let Some(open_end) = rdf_xml.find('>') else { return rdf_xml.to_string() };
+    let Some(open_end) = rdf_xml.find('>') else {
+        return rdf_xml.to_string();
+    };
     let root_tag = &rdf_xml[..open_end];
     let mut additions = String::new();
     let mut names: Vec<&String> = bindings.keys().collect();
@@ -909,7 +998,11 @@ pub fn pixel_hash(png_bytes: &[u8]) -> Result<String> {
             return Err(anyhow!("pixel-hash: unexpected Indexed color after EXPAND"))
         }
     };
-    let bytes_per_sample = if depth == png::BitDepth::Sixteen { 2 } else { 1 };
+    let bytes_per_sample = if depth == png::BitDepth::Sixteen {
+        2
+    } else {
+        1
+    };
     let stride = channels * bytes_per_sample;
     if stride == 0 || data.len() % stride != 0 {
         return Err(anyhow!(
@@ -972,7 +1065,6 @@ pub(crate) mod tests {
         })
     }
 
-
     /// Encode a tiny RGB PNG for tests.
     pub(crate) fn make_test_png(w: u32, h: u32, seed: u8) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1010,7 +1102,10 @@ pub(crate) mod tests {
             .unwrap_or_default()
     }
     fn vals(facts: &[(String, Vec<ObjTerm>)], iri: &str) -> Vec<String> {
-        get(facts, iri).into_iter().map(|t| t.value().to_string()).collect()
+        get(facts, iri)
+            .into_iter()
+            .map(|t| t.value().to_string())
+            .collect()
     }
 
     /// A packet as a producer (Horae) writes it into the file before Pan ever
@@ -1040,7 +1135,8 @@ pub(crate) mod tests {
              </rdf:Description>"
         );
         let arrived = producer_packet(&copia_block);
-        let quads = load_packet_statements(&arrived, "https://repolex.ai/pan/Image/abc123xy").unwrap();
+        let quads =
+            load_packet_statements(&arrived, "https://repolex.ai/pan/Image/abc123xy").unwrap();
         assert!(quads.len() >= 5);
         assert!(
             quads.iter().any(|q| q.predicate.as_str() == "https://repolex.ai/ontology/git-lex/createdDate"),
@@ -1062,13 +1158,25 @@ pub(crate) mod tests {
             source_file: String::new(),
             created_date: "2026-09-04T01:00:00-07:00".into(),
             curation: vec![],
-            thumbnail: Some(ThumbRef { id: "th1umb01".into(), path: "image/img/jpg/2026/09/04/abc123xy_512.jpg".into(), width: 341, height: 512, produced_date: "2026-09-04T00:00:00-07:00".into() }),
+            thumbnail: Some(ThumbRef {
+                id: "th1umb01".into(),
+                path: "image/img/jpg/2026/09/04/abc123xy_512.jpg".into(),
+                width: 341,
+                height: 512,
+                produced_date: "2026-09-04T00:00:00-07:00".into(),
+            }),
             ..Default::default()
         });
         let packet = compose_packet(Some(&arrived), &pan_desc);
-        assert!(packet.contains(&copia_block), "the producer's Description is carried verbatim");
+        assert!(
+            packet.contains(&copia_block),
+            "the producer's Description is carried verbatim"
+        );
         let parsed = parse_packet(&packet).unwrap();
-        let root = parsed.iter().find(|p| p.subject.is_none()).expect("root block");
+        let root = parsed
+            .iter()
+            .find(|p| p.subject.is_none())
+            .expect("root block");
         assert_eq!(
             vals(&root.facts, "https://repolex.ai/ontology/pan/mediaPath"),
             vec!["image/2026/09/04/abc123xy.png"]
@@ -1077,20 +1185,42 @@ pub(crate) mod tests {
             .iter()
             .find(|p| p.subject.as_deref() == Some("https://repolex.ai/copia/Moment/3hyh7rwekpmq"))
             .expect("copia Description is its own subject");
-        assert_eq!(vals(&moment.facts, &format!("{COPIA}sceneMood")), vec!["calm & <bright>"]);
-        assert_eq!(vals(&moment.facts, &format!("{COPIA}sceneObjects")), vec!["wolf", "forest"]);
+        assert_eq!(
+            vals(&moment.facts, &format!("{COPIA}sceneMood")),
+            vec!["calm & <bright>"]
+        );
+        assert_eq!(
+            vals(&moment.facts, &format!("{COPIA}sceneObjects")),
+            vec!["wolf", "forest"]
+        );
 
         // A rewrite keeps the copia Description and re-authors only Pan's.
         let again = compose_packet(Some(&packet), &pan_desc);
         let parts = split_descriptions(&again);
-        assert_eq!(parts.iter().filter(|(pan, _)| *pan).count(), 1, "exactly one pan block");
-        assert_eq!(parts.iter().filter(|(pan, _)| !*pan).count(), 1, "the copia block survives");
+        assert_eq!(
+            parts.iter().filter(|(pan, _)| *pan).count(),
+            1,
+            "exactly one pan block"
+        );
+        assert_eq!(
+            parts.iter().filter(|(pan, _)| !*pan).count(),
+            1,
+            "the copia block survives"
+        );
 
         // Reading the rewritten packet back skips Pan's own block: a previous
         // store's identity is not a fact about the next store's object.
         let back = load_packet_statements(&again, "https://repolex.ai/pan/Image/next").unwrap();
-        assert!(back.iter().all(|q| !q.predicate.as_str().starts_with(PAN_NS)), "no pan: predicates read back");
-        assert!(back.iter().any(|q| q.predicate.as_str() == format!("{COPIA}momentId")), "copia facts read back");
+        assert!(
+            back.iter()
+                .all(|q| !q.predicate.as_str().starts_with(PAN_NS)),
+            "no pan: predicates read back"
+        );
+        assert!(
+            back.iter()
+                .any(|q| q.predicate.as_str() == format!("{COPIA}momentId")),
+            "copia facts read back"
+        );
     }
 
     #[test]
@@ -1111,9 +1241,15 @@ pub(crate) mod tests {
             .find(|q| q.predicate.as_str() == "https://repolex.ai/ontology/pan/relatedToId")
             .expect("pan:relatedToId loaded");
         assert_eq!(edge.subject.to_string(), format!("<{image}>"));
-        assert_eq!(edge.object.to_string(), "<https://repolex.ai/copia/Moment/t8mjvhwszff9-3-4>", "resolved to the IRI");
+        assert_eq!(
+            edge.object.to_string(),
+            "<https://repolex.ai/copia/Moment/t8mjvhwszff9-3-4>",
+            "resolved to the IRI"
+        );
         assert!(
-            !quads.iter().any(|q| q.predicate.as_str() == "https://repolex.ai/ontology/pan/mediaPath"),
+            !quads
+                .iter()
+                .any(|q| q.predicate.as_str() == "https://repolex.ai/ontology/pan/mediaPath"),
             "a producer's pan:mediaPath is NOT a fact about this copy and stays out"
         );
     }
@@ -1132,7 +1268,11 @@ pub(crate) mod tests {
             .iter()
             .find(|q| q.predicate.as_str() == "https://repolex.ai/ontology/git-lex/relatedToId")
             .expect("relatedToId loaded");
-        assert_eq!(edge.subject.to_string(), format!("<{image}>"), "about=\"\" is this image");
+        assert_eq!(
+            edge.subject.to_string(),
+            format!("<{image}>"),
+            "about=\"\" is this image"
+        );
         assert_eq!(
             edge.object.to_string(),
             "<https://repolex.ai/copia/Moment/t8mjvhwszff9-3-4>",
@@ -1147,11 +1287,15 @@ pub(crate) mod tests {
     #[test]
     fn malformed_packet_is_rejected() {
         let iri = "https://repolex.ai/pan/Image/x";
-        assert!(load_packet_statements(&producer_packet("<rdf:Description><unclosed>"), iri).is_err());
+        assert!(
+            load_packet_statements(&producer_packet("<rdf:Description><unclosed>"), iri).is_err()
+        );
         assert!(load_packet_statements("not xml at all", iri).is_err());
         assert!(load_packet_statements("", iri).is_err());
         // Well-formed but empty RDF is not an error: nothing to say is allowed.
-        assert!(load_packet_statements(&producer_packet(""), iri).unwrap().is_empty());
+        assert!(load_packet_statements(&producer_packet(""), iri)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1168,8 +1312,14 @@ pub(crate) mod tests {
              </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
         );
         let parsed = parse_packet(&packet).unwrap();
-        let root = parsed.iter().find(|p| p.subject.is_none()).expect("empty-about = root");
-        assert_eq!(vals(&root.facts, "http://purl.org/dc/elements/1.1/title"), vec!["Hello"]);
+        let root = parsed
+            .iter()
+            .find(|p| p.subject.is_none())
+            .expect("empty-about = root");
+        assert_eq!(
+            vals(&root.facts, "http://purl.org/dc/elements/1.1/title"),
+            vec!["Hello"]
+        );
     }
 
     #[test]
@@ -1179,7 +1329,9 @@ pub(crate) mod tests {
         let s1 = write_packet_into_png_bytes(&png, &p1).unwrap();
         let p2 = simple_packet("newid222", "b.png", "2026-01-02T00:00:00Z");
         let s2 = write_packet_into_png_bytes(&s1, &p2).unwrap();
-        let packet = read_xmp_packet_from_bytes(&s2).unwrap().expect("xmp present");
+        let packet = read_xmp_packet_from_bytes(&s2)
+            .unwrap()
+            .expect("xmp present");
         assert!(packet.contains("newid222"), "new packet wins");
         assert!(!packet.contains("oldid111"), "old packet fully replaced");
     }
@@ -1220,8 +1372,9 @@ mod legacy_tests {
         let parsed = parse_packet(POOL_SHAPE).expect("legacy packet must parse");
         let root = parsed.iter().find(|p| p.subject.is_none()).expect("root");
         assert!(
-            root.facts.iter().any(|(p, v)| p.ends_with("caption")
-                && v.iter().any(|t| t.value() == "a wolf")),
+            root.facts
+                .iter()
+                .any(|(p, v)| p.ends_with("caption") && v.iter().any(|t| t.value() == "a wolf")),
             "root facts survive"
         );
         let region = parsed
@@ -1229,8 +1382,11 @@ mod legacy_tests {
             .find(|p| p.subject.as_deref() == Some("Sam3Region:wolf/01"))
             .expect("the sibling Description must parse, not sink the document");
         assert!(
-            region.facts.iter().any(|(p, v)| p.ends_with("regionDescriptor")
-                && v.iter().any(|t| t.value() == "wolf")),
+            region
+                .facts
+                .iter()
+                .any(|(p, v)| p.ends_with("regionDescriptor")
+                    && v.iter().any(|t| t.value() == "wolf")),
             "region facts survive"
         );
     }
@@ -1250,7 +1406,10 @@ mod legacy_tests {
             .find(|p| p.subject.as_deref() == Some("Sam3Region:wolf/01"))
             .expect("region");
         assert!(
-            region.facts.iter().any(|(p, _)| p.starts_with("https://example.com/other/")),
+            region
+                .facts
+                .iter()
+                .any(|(p, _)| p.starts_with("https://example.com/other/")),
             "the element's own binding wins, never the hoisted one"
         );
     }
@@ -1268,11 +1427,19 @@ mod flat_block_tests {
             source_file: String::new(),
             created_date: "2026-09-05T00:00:09-07:00".into(),
             short_description: Some("A wolf on a ridge at dusk.".into()),
-            long_description: Some("A grey wolf stands on a rocky ridge, lit from the left by a low sun.".into()),
+            long_description: Some(
+                "A grey wolf stands on a rocky ridge, lit from the left by a low sun.".into(),
+            ),
             scene_objects: vec!["wolf".into(), "rock".into(), "sky".into()],
             scene: vec![("sceneMood".into(), "still".into())],
             curation: vec![],
-            thumbnail: Some(ThumbRef { id: "th2umb02".into(), path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(), width: 341, height: 512, produced_date: "2026-09-05T00:00:09-07:00".into() }),
+            thumbnail: Some(ThumbRef {
+                id: "th2umb02".into(),
+                path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(),
+                width: 341,
+                height: 512,
+                produced_date: "2026-09-05T00:00:09-07:00".into(),
+            }),
             enrichment: vec![(
                 "captionData".into(),
                 vec![crate::enrich::EnrichmentRef {
@@ -1287,9 +1454,18 @@ mod flat_block_tests {
         };
         let desc = build_pan_description(&p);
         assert!(!desc.contains("<pan:image"), "no wrapper struct: {desc}");
-        assert!(desc.contains("<pan:id>&lt;pan/Image/altocnif&gt;</pan:id>"), "image id in bracket form: {desc}");
-        assert!(desc.contains("<pan:id>&lt;pan/Enrichment/jz55pu47&gt;</pan:id>"), "enrichment id in bracket form: {desc}");
-        assert!(desc.contains("<pan:id>&lt;pan/Thumbnail/th2umb02&gt;</pan:id>"), "thumbnail id in bracket form inside the struct: {desc}");
+        assert!(
+            desc.contains("<pan:id>&lt;pan/Image/altocnif&gt;</pan:id>"),
+            "image id in bracket form: {desc}"
+        );
+        assert!(
+            desc.contains("<pan:id>&lt;pan/Enrichment/jz55pu47&gt;</pan:id>"),
+            "enrichment id in bracket form: {desc}"
+        );
+        assert!(
+            desc.contains("<pan:id>&lt;pan/Thumbnail/th2umb02&gt;</pan:id>"),
+            "thumbnail id in bracket form inside the struct: {desc}"
+        );
         let parsed = parse_packet(&build_packet(&p)).unwrap();
         let th = parsed
             .iter()
@@ -1297,20 +1473,53 @@ mod flat_block_tests {
             .find(|(pred, _)| pred.ends_with("/thumbnail"))
             .and_then(|(_, members)| members.first())
             .expect("the reader returns the thumbnail struct");
-        let id = th.iter().find(|(f, _)| f.ends_with("/id")).map(|(_, v)| v.value().to_string());
-        assert_eq!(id.as_deref(), Some("<pan/Thumbnail/th2umb02>"), "reader returns the thumbnail id: {th:?}");
-        let produced = th.iter().find(|(f, _)| f.ends_with("/producedDate")).map(|(_, v)| v.value().to_string());
-        assert_eq!(produced.as_deref(), Some("2026-09-05T00:00:09-07:00"), "the thumbnail struct carries pan:producedDate (#27): {th:?}");
-        assert!(desc.contains("<pan:createdDate>"), "creation time under pan:, not git-lex: {desc}");
-        assert!(desc.contains("<pan:shortDescription>A wolf on a ridge at dusk.</pan:shortDescription>"), "{desc}");
+        let id = th
+            .iter()
+            .find(|(f, _)| f.ends_with("/id"))
+            .map(|(_, v)| v.value().to_string());
+        assert_eq!(
+            id.as_deref(),
+            Some("<pan/Thumbnail/th2umb02>"),
+            "reader returns the thumbnail id: {th:?}"
+        );
+        let produced = th
+            .iter()
+            .find(|(f, _)| f.ends_with("/producedDate"))
+            .map(|(_, v)| v.value().to_string());
+        assert_eq!(
+            produced.as_deref(),
+            Some("2026-09-05T00:00:09-07:00"),
+            "the thumbnail struct carries pan:producedDate (#27): {th:?}"
+        );
+        assert!(
+            desc.contains("<pan:createdDate>"),
+            "creation time under pan:, not git-lex: {desc}"
+        );
+        assert!(
+            desc.contains(
+                "<pan:shortDescription>A wolf on a ridge at dusk.</pan:shortDescription>"
+            ),
+            "{desc}"
+        );
         assert!(desc.contains("<pan:longDescription>"), "{desc}");
         assert!(desc.contains("<pan:sceneObjects><rdf:Bag><rdf:li>wolf</rdf:li><rdf:li>rock</rdf:li><rdf:li>sky</rdf:li></rdf:Bag></pan:sceneObjects>"), "scene objects as a bag: {desc}");
-        assert!(desc.contains("<pan:sceneMood>still</pan:sceneMood>"), "{desc}");
+        assert!(
+            desc.contains("<pan:sceneMood>still</pan:sceneMood>"),
+            "{desc}"
+        );
         assert!(!desc.contains("dc:"), "no dc:description: {desc}");
-        assert!(!desc.contains("git-lex"), "the file carries only the pan namespace in Pan's block: {desc}");
-        assert!(!desc.contains("https://repolex.ai/pan/"), "no expanded IRI anywhere in the block: {desc}");
+        assert!(
+            !desc.contains("git-lex"),
+            "the file carries only the pan namespace in Pan's block: {desc}"
+        );
+        assert!(
+            !desc.contains("https://repolex.ai/pan/"),
+            "no expanded IRI anywhere in the block: {desc}"
+        );
         // Flat fields sit directly on the Description.
-        assert!(desc.contains("      <pan:mediaPath>image/2026/09/05/20260905-000009-altocnif.png</pan:mediaPath>"));
+        assert!(desc.contains(
+            "      <pan:mediaPath>image/2026/09/05/20260905-000009-altocnif.png</pan:mediaPath>"
+        ));
         // And the whole thing still parses, with mediaPath on the root subject.
         let packet = compose_packet(None, &desc);
         let parsed = parse_packet(&packet).unwrap();
@@ -1326,9 +1535,18 @@ mod flat_block_tests {
 
     #[test]
     fn bracket_of_iri_covers_pan_and_other_kit_iris() {
-        assert_eq!(bracket_of_iri("https://repolex.ai/pan/Image/abc"), "<pan/Image/abc>");
-        assert_eq!(bracket_of_iri("https://repolex.ai/pan/Enrichment/x1"), "<pan/Enrichment/x1>");
-        assert_eq!(bracket_of_iri("https://repolex.ai/copia/Moment/m1"), "<copia/Moment/m1>");
+        assert_eq!(
+            bracket_of_iri("https://repolex.ai/pan/Image/abc"),
+            "<pan/Image/abc>"
+        );
+        assert_eq!(
+            bracket_of_iri("https://repolex.ai/pan/Enrichment/x1"),
+            "<pan/Enrichment/x1>"
+        );
+        assert_eq!(
+            bracket_of_iri("https://repolex.ai/copia/Moment/m1"),
+            "<copia/Moment/m1>"
+        );
         assert_eq!(bracket_of_iri("urn:other"), "urn:other");
     }
 
@@ -1337,7 +1555,9 @@ mod flat_block_tests {
     /// at the real bytes. Does nothing otherwise.
     #[test]
     fn write_sample_png_when_asked() {
-        let Ok(out) = std::env::var("PAN_SAMPLE_PNG") else { return };
+        let Ok(out) = std::env::var("PAN_SAMPLE_PNG") else {
+            return;
+        };
         let desc = build_pan_description(&ImagePacket {
             iri: "https://repolex.ai/pan/Image/altocnif".into(),
             media_path: "image/2026/09/05/20260905-000009-altocnif.png".into(),
@@ -1350,7 +1570,13 @@ mod flat_block_tests {
             long_description: Some("A sample caption, at length.".into()),
             scene_objects: vec!["wolf".into()],
             curation: vec![],
-            thumbnail: Some(ThumbRef { id: "th3umb03".into(), path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(), width: 341, height: 512, produced_date: "2026-09-05T00:00:09-07:00".into() }),
+            thumbnail: Some(ThumbRef {
+                id: "th3umb03".into(),
+                path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(),
+                width: 341,
+                height: 512,
+                produced_date: "2026-09-05T00:00:09-07:00".into(),
+            }),
             enrichment: vec![(
                 "captionData".into(),
                 vec![crate::enrich::EnrichmentRef {
@@ -1368,8 +1594,8 @@ mod flat_block_tests {
             "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n{copia}\n</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
         );
         let packet = compose_packet(Some(&arrived), &desc);
-        let png = write_packet_into_png_bytes(&super::tests::make_test_png(8, 8, 1), &packet).unwrap();
+        let png =
+            write_packet_into_png_bytes(&super::tests::make_test_png(8, 8, 1), &packet).unwrap();
         std::fs::write(&out, png).unwrap();
     }
 }
-

@@ -135,7 +135,10 @@ impl CallLog {
         let rolled = g.as_ref().map(|(d, _)| d != &today).unwrap_or(true);
         if rolled {
             fs::create_dir_all(&self.dir)?;
-            let f = OpenOptions::new().create(true).append(true).open(self.dir.join(file_name(&today)))?;
+            let f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.dir.join(file_name(&today)))?;
             *g = Some((today, BufWriter::new(f)));
         }
         let (_, w) = g.as_mut().expect("opened above");
@@ -166,15 +169,21 @@ pub fn file_name(date: &str) -> String {
 /// `keep_days` before `today`. Files with any other name are left alone.
 /// Returns how many were removed. A missing directory removes nothing.
 pub fn prune_dir(dir: &Path, today: NaiveDate, keep_days: u32) -> usize {
-    let Ok(entries) = fs::read_dir(dir) else { return 0 };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
     let mut removed = 0;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
         }
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
-        let Ok(date) = NaiveDate::parse_from_str(stem, "%Y-%m-%d") else { continue };
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Ok(date) = NaiveDate::parse_from_str(stem, "%Y-%m-%d") else {
+            continue;
+        };
         if (today - date).num_days() > i64::from(keep_days) {
             match fs::remove_file(&path) {
                 Ok(()) => removed += 1,
@@ -210,22 +219,57 @@ mod tests {
             error: None,
         };
         log.record(&line);
-        log.record(&CallLine { status: None, outcome: "backend_down", error: Some("503 backend_down"), ..line });
+        log.record(&CallLine {
+            status: None,
+            outcome: "backend_down",
+            error: Some("503 backend_down"),
+            ..line
+        });
         let today = Local::now().format("%Y-%m-%d").to_string();
         let text = fs::read_to_string(log.dir().join(file_name(&today))).unwrap();
-        let lines: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let lines: Vec<serde_json::Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
         assert_eq!(lines.len(), 2);
         // Column order on disk is declaration order (a parsed Value re-sorts
         // keys, so check the raw line): time first, error last.
         let raw = text.lines().next().unwrap();
-        let order = ["\"time\"", "\"store\"", "\"id\"", "\"stage\"", "\"model\"", "\"url\"", "\"via\"", "\"request_bytes\"", "\"status\"", "\"latency_ms\"", "\"response_bytes\"", "\"outcome\"", "\"error\""];
-        let positions: Vec<usize> = order.iter().map(|k| raw.find(k).unwrap_or_else(|| panic!("missing key {k}"))).collect();
-        assert!(positions.windows(2).all(|w| w[0] < w[1]), "keys in declaration order: {raw}");
-        assert_eq!(lines[0].as_object().unwrap().len(), order.len(), "exactly these columns");
+        let order = [
+            "\"time\"",
+            "\"store\"",
+            "\"id\"",
+            "\"stage\"",
+            "\"model\"",
+            "\"url\"",
+            "\"via\"",
+            "\"request_bytes\"",
+            "\"status\"",
+            "\"latency_ms\"",
+            "\"response_bytes\"",
+            "\"outcome\"",
+            "\"error\"",
+        ];
+        let positions: Vec<usize> = order
+            .iter()
+            .map(|k| raw.find(k).unwrap_or_else(|| panic!("missing key {k}")))
+            .collect();
+        assert!(
+            positions.windows(2).all(|w| w[0] < w[1]),
+            "keys in declaration order: {raw}"
+        );
+        assert_eq!(
+            lines[0].as_object().unwrap().len(),
+            order.len(),
+            "exactly these columns"
+        );
         assert_eq!(lines[0]["status"], 200);
         assert_eq!(lines[0]["outcome"], "recorded");
         assert!(lines[0]["error"].is_null());
-        assert!(lines[1]["status"].is_null(), "no answer = null status, not 0");
+        assert!(
+            lines[1]["status"].is_null(),
+            "no answer = null status, not 0"
+        );
         assert_eq!(lines[1]["error"], "503 backend_down");
         assert!(lines[0]["time"].as_str().unwrap().contains('T'), "RFC3339");
     }
@@ -234,16 +278,34 @@ mod tests {
     fn prune_removes_only_dated_files_past_retention() {
         let dir = tempfile::tempdir().unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 9, 16).unwrap();
-        for name in ["2026-09-16.jsonl", "2026-08-17.jsonl", "2026-08-16.jsonl", "2026-01-01.jsonl", "notes.txt", "2026-08-01.log"] {
+        for name in [
+            "2026-09-16.jsonl",
+            "2026-08-17.jsonl",
+            "2026-08-16.jsonl",
+            "2026-01-01.jsonl",
+            "notes.txt",
+            "2026-08-01.log",
+        ] {
             fs::write(dir.path().join(name), "x\n").unwrap();
         }
         let removed = prune_dir(dir.path(), today, 30);
         // 30 days before 2026-09-16 is 2026-08-17: kept (exactly 30 days is
         // not MORE than 30). 08-16 and 01-01 go. Non-matching names stay.
         assert_eq!(removed, 2);
-        let mut left: Vec<String> = fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        let mut left: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
         left.sort();
-        assert_eq!(left, ["2026-08-01.log", "2026-08-17.jsonl", "2026-09-16.jsonl", "notes.txt"]);
+        assert_eq!(
+            left,
+            [
+                "2026-08-01.log",
+                "2026-08-17.jsonl",
+                "2026-09-16.jsonl",
+                "notes.txt"
+            ]
+        );
         assert_eq!(prune_dir(&dir.path().join("missing"), today, 30), 0);
     }
 
@@ -251,7 +313,13 @@ mod tests {
     fn meter_hands_measurements_across_once() {
         let m = Meter::new();
         assert!(m.take().is_none());
-        m.set(CallMeta { url: "u".into(), status: Some(200), latency_ms: 5, request_bytes: 1, response_bytes: 2 });
+        m.set(CallMeta {
+            url: "u".into(),
+            status: Some(200),
+            latency_ms: 5,
+            request_bytes: 1,
+            response_bytes: 2,
+        });
         assert_eq!(m.take().unwrap().status, Some(200));
         assert!(m.take().is_none());
     }

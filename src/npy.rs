@@ -36,8 +36,7 @@ pub fn write_f32_1d(path: &Path, vec: &[f32]) -> Result<()> {
     use std::io::Write;
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("mkdir -p {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
     }
 
     let header = format!(
@@ -61,16 +60,16 @@ pub fn write_f32_1d(path: &Path, vec: &[f32]) -> Result<()> {
         f.write_all(MAGIC).context("write npy magic")?;
         f.write_all(&[1u8, 0u8]).context("write npy version")?;
         let hl = padded.len() as u16;
-        f.write_all(&hl.to_le_bytes()).context("write npy header len")?;
+        f.write_all(&hl.to_le_bytes())
+            .context("write npy header len")?;
         f.write_all(padded.as_bytes()).context("write npy header")?;
         for v in vec {
             f.write_all(&v.to_le_bytes()).context("write npy payload")?;
         }
         f.flush().context("flush npy temp")?;
     }
-    fs::rename(&tmp_path, path).with_context(|| {
-        format!("rename {} -> {}", tmp_path.display(), path.display())
-    })?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("rename {} -> {}", tmp_path.display(), path.display()))?;
     Ok(())
 }
 
@@ -111,8 +110,7 @@ pub fn read_f32_1d(path: &Path) -> Result<Vec<f32>> {
         bail!(".npy header truncated");
     }
     let header_bytes = &bytes[header_start..header_start + header_len];
-    let header = std::str::from_utf8(header_bytes)
-        .context("npy header is not utf8")?;
+    let header = std::str::from_utf8(header_bytes).context("npy header is not utf8")?;
 
     let descr = extract_dict_value(header, "descr")?;
     if !matches!(descr.trim_matches('\''), "<f4" | "|f4" | "f4") {

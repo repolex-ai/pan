@@ -43,7 +43,8 @@ pub fn caption_copy(stored: &[u8]) -> Result<WireImage> {
         .context("decode stored image for the caption wire copy")?;
     let rgb = img.to_rgb8();
     let mut out = Vec::new();
-    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, CAPTION_JPEG_QUALITY);
+    let mut enc =
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, CAPTION_JPEG_QUALITY);
     enc.encode_image(&rgb).context("encode caption wire jpeg")?;
     Ok(WireImage {
         width: rgb.width(),
@@ -60,7 +61,9 @@ mod tests {
     /// A PNG that carries an XMP packet in an iTXt chunk, the way Horae's
     /// output does — the thing that must NOT reach the caption provider.
     fn png_with_xmp(w: u32, h: u32) -> Vec<u8> {
-        let img = image::RgbaImage::from_fn(w, h, |x, y| image::Rgba([(x % 256) as u8, (y % 256) as u8, 7, 200]));
+        let img = image::RgbaImage::from_fn(w, h, |x, y| {
+            image::Rgba([(x % 256) as u8, (y % 256) as u8, 7, 200])
+        });
         let mut out = Vec::new();
         image::DynamicImage::ImageRgba8(img)
             .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
@@ -86,7 +89,11 @@ mod tests {
         for &b in bytes {
             c ^= b as u32;
             for _ in 0..8 {
-                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+                c = if c & 1 != 0 {
+                    0xEDB8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
             }
         }
         !c
@@ -99,15 +106,30 @@ mod tests {
     #[test]
     fn caption_copy_is_same_size_jpeg_with_no_metadata() {
         let src = png_with_xmp(640, 960);
-        assert!(contains(&src, b"SECRET-MOMENT-TEXT"), "fixture carries the packet");
-        assert!(contains(&src, b"adobe:ns:meta"), "fixture carries the xmp envelope");
+        assert!(
+            contains(&src, b"SECRET-MOMENT-TEXT"),
+            "fixture carries the packet"
+        );
+        assert!(
+            contains(&src, b"adobe:ns:meta"),
+            "fixture carries the xmp envelope"
+        );
         let w = caption_copy(&src).unwrap();
         assert_eq!((w.width, w.height), (640, 960), "same pixel size");
         assert_eq!(w.media_type, "image/jpeg");
         assert!(w.bytes.starts_with(&[0xFF, 0xD8]), "jpeg magic");
-        assert!(!contains(&w.bytes, b"SECRET-MOMENT-TEXT"), "no moment text on the wire");
-        assert!(!contains(&w.bytes, b"adobe:ns:meta"), "no xmp envelope on the wire");
-        assert!(!contains(&w.bytes, b"http://ns.adobe.com/xap/1.0/"), "no APP1 xmp marker");
+        assert!(
+            !contains(&w.bytes, b"SECRET-MOMENT-TEXT"),
+            "no moment text on the wire"
+        );
+        assert!(
+            !contains(&w.bytes, b"adobe:ns:meta"),
+            "no xmp envelope on the wire"
+        );
+        assert!(
+            !contains(&w.bytes, b"http://ns.adobe.com/xap/1.0/"),
+            "no APP1 xmp marker"
+        );
         assert!(!contains(&w.bytes, b"Exif"), "no exif");
     }
 

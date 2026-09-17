@@ -21,8 +21,8 @@
 //! - Loud failures: unresolvable predicates and broken config are errors.
 
 use anyhow::{anyhow, Context, Result};
-use oxigraph::model::{GraphName, Literal, NamedNode, Quad};
 pub use oxigraph::model::Term;
+use oxigraph::model::{GraphName, Literal, NamedNode, Quad};
 pub use oxigraph::sparql::{QueryResults, QuerySolution};
 use oxigraph::store::Store;
 use std::collections::{HashMap, HashSet};
@@ -37,9 +37,9 @@ pub mod daemon;
 pub mod depth;
 pub mod enrich;
 pub mod facts;
+pub mod imageset;
 pub mod layout;
 pub mod npy;
-pub mod imageset;
 pub mod pngchunk;
 pub mod thumbnail;
 pub mod wire;
@@ -47,8 +47,8 @@ pub mod xmp;
 
 pub use config::{now_local, PanConfig, GIT_LEX_NS, PAN_MEDIA_NS, PAN_NS};
 pub use facts::Facts;
-pub use layout::PanLayout;
 pub use imageset::ImageSet;
+pub use layout::PanLayout;
 
 /// The Pan base ontology, shipped with the binary; NOT loaded into the media graph.
 pub const PAN_ONTOLOGY_TTL: &str = include_str!("../ontology/pan.ttl");
@@ -93,7 +93,10 @@ pub fn bracket_iri(iri: &str) -> String {
 /// (Xee³, 2026-09-04) was reading a 3 MB PNG mid-write and showing Horae's
 /// block, which comes first in the packet, without Pan's, which comes last.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| anyhow!("write_atomic: no file name in {}", path.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow!("write_atomic: no file name in {}", path.display()))?;
     let tmp = path.with_file_name(format!(".{name}.partial"));
     fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
     if let Err(e) = fs::rename(&tmp, path) {
@@ -122,7 +125,10 @@ pub fn iri_from_bracket(text: &str) -> Option<String> {
 /// full IRI, or the bare id — and return the bare id.
 pub fn bare_id(given: &str) -> String {
     let s = given.trim();
-    let s = s.strip_prefix('<').and_then(|r| r.strip_suffix('>')).unwrap_or(s);
+    let s = s
+        .strip_prefix('<')
+        .and_then(|r| r.strip_suffix('>'))
+        .unwrap_or(s);
     s.rsplit('/').next().unwrap_or(s).to_string()
 }
 
@@ -146,7 +152,10 @@ pub(crate) fn validate_pan_id(id: &str) -> Result<()> {
     if id.is_empty() || id.len() > 64 {
         return Err(anyhow!("invalid id {id:?}"));
     }
-    if !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) {
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    {
         return Err(anyhow!("invalid id {id:?}: only [A-Za-z0-9_-] allowed"));
     }
     Ok(())
@@ -164,7 +173,8 @@ pub(crate) fn media_class(media_type: &str) -> &str {
 }
 
 pub(crate) fn media_subject_iri(media_type: &str, id: &str) -> Result<NamedNode> {
-    NamedNode::new(format!("{PAN_MEDIA_NS}{}/{id}", media_class(media_type))).map_err(|e| anyhow!("invalid media IRI: {e}"))
+    NamedNode::new(format!("{PAN_MEDIA_NS}{}/{id}", media_class(media_type)))
+        .map_err(|e| anyhow!("invalid media IRI: {e}"))
 }
 
 pub(crate) fn pan_iri(local: &str) -> NamedNode {
@@ -188,8 +198,13 @@ fn validate_index_name(name: &str) -> Result<()> {
     if name == "." || name == ".." {
         return Err(anyhow!("invalid index name: {name:?}"));
     }
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) {
-        return Err(anyhow!("invalid index name {name:?}: only [A-Za-z0-9._-] allowed (no path separators)"));
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(anyhow!(
+            "invalid index name {name:?}: only [A-Za-z0-9._-] allowed (no path separators)"
+        ));
     }
     Ok(())
 }
@@ -254,7 +269,15 @@ impl VectorIndex {
                 id_to_key = m;
             }
         }
-        Ok(Self { dim: true_dim, index, id_to_key, key_to_id, next_key, path, dirty: false })
+        Ok(Self {
+            dim: true_dim,
+            index,
+            id_to_key,
+            key_to_id,
+            next_key,
+            path,
+            dirty: false,
+        })
     }
 
     fn save(&self) -> Result<()> {
@@ -305,20 +328,50 @@ pub struct PutResult {
 /// sceneObjects; anything else is refused (the ontology is the whole of what
 /// Pan may say). The test below checks every name here against pan.ttl.
 pub const SCENE_FIELDS: [&str; 12] = [
-    "sceneCamera", "sceneFraming", "scenePosture", "sceneGaze", "sceneExpression", "sceneAction",
-    "sceneEnergy", "sceneMood", "sceneLighting", "sceneStyle", "sceneMedium", "sceneLocation",
+    "sceneCamera",
+    "sceneFraming",
+    "scenePosture",
+    "sceneGaze",
+    "sceneExpression",
+    "sceneAction",
+    "sceneEnergy",
+    "sceneMood",
+    "sceneLighting",
+    "sceneStyle",
+    "sceneMedium",
+    "sceneLocation",
 ];
 
 /// Every property the caption stage writes on the object.
 pub const PERCEPTION_FIELDS: [&str; 15] = [
-    "shortDescription", "longDescription", "sceneObjects",
-    "sceneCamera", "sceneFraming", "scenePosture", "sceneGaze", "sceneExpression", "sceneAction",
-    "sceneEnergy", "sceneMood", "sceneLighting", "sceneStyle", "sceneMedium", "sceneLocation",
+    "shortDescription",
+    "longDescription",
+    "sceneObjects",
+    "sceneCamera",
+    "sceneFraming",
+    "scenePosture",
+    "sceneGaze",
+    "sceneExpression",
+    "sceneAction",
+    "sceneEnergy",
+    "sceneMood",
+    "sceneLighting",
+    "sceneStyle",
+    "sceneMedium",
+    "sceneLocation",
 ];
 
 /// Fields Pan itself writes about a media object at ingest or at stage
 /// completion. A person may never set these by hand.
-pub const STRUCTURAL_FIELDS: [&str; 7] = ["mediaPath", "mediaType", "sourceFile", "width", "height", "createdDate", "readyDate"];
+pub const STRUCTURAL_FIELDS: [&str; 7] = [
+    "mediaPath",
+    "mediaType",
+    "sourceFile",
+    "width",
+    "height",
+    "createdDate",
+    "readyDate",
+];
 
 /// One property a person may set on a media object: its local name and the
 /// datatype the ontology declares for it (`xsd:integer`, `xsd:boolean`,
@@ -339,7 +392,9 @@ pub struct SettableField {
 pub fn settable_fields() -> Vec<SettableField> {
     let mut out = Vec::new();
     for chunk in PAN_ONTOLOGY_TTL.split("\npan:").skip(1) {
-        let Some(name_end) = chunk.find(' ') else { continue };
+        let Some(name_end) = chunk.find(' ') else {
+            continue;
+        };
         let local = &chunk[..name_end];
         let rest = &chunk[name_end..];
         if !rest.starts_with(" a owl:DatatypeProperty") {
@@ -351,7 +406,10 @@ pub fn settable_fields() -> Vec<SettableField> {
         };
         let token_after = |key: &str| -> Option<&str> {
             let k = block.find(key)? + key.len();
-            block[k..].split(|c: char| c.is_whitespace() || c == ';').next().filter(|t| !t.is_empty())
+            block[k..]
+                .split(|c: char| c.is_whitespace() || c == ';')
+                .next()
+                .filter(|t| !t.is_empty())
         };
         let domain = token_after("rdfs:domain ").unwrap_or("");
         if domain != "pan:Media" && domain != "pan:Image" {
@@ -360,7 +418,12 @@ pub fn settable_fields() -> Vec<SettableField> {
         if PERCEPTION_FIELDS.contains(&local) || STRUCTURAL_FIELDS.contains(&local) {
             continue;
         }
-        out.push(SettableField { local: local.to_string(), range: token_after("rdfs:range ").unwrap_or("xsd:string").to_string() });
+        out.push(SettableField {
+            local: local.to_string(),
+            range: token_after("rdfs:range ")
+                .unwrap_or("xsd:string")
+                .to_string(),
+        });
     }
     out.sort_by(|a, b| a.local.cmp(&b.local));
     out
@@ -374,7 +437,11 @@ fn integer_bounds(datatype_local: &str) -> Option<(i64, i64)> {
     let block = &block[..block.find(" .\n").unwrap_or(block.len())];
     let num = |key: &str| -> Option<i64> {
         let k = block.find(key)? + key.len();
-        block[k..].split(|c: char| !c.is_ascii_digit() && c != '-').find(|t| !t.is_empty())?.parse().ok()
+        block[k..]
+            .split(|c: char| !c.is_ascii_digit() && c != '-')
+            .find(|t| !t.is_empty())?
+            .parse()
+            .ok()
     };
     Some((num("xsd:minInclusive ")?, num("xsd:maxInclusive ")?))
 }
@@ -384,29 +451,45 @@ const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
 /// Turn a JSON value into the RDF literal the declared range asks for, or say
 /// plainly what was expected. A JSON string holding a number or `true`/`false`
 /// is accepted, so the command line can pass everything as text.
-fn literal_for(field: &SettableField, value: &serde_json::Value) -> std::result::Result<Literal, String> {
+fn literal_for(
+    field: &SettableField,
+    value: &serde_json::Value,
+) -> std::result::Result<Literal, String> {
     let as_text = || match value {
         serde_json::Value::String(s) => s.trim().to_string(),
         other => other.to_string(),
     };
-    let typed = |v: String, dt: &str| Literal::new_typed_literal(v, NamedNode::new_unchecked(format!("{XSD_NS}{dt}")));
+    let typed = |v: String, dt: &str| {
+        Literal::new_typed_literal(v, NamedNode::new_unchecked(format!("{XSD_NS}{dt}")))
+    };
     match field.range.as_str() {
         "xsd:integer" => match as_text().parse::<i64>() {
             Ok(n) => Ok(typed(n.to_string(), "integer")),
-            Err(_) => Err(format!("{} expects a whole number, got {value}", field.local)),
+            Err(_) => Err(format!(
+                "{} expects a whole number, got {value}",
+                field.local
+            )),
         },
         "xsd:boolean" => match as_text().as_str() {
             "true" => Ok(typed("true".into(), "boolean")),
             "false" => Ok(typed("false".into(), "boolean")),
-            _ => Err(format!("{} expects true or false, got {value}", field.local)),
+            _ => Err(format!(
+                "{} expects true or false, got {value}",
+                field.local
+            )),
         },
         "xsd:decimal" => match as_text().parse::<f64>() {
             Ok(_) => Ok(typed(as_text(), "decimal")),
             Err(_) => Err(format!("{} expects a number, got {value}", field.local)),
         },
         "xsd:dateTime" => match value {
-            serde_json::Value::String(s) if !s.trim().is_empty() => Ok(typed(s.trim().to_string(), "dateTime")),
-            _ => Err(format!("{} expects an RFC3339 date-time string, got {value}", field.local)),
+            serde_json::Value::String(s) if !s.trim().is_empty() => {
+                Ok(typed(s.trim().to_string(), "dateTime"))
+            }
+            _ => Err(format!(
+                "{} expects an RFC3339 date-time string, got {value}",
+                field.local
+            )),
         },
         "xsd:string" => match value {
             serde_json::Value::String(s) => Ok(Literal::new_simple_literal(s.as_str())),
@@ -418,10 +501,19 @@ fn literal_for(field: &SettableField, value: &serde_json::Value) -> std::result:
             match integer_bounds(local) {
                 Some((lo, hi)) => match as_text().parse::<i64>() {
                     Ok(n) if (lo..=hi).contains(&n) => Ok(typed(n.to_string(), "integer")),
-                    Ok(n) => Err(format!("{} expects a whole number from {lo} to {hi}, got {n}", field.local)),
-                    Err(_) => Err(format!("{} expects a whole number from {lo} to {hi}, got {value}", field.local)),
+                    Ok(n) => Err(format!(
+                        "{} expects a whole number from {lo} to {hi}, got {n}",
+                        field.local
+                    )),
+                    Err(_) => Err(format!(
+                        "{} expects a whole number from {lo} to {hi}, got {value}",
+                        field.local
+                    )),
                 },
-                None => Err(format!("{} has range {other}, which pan set does not know how to write", field.local)),
+                None => Err(format!(
+                    "{} has range {other}, which pan set does not know how to write",
+                    field.local
+                )),
             }
         }
     }
@@ -429,7 +521,10 @@ fn literal_for(field: &SettableField, value: &serde_json::Value) -> std::result:
 
 fn not_settable(local: &str) -> anyhow::Error {
     let names: Vec<String> = settable_fields().into_iter().map(|f| f.local).collect();
-    anyhow!("{local} is not a property a person may set; settable: {}", names.join(", "))
+    anyhow!(
+        "{local} is not a property a person may set; settable: {}",
+        names.join(", ")
+    )
 }
 
 /// What the caption stage learned about one object: the model's JSON answer,
@@ -454,21 +549,36 @@ impl Perception {
         if end < start {
             return Err("answer has no JSON object".into());
         }
-        let v: serde_json::Value = serde_json::from_str(&s[start..=end]).map_err(|e| format!("answer is not valid JSON: {e}"))?;
-        let serde_json::Value::Object(m) = v else { return Err("answer is not a JSON object".into()) };
+        let v: serde_json::Value = serde_json::from_str(&s[start..=end])
+            .map_err(|e| format!("answer is not valid JSON: {e}"))?;
+        let serde_json::Value::Object(m) = v else {
+            return Err("answer is not a JSON object".into());
+        };
         let mut out = Perception::default();
         for (k, v) in &m {
             match k.as_str() {
-                "shortDescription" => out.short_description = v.as_str().unwrap_or_default().trim().to_string(),
-                "longDescription" => out.long_description = v.as_str().unwrap_or_default().trim().to_string(),
+                "shortDescription" => {
+                    out.short_description = v.as_str().unwrap_or_default().trim().to_string()
+                }
+                "longDescription" => {
+                    out.long_description = v.as_str().unwrap_or_default().trim().to_string()
+                }
                 "sceneObjects" => {
                     let items: Vec<String> = match v {
-                        serde_json::Value::Array(a) => a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect(),
+                        serde_json::Value::Array(a) => a
+                            .iter()
+                            .filter_map(|x| x.as_str())
+                            .map(str::to_string)
+                            .collect(),
                         serde_json::Value::String(s) => s.split(',').map(str::to_string).collect(),
                         _ => return Err("sceneObjects must be a list of strings".into()),
                     };
                     for raw in items {
-                        let n = raw.trim().trim_matches(|c: char| c == '.' || c == ';').trim().to_lowercase();
+                        let n = raw
+                            .trim()
+                            .trim_matches(|c: char| c == '.' || c == ';')
+                            .trim()
+                            .to_lowercase();
                         if !n.is_empty() && n.len() <= 40 && !out.scene_objects.contains(&n) {
                             out.scene_objects.push(n);
                         }
@@ -484,7 +594,11 @@ impl Perception {
                         out.scene.push((other.to_string(), val));
                     }
                 }
-                other => return Err(format!("answer has a key the Pan ontology does not declare: {other}")),
+                other => {
+                    return Err(format!(
+                        "answer has a key the Pan ontology does not declare: {other}"
+                    ))
+                }
             }
         }
         if out.short_description.is_empty() || out.long_description.is_empty() {
@@ -517,7 +631,10 @@ mod perception_tests {
     #[test]
     fn every_perception_field_is_declared_in_the_ontology() {
         for f in PERCEPTION_FIELDS {
-            assert!(PAN_ONTOLOGY_TTL.contains(&format!("\npan:{f} a owl:DatatypeProperty")), "pan:{f} is not declared in pan.ttl");
+            assert!(
+                PAN_ONTOLOGY_TTL.contains(&format!("\npan:{f} a owl:DatatypeProperty")),
+                "pan:{f} is not declared in pan.ttl"
+            );
         }
     }
 
@@ -533,7 +650,10 @@ mod perception_tests {
             "\npan:ImageSet a owl:Class",
             "\npan:description a owl:DatatypeProperty",
         ] {
-            assert!(PAN_ONTOLOGY_TTL.contains(decl), "missing in pan.ttl: {decl}");
+            assert!(
+                PAN_ONTOLOGY_TTL.contains(decl),
+                "missing in pan.ttl: {decl}"
+            );
         }
     }
 
@@ -550,28 +670,61 @@ mod perception_tests {
             "\npan:instanceMode a owl:DatatypeProperty",
             "\npan:listenPort a owl:DatatypeProperty",
         ] {
-            assert!(PAN_ONTOLOGY_TTL.contains(decl), "missing in pan.ttl: {decl}");
+            assert!(
+                PAN_ONTOLOGY_TTL.contains(decl),
+                "missing in pan.ttl: {decl}"
+            );
         }
     }
 
     #[test]
     fn settable_fields_are_exactly_the_curation_fields() {
         let names: Vec<String> = settable_fields().into_iter().map(|f| f.local).collect();
-        assert_eq!(names, ["isPicked", "isRejected", "rating"], "pan.ttl declares a new person-settable field: extend pan set's docs and this test");
-        let rating = settable_fields().into_iter().find(|f| f.local == "rating").unwrap();
+        assert_eq!(
+            names,
+            ["isPicked", "isRejected", "rating"],
+            "pan.ttl declares a new person-settable field: extend pan set's docs and this test"
+        );
+        let rating = settable_fields()
+            .into_iter()
+            .find(|f| f.local == "rating")
+            .unwrap();
         assert_eq!(rating.range, "pan:RatingValue");
         assert_eq!(integer_bounds("RatingValue"), Some((0, 5)));
     }
 
     #[test]
     fn values_are_checked_against_the_declared_range() {
-        let rating = SettableField { local: "rating".into(), range: "pan:RatingValue".into() };
-        assert_eq!(literal_for(&rating, &serde_json::json!(4)).unwrap().value(), "4");
-        assert_eq!(literal_for(&rating, &serde_json::json!("3")).unwrap().value(), "3");
-        assert!(literal_for(&rating, &serde_json::json!(6)).unwrap_err().contains("0 to 5"));
-        let picked = SettableField { local: "isPicked".into(), range: "xsd:boolean".into() };
-        assert_eq!(literal_for(&picked, &serde_json::json!(true)).unwrap().value(), "true");
-        assert!(literal_for(&picked, &serde_json::json!("yes")).unwrap_err().contains("true or false"));
+        let rating = SettableField {
+            local: "rating".into(),
+            range: "pan:RatingValue".into(),
+        };
+        assert_eq!(
+            literal_for(&rating, &serde_json::json!(4)).unwrap().value(),
+            "4"
+        );
+        assert_eq!(
+            literal_for(&rating, &serde_json::json!("3"))
+                .unwrap()
+                .value(),
+            "3"
+        );
+        assert!(literal_for(&rating, &serde_json::json!(6))
+            .unwrap_err()
+            .contains("0 to 5"));
+        let picked = SettableField {
+            local: "isPicked".into(),
+            range: "xsd:boolean".into(),
+        };
+        assert_eq!(
+            literal_for(&picked, &serde_json::json!(true))
+                .unwrap()
+                .value(),
+            "true"
+        );
+        assert!(literal_for(&picked, &serde_json::json!("yes"))
+            .unwrap_err()
+            .contains("true or false"));
     }
 
     #[test]
@@ -579,7 +732,10 @@ mod perception_tests {
         let p = Perception::parse("```json\n{\"shortDescription\": \"A wolf.\", \"longDescription\": \"A grey wolf on a ridge.\", \"sceneObjects\": [\"Wolf\", \"rock\", \"wolf\", \"\"], \"sceneMood\": \"still\", \"sceneGaze\": null}\n```").unwrap();
         assert_eq!(p.scene_objects, ["wolf", "rock"]);
         assert_eq!(p.scene, [("sceneMood".to_string(), "still".to_string())]);
-        let e = Perception::parse("{\"shortDescription\": \"x\", \"longDescription\": \"y\", \"vibe\": \"z\"}").unwrap_err();
+        let e = Perception::parse(
+            "{\"shortDescription\": \"x\", \"longDescription\": \"y\", \"vibe\": \"z\"}",
+        )
+        .unwrap_err();
         assert!(e.contains("vibe"), "{e}");
         assert!(Perception::parse("{\"shortDescription\": \"x\"}").is_err());
     }
@@ -642,15 +798,23 @@ impl Pan {
     /// media root — what pand does for every store it manages. Writes the
     /// `pan:Store` node so the graph itself declares where its media lives.
     pub fn open_with(root: &Path, store_id: &str, media_root: Option<&Path>) -> Result<Self> {
-        fs::create_dir_all(root).with_context(|| format!("create store root {}", root.display()))?;
+        fs::create_dir_all(root)
+            .with_context(|| format!("create store root {}", root.display()))?;
         let cfg = PanConfig::load(root)?;
         let layout = PanLayout::resolve(root, media_root);
         fs::create_dir_all(&layout.oxigraph_root).context("create oxigraph root")?;
         fs::create_dir_all(&layout.hnsw_root).context("create hnsw root")?;
-        fs::create_dir_all(&layout.media_root).with_context(|| format!("create media root {}", layout.media_root.display()))?;
+        fs::create_dir_all(&layout.media_root)
+            .with_context(|| format!("create media root {}", layout.media_root.display()))?;
         let store = Store::open(&layout.oxigraph_root)
             .with_context(|| format!("open oxigraph at {}", layout.oxigraph_root.display()))?;
-        let pan = Pan { cfg, layout, store_id: store_id.to_string(), store, indexes: Mutex::new(HashMap::new()) };
+        let pan = Pan {
+            cfg,
+            layout,
+            store_id: store_id.to_string(),
+            store,
+            indexes: Mutex::new(HashMap::new()),
+        };
         pan.declare_store()?;
         // The sets a person curated live in imagesets/*.xml; the graph is
         // rebuilt from them on every open, so the files are the truth.
@@ -667,23 +831,34 @@ impl Pan {
     /// refills them on its next pass. Used when the vectors are to be remade
     /// (Rob, 2026-09-07: the ones so far are test data; staying on the 2B).
     pub fn wipe_embeddings(&self) -> Result<usize> {
-        let ids: Vec<String> = match self.query("SELECT DISTINCT ?s WHERE { ?s pan:vectorData ?v }")? {
-            QueryResults::Solutions(sols) => sols.filter_map(|r| r.ok()).filter_map(|r| r.get("s").map(term_str)).map(|iri| bare_id(&iri)).collect(),
-            _ => Vec::new(),
-        };
+        let ids: Vec<String> =
+            match self.query("SELECT DISTINCT ?s WHERE { ?s pan:vectorData ?v }")? {
+                QueryResults::Solutions(sols) => sols
+                    .filter_map(|r| r.ok())
+                    .filter_map(|r| r.get("s").map(term_str))
+                    .map(|iri| bare_id(&iri))
+                    .collect(),
+                _ => Vec::new(),
+            };
         let up = format!(
             "PREFIX pan: <{PAN_NS}>\n\
              DELETE {{ ?v pan:item ?e . ?e ?p ?o }} WHERE {{ ?s pan:vectorData ?v . ?v pan:item ?e . ?e ?p ?o }} ;\n\
              DELETE {{ ?s pan:vectorData ?v . ?v ?p ?o }} WHERE {{ ?s pan:vectorData ?v . ?v ?p ?o }}"
         );
-        self.store.update(&up).map_err(|e| anyhow!("wipe embeddings: {e}"))?;
+        self.store
+            .update(&up)
+            .map_err(|e| anyhow!("wipe embeddings: {e}"))?;
         self.indexes.lock().unwrap().clear();
         if self.layout.hnsw_root.exists() {
-            fs::remove_dir_all(&self.layout.hnsw_root).with_context(|| format!("remove {}", self.layout.hnsw_root.display()))?;
+            fs::remove_dir_all(&self.layout.hnsw_root)
+                .with_context(|| format!("remove {}", self.layout.hnsw_root.display()))?;
         }
         if let Ok(kinds) = fs::read_dir(&self.layout.media_root) {
             for k in kinds.filter_map(|e| e.ok()) {
-                let v = k.path().join(PanLayout::DATA_SUBDIR).join(PanLayout::VECTORS_SUBDIR);
+                let v = k
+                    .path()
+                    .join(PanLayout::DATA_SUBDIR)
+                    .join(PanLayout::VECTORS_SUBDIR);
                 if v.is_dir() {
                     fs::remove_dir_all(&v).with_context(|| format!("remove {}", v.display()))?;
                 }
@@ -701,18 +876,35 @@ impl Pan {
     /// The store node `<pan/Store/<id>>`: type, identity, media root. Replaces
     /// a stale media root (the volume moved) rather than adding a second one.
     fn declare_store(&self) -> Result<()> {
-        let node = NamedNode::new(format!("{PAN_MEDIA_NS}Store/{}", self.store_id)).map_err(|e| anyhow!("store IRI: {e}"))?;
+        let node = NamedNode::new(format!("{PAN_MEDIA_NS}Store/{}", self.store_id))
+            .map_err(|e| anyhow!("store IRI: {e}"))?;
         let media_root = self.layout.media_root.to_string_lossy().to_string();
-        let mut t = self.store.start_transaction().context("start transaction")?;
+        let mut t = self
+            .store
+            .start_transaction()
+            .context("start transaction")?;
         let old: Vec<Quad> = self
             .store
-            .quads_for_pattern(Some((&node).into()), Some(pan_iri("mediaRoot").as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+            .quads_for_pattern(
+                Some((&node).into()),
+                Some(pan_iri("mediaRoot").as_ref()),
+                None,
+                Some(GraphName::DefaultGraph.as_ref()),
+            )
             .collect::<std::result::Result<_, _>>()
             .context("read store node")?;
         for q in &old {
             t.remove(q.as_ref());
         }
-        t.insert(Quad::new(node.clone(), rdf_type(), pan_iri("Store"), GraphName::DefaultGraph).as_ref());
+        t.insert(
+            Quad::new(
+                node.clone(),
+                rdf_type(),
+                pan_iri("Store"),
+                GraphName::DefaultGraph,
+            )
+            .as_ref(),
+        );
         t.insert(enrich::self_id_quad(&node)?.as_ref());
         t.insert(self.quad(&node, "mediaRoot", &media_root).as_ref());
         t.commit().context("commit store node")?;
@@ -738,10 +930,16 @@ impl Pan {
             return Ok(None);
         }
         for class in ["Image", "Media"] {
-            let cand = NamedNode::new(format!("{PAN_MEDIA_NS}{class}/{id}")).map_err(|e| anyhow!("candidate IRI: {e}"))?;
+            let cand = NamedNode::new(format!("{PAN_MEDIA_NS}{class}/{id}"))
+                .map_err(|e| anyhow!("candidate IRI: {e}"))?;
             let exists = self
                 .store
-                .quads_for_pattern(Some((&cand).into()), Some(rdf_type().as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+                .quads_for_pattern(
+                    Some((&cand).into()),
+                    Some(rdf_type().as_ref()),
+                    None,
+                    Some(GraphName::DefaultGraph.as_ref()),
+                )
                 .next()
                 .is_some();
             if exists {
@@ -765,9 +963,13 @@ impl Pan {
     /// the files written so far.
     pub fn put(&self, arrived: &[u8], content_type: Option<&str>) -> Result<PutResult> {
         let arrived_png = xmp::is_png(arrived);
-        let arrived_type = content_type
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| if arrived_png { "image/png".to_string() } else { "application/octet-stream".to_string() });
+        let arrived_type = content_type.map(|s| s.to_string()).unwrap_or_else(|| {
+            if arrived_png {
+                "image/png".to_string()
+            } else {
+                "application/octet-stream".to_string()
+            }
+        });
         let arrived_ext = match arrived_type.as_str() {
             "image/png" => "png",
             "image/jpeg" => "jpg",
@@ -785,7 +987,8 @@ impl Pan {
         let convert = arrived_type.starts_with("image/") && !arrived_png;
         let converted: Vec<u8>;
         let (bytes, media_type, ext): (&[u8], String, &str) = if convert {
-            converted = convert::to_png(arrived).with_context(|| format!("convert {arrived_type} arrival to PNG"))?;
+            converted = convert::to_png(arrived)
+                .with_context(|| format!("convert {arrived_type} arrival to PNG"))?;
             (&converted, "image/png".to_string(), "png")
         } else {
             (arrived, arrived_type.clone(), arrived_ext)
@@ -795,20 +998,29 @@ impl Pan {
         let id = self.mint_pan_id()?;
         let subject = media_subject_iri(&media_type, &id)?;
         let created_date = now_local();
-        let shard = created_date.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
+        let shard = created_date
+            .get(0..10)
+            .unwrap_or("0000-00-00")
+            .replace('-', "/");
         let stem = PanLayout::file_stem(&created_date, &id);
         let kind = PanLayout::media_kind(&media_type);
         let rel_path = PanLayout::media_rel_path(kind, &shard, &stem, ext);
         let abs_path = self.layout.abs(&rel_path);
         // The arrival, kept beside the source when it was converted.
-        let original_rel = convert.then(|| PanLayout::original_rel_path(kind, &shard, &stem, arrived_ext));
+        let original_rel =
+            convert.then(|| PanLayout::original_rel_path(kind, &shard, &stem, arrived_ext));
         // pan:sourceFile (pan.ttl 0.4.3, goodlux 2026-09-16): the file this
         // source was made from — the original when converted, the source
         // itself when it arrived as PNG. Always present; one rule.
         let source_file = original_rel.clone().unwrap_or_else(|| rel_path.clone());
 
         let mut quads = vec![
-            Quad::new(subject.clone(), rdf_type(), pan_iri(media_class(&media_type)), GraphName::DefaultGraph),
+            Quad::new(
+                subject.clone(),
+                rdf_type(),
+                pan_iri(media_class(&media_type)),
+                GraphName::DefaultGraph,
+            ),
             enrich::self_id_quad(&subject)?,
             self.quad(&subject, "mediaPath", &rel_path),
             // When it came to be: pan:createdDate, the same spelling the file
@@ -849,17 +1061,39 @@ impl Pan {
                     height = Some(t.source_height);
                     quads.push(self.quad(&subject, "width", &t.source_width.to_string()));
                     quads.push(self.quad(&subject, "height", &t.source_height.to_string()));
-                    let rel = PanLayout::thumbnail_rel_path(kind, &shard, &stem, thumbnail::THUMB_MAX_EDGE);
+                    let rel = PanLayout::thumbnail_rel_path(
+                        kind,
+                        &shard,
+                        &stem,
+                        thumbnail::THUMB_MAX_EDGE,
+                    );
                     let tid = gen_pan_id();
-                    let tnode = NamedNode::new(format!("{PAN_MEDIA_NS}Thumbnail/{tid}")).map_err(|e| anyhow!("thumbnail IRI: {e}"))?;
-                    quads.push(Quad::new(subject.clone(), pan_iri("thumbnail"), tnode.clone(), GraphName::DefaultGraph));
-                    quads.push(Quad::new(tnode.clone(), rdf_type(), pan_iri("Thumbnail"), GraphName::DefaultGraph));
+                    let tnode = NamedNode::new(format!("{PAN_MEDIA_NS}Thumbnail/{tid}"))
+                        .map_err(|e| anyhow!("thumbnail IRI: {e}"))?;
+                    quads.push(Quad::new(
+                        subject.clone(),
+                        pan_iri("thumbnail"),
+                        tnode.clone(),
+                        GraphName::DefaultGraph,
+                    ));
+                    quads.push(Quad::new(
+                        tnode.clone(),
+                        rdf_type(),
+                        pan_iri("Thumbnail"),
+                        GraphName::DefaultGraph,
+                    ));
                     quads.push(enrich::self_id_quad(&tnode)?);
                     quads.push(self.quad(&tnode, "path", &rel));
                     quads.push(self.quad(&tnode, "width", &t.width.to_string()));
                     quads.push(self.quad(&tnode, "height", &t.height.to_string()));
                     quads.push(self.quad(&tnode, "producedDate", &created_date));
-                    thumb = Some(xmp::ThumbRef { id: tid, path: rel, width: t.width, height: t.height, produced_date: created_date.clone() });
+                    thumb = Some(xmp::ThumbRef {
+                        id: tid,
+                        path: rel,
+                        width: t.width,
+                        height: t.height,
+                        produced_date: created_date.clone(),
+                    });
                     thumb_jpeg = t.jpeg;
                 }
                 Err(e) => tracing::warn!(id = %id, "no thumbnail: {e:#}"),
@@ -877,26 +1111,31 @@ impl Pan {
                 for q in &quads {
                     scratch.insert(q.as_ref()).context("scratch insert")?;
                 }
-                let pan_desc = xmp::build_pan_description(&self.image_packet_from(&scratch, &subject)?);
+                let pan_desc =
+                    xmp::build_pan_description(&self.image_packet_from(&scratch, &subject)?);
                 let packet = xmp::compose_packet(existing_packet.as_deref(), &pan_desc);
                 let written = xmp::write_packet_into_png_bytes(bytes, &packet)?;
-                write_atomic(&abs_path, &written).with_context(|| format!("write media {}", abs_path.display()))?;
+                write_atomic(&abs_path, &written)
+                    .with_context(|| format!("write media {}", abs_path.display()))?;
             } else {
-                write_atomic(&abs_path, bytes).with_context(|| format!("write media {}", abs_path.display()))?;
+                write_atomic(&abs_path, bytes)
+                    .with_context(|| format!("write media {}", abs_path.display()))?;
             }
             if let Some(xmp::ThumbRef { path: rel, .. }) = &thumb {
                 let tabs = self.layout.abs(rel);
                 if let Some(parent) = tabs.parent() {
                     fs::create_dir_all(parent).context("create thumbnail shard dir")?;
                 }
-                write_atomic(&tabs, &thumb_jpeg).with_context(|| format!("write thumbnail {}", tabs.display()))?;
+                write_atomic(&tabs, &thumb_jpeg)
+                    .with_context(|| format!("write thumbnail {}", tabs.display()))?;
             }
             if let Some(rel) = &original_rel {
                 let oabs = self.layout.abs(rel);
                 if let Some(parent) = oabs.parent() {
                     fs::create_dir_all(parent).context("create original shard dir")?;
                 }
-                write_atomic(&oabs, arrived).with_context(|| format!("write original {}", oabs.display()))?;
+                write_atomic(&oabs, arrived)
+                    .with_context(|| format!("write original {}", oabs.display()))?;
             }
             self.insert_quads(&quads)?;
             Ok(())
@@ -927,7 +1166,10 @@ impl Pan {
 
     /// Insert quads as ONE transaction: all land or none do.
     pub fn insert_quads(&self, quads: &[Quad]) -> Result<()> {
-        let mut t = self.store.start_transaction().context("start transaction")?;
+        let mut t = self
+            .store
+            .start_transaction()
+            .context("start transaction")?;
         for q in quads {
             t.insert(q.as_ref());
         }
@@ -953,15 +1195,24 @@ impl Pan {
     /// All facts on the object's subject: full-IRI predicate → values. Empty =
     /// unknown id.
     pub fn facts_for(&self, id: &str) -> Result<Vec<(String, Vec<String>)>> {
-        let Some(subject) = self.subject_for(id)? else { return Ok(vec![]) };
+        let Some(subject) = self.subject_for(id)? else {
+            return Ok(vec![]);
+        };
         Self::facts_of(&self.store, &subject)
     }
 
     fn facts_of(store: &Store, subject: &NamedNode) -> Result<Vec<(String, Vec<String>)>> {
         let mut map: HashMap<String, Vec<String>> = HashMap::new();
-        for quad in store.quads_for_pattern(Some(subject.into()), None, None, Some(GraphName::DefaultGraph.as_ref())) {
+        for quad in store.quads_for_pattern(
+            Some(subject.into()),
+            None,
+            None,
+            Some(GraphName::DefaultGraph.as_ref()),
+        ) {
             let quad = quad.context("read facts")?;
-            map.entry(quad.predicate.as_str().to_string()).or_default().push(term_str(&quad.object));
+            map.entry(quad.predicate.as_str().to_string())
+                .or_default()
+                .push(term_str(&quad.object));
         }
         let mut out: Vec<_> = map.into_iter().collect();
         out.sort();
@@ -970,8 +1221,14 @@ impl Pan {
 
     /// One `pan:` field of an arbitrary node by its IRI.
     pub fn node_field(&self, node_iri: &str, local: &str) -> Result<Option<String>> {
-        let node = NamedNode::new(node_iri).map_err(|e| anyhow!("invalid node IRI {node_iri}: {e}"))?;
-        for q in self.store.quads_for_pattern(Some((&node).into()), Some(pan_iri(local).as_ref()), None, Some(GraphName::DefaultGraph.as_ref())) {
+        let node =
+            NamedNode::new(node_iri).map_err(|e| anyhow!("invalid node IRI {node_iri}: {e}"))?;
+        for q in self.store.quads_for_pattern(
+            Some((&node).into()),
+            Some(pan_iri(local).as_ref()),
+            None,
+            Some(GraphName::DefaultGraph.as_ref()),
+        ) {
             let q = q.context("read node field")?;
             return Ok(Some(term_str(&q.object)));
         }
@@ -980,13 +1237,24 @@ impl Pan {
 
     /// What exists for one object, from the graph alone.
     pub fn state_for(&self, id: &str) -> Result<Option<MediaState>> {
-        let Some(subject) = self.subject_for(id)? else { return Ok(None) };
+        let Some(subject) = self.subject_for(id)? else {
+            return Ok(None);
+        };
         let facts = self.facts_for(id)?;
         let one = |local: &str| -> Option<String> {
-            facts.iter().find(|(p, _)| p == &format!("{PAN_NS}{local}")).and_then(|(_, v)| v.first().cloned())
+            facts
+                .iter()
+                .find(|(p, _)| p == &format!("{PAN_NS}{local}"))
+                .and_then(|(_, v)| v.first().cloned())
         };
         let mut enrichment = Vec::new();
-        for link in ["vectorData", "captionData", "regionData", "poseData", depth::REF_LOCAL] {
+        for link in [
+            "vectorData",
+            "captionData",
+            "regionData",
+            "poseData",
+            depth::REF_LOCAL,
+        ] {
             let mut models: Vec<String> = Vec::new();
             for (pred, values) in &facts {
                 if pred != &format!("{PAN_NS}{link}") {
@@ -1013,7 +1281,9 @@ impl Pan {
                 .and_then(|(_, v)| v.first().cloned())
                 .unwrap_or_default(),
             ready_date: one("readyDate"),
-            thumbnail: facts.iter().any(|(p, _)| p == &format!("{PAN_NS}thumbnail")),
+            thumbnail: facts
+                .iter()
+                .any(|(p, _)| p == &format!("{PAN_NS}thumbnail")),
             enrichment,
         }))
     }
@@ -1033,7 +1303,13 @@ impl Pan {
     /// `since` is the backfill floor: an RFC 3339 local-offset date-time, the
     /// same shape `pan:createdDate` is written in, so a plain string compare
     /// is a time compare. Images created before it are not pending.
-    pub fn pending_for(&self, ref_local: &str, model: &str, limit: usize, since: Option<&str>) -> Result<Vec<PendingItem>> {
+    pub fn pending_for(
+        &self,
+        ref_local: &str,
+        model: &str,
+        limit: usize,
+        since: Option<&str>,
+    ) -> Result<Vec<PendingItem>> {
         // What a stage needs before it can run (goodlux, 2026-09-08):
         // segmentation is prompted with the scene objects, and the embedding
         // is built from the image AND its XMP, so both wait for the caption
@@ -1050,7 +1326,10 @@ impl Pan {
         };
         let model_lit = model.replace('\\', "\\\\").replace('"', "\\\"");
         let floor = match since {
-            Some(s) => format!("FILTER(STR(?d) >= \"{}\")", s.replace('\\', "\\\\").replace('"', "\\\"")),
+            Some(s) => format!(
+                "FILTER(STR(?d) >= \"{}\")",
+                s.replace('\\', "\\\\").replace('"', "\\\"")
+            ),
             None => String::new(),
         };
         let q = format!(
@@ -1067,7 +1346,12 @@ impl Pan {
                 let s = s?;
                 let get = |v: &str| s.get(v).map(term_str).unwrap_or_default();
                 let iri = get("s");
-                out.push(PendingItem { id: bare_id(&iri), iri, media_path: get("path"), media_type: get("type") });
+                out.push(PendingItem {
+                    id: bare_id(&iri),
+                    iri,
+                    media_path: get("path"),
+                    media_type: get("type"),
+                });
             }
         }
         Ok(out)
@@ -1075,8 +1359,14 @@ impl Pan {
 
     /// Images that have every listed (reference, model) pair recorded but no
     /// `pan:readyDate` yet — the ones the ladder can now mark ready.
-    pub fn ready_candidates(&self, required: &[(String, String)], limit: usize) -> Result<Vec<String>> {
-        let mut q = String::from("SELECT ?s WHERE { ?s a pan:Image . FILTER NOT EXISTS { ?s pan:readyDate ?r } ");
+    pub fn ready_candidates(
+        &self,
+        required: &[(String, String)],
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        let mut q = String::from(
+            "SELECT ?s WHERE { ?s a pan:Image . FILTER NOT EXISTS { ?s pan:readyDate ?r } ",
+        );
         for (i, (link, model)) in required.iter().enumerate() {
             let m = model.replace('\\', "\\\\").replace('"', "\\\"");
             q.push_str(&format!("?s pan:{link} ?e{i} . ?e{i} pan:model \"{m}\" . "));
@@ -1096,10 +1386,17 @@ impl Pan {
 
     /// Set `pan:readyDate` now, once; a later call is a no-op. XMP refreshed.
     pub fn mark_ready(&self, id: &str) -> Result<bool> {
-        let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
         let already = self
             .store
-            .quads_for_pattern(Some((&subject).into()), Some(pan_iri("readyDate").as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+            .quads_for_pattern(
+                Some((&subject).into()),
+                Some(pan_iri("readyDate").as_ref()),
+                None,
+                Some(GraphName::DefaultGraph.as_ref()),
+            )
             .next()
             .is_some();
         if already {
@@ -1115,7 +1412,9 @@ impl Pan {
     /// Merge caller facts onto an existing object (loud on unresolvable
     /// predicates). XMP refreshed.
     pub fn describe(&self, id: &str, facts: Facts) -> Result<()> {
-        let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
         let quads = facts.into_quads(&subject, &self.cfg.prefixes, &self.cfg.default_prefix)?;
         self.insert_quads(&quads)?;
         self.restamp(id)
@@ -1137,7 +1436,8 @@ impl Pan {
     /// and how many of them have each derived record.
     pub fn counts(&self) -> Result<StoreCounts> {
         let count = |pattern: &str| -> Result<u64> {
-            let q = format!("SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ ?s a pan:Image . {pattern} }}");
+            let q =
+                format!("SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ ?s a pan:Image . {pattern} }}");
             Ok(match self.query(&q)? {
                 QueryResults::Solutions(mut sols) => sols
                     .next()
@@ -1157,7 +1457,10 @@ impl Pan {
             embeddings: count("?s pan:vectorData ?d . ?d pan:item ?e .")?,
             poses: count("?s pan:poseData ?d . ?d pan:item ?p .")?,
             regions: count("?s pan:regionData ?d . ?d pan:item ?r .")?,
-            depths: count(&format!("?s pan:{} ?d . ?d pan:item ?m .", depth::REF_LOCAL))?,
+            depths: count(&format!(
+                "?s pan:{} ?d . ?d pan:item ?m .",
+                depth::REF_LOCAL
+            ))?,
         })
     }
 
@@ -1196,7 +1499,9 @@ impl Pan {
         records: &[enrich::EnrichmentRecord],
         variant: Option<&str>,
     ) -> Result<String> {
-        let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
         let created = self.created_date_of(id)?;
         let shard = created.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
         let media_kind = self.media_kind_of(id)?;
@@ -1212,7 +1517,8 @@ impl Pan {
         // The reference comes first: its IRI is the subject the data file
         // opens with and the node the records hang off.
         let r = enrich::EnrichmentRef::new(model, &rel, count);
-        write_atomic(&abs, enrich::build_data_file(&r.iri(), records).as_bytes()).with_context(|| format!("write {}", abs.display()))?;
+        write_atomic(&abs, enrich::build_data_file(&r.iri(), records).as_bytes())
+            .with_context(|| format!("write {}", abs.display()))?;
         let mut quads = enrich::ref_quads(subject.as_str(), ref_local, &r)?;
         quads.extend(enrich::record_quads(&r.iri(), records)?);
         if let Err(e) = self.insert_quads(&quads) {
@@ -1239,28 +1545,46 @@ impl Pan {
     /// record in full), so a rebuild from disk recovers its id, dim and
     /// producedDate (issue #31). The reference's `pan:path` names that file;
     /// the record's `pan:vectorPath` names the `.npy`.
-    pub fn write_embedding(&self, id: &str, model: &str, index_name: &str, vec: &[f32], details: &serde_json::Map<String, serde_json::Value>) -> Result<String> {
-        let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
+    pub fn write_embedding(
+        &self,
+        id: &str,
+        model: &str,
+        index_name: &str,
+        vec: &[f32],
+        details: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<String> {
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
         self.add_vector(id, index_name, vec)?;
         self.flush()?;
         let media_kind = self.media_kind_of(id)?;
         let npy_rel = PanLayout::vector_rel_path(&media_kind, index_name, id);
         if !details.is_empty() {
             let side = self.layout.abs(&npy_rel).with_extension("json");
-            write_atomic(&side, serde_json::to_string_pretty(details)?.as_bytes()).with_context(|| format!("write {}", side.display()))?;
+            write_atomic(&side, serde_json::to_string_pretty(details)?.as_bytes())
+                .with_context(|| format!("write {}", side.display()))?;
         }
         let mut rec = enrich::EnrichmentRecord::new(gen_pan_id(), "Embedding", model)
             .field("dim", vec.len().to_string())
             .field("vectorPath", &npy_rel);
         for key in ["precision", "provider"] {
-            if let Some(v) = details.get(key).and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+            if let Some(v) = details
+                .get(key)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
                 rec = rec.field(key, v);
             }
         }
         let rel = PanLayout::vector_record_rel_path(&media_kind, index_name, id);
         let abs = self.layout.abs(&rel);
         let r = enrich::EnrichmentRef::new(model, &rel, None);
-        write_atomic(&abs, enrich::build_data_file(&r.iri(), std::slice::from_ref(&rec)).as_bytes()).with_context(|| format!("write {}", abs.display()))?;
+        write_atomic(
+            &abs,
+            enrich::build_data_file(&r.iri(), std::slice::from_ref(&rec)).as_bytes(),
+        )
+        .with_context(|| format!("write {}", abs.display()))?;
         let mut quads = enrich::ref_quads(subject.as_str(), "vectorData", &r)?;
         quads.extend(enrich::record_quads(&r.iri(), std::slice::from_ref(&rec))?);
         if let Err(e) = self.insert_quads(&quads) {
@@ -1276,20 +1600,36 @@ impl Pan {
     /// fields. Every previous value of those properties goes first, so a
     /// re-caption replaces rather than accumulates. XMP refreshed.
     pub fn set_perception(&self, id: &str, p: &Perception) -> Result<()> {
-        let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
-        let mut t = self.store.start_transaction().context("start transaction")?;
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
+        let mut t = self
+            .store
+            .start_transaction()
+            .context("start transaction")?;
         for local in PERCEPTION_FIELDS {
             let old: Vec<Quad> = self
                 .store
-                .quads_for_pattern(Some((&subject).into()), Some(pan_iri(local).as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+                .quads_for_pattern(
+                    Some((&subject).into()),
+                    Some(pan_iri(local).as_ref()),
+                    None,
+                    Some(GraphName::DefaultGraph.as_ref()),
+                )
                 .collect::<std::result::Result<_, _>>()
                 .with_context(|| format!("read {local}"))?;
             for q in &old {
                 t.remove(q.as_ref());
             }
         }
-        t.insert(self.quad(&subject, "shortDescription", &p.short_description).as_ref());
-        t.insert(self.quad(&subject, "longDescription", &p.long_description).as_ref());
+        t.insert(
+            self.quad(&subject, "shortDescription", &p.short_description)
+                .as_ref(),
+        );
+        t.insert(
+            self.quad(&subject, "longDescription", &p.long_description)
+                .as_ref(),
+        );
         for o in &p.scene_objects {
             t.insert(self.quad(&subject, "sceneObjects", o).as_ref());
         }
@@ -1309,28 +1649,48 @@ impl Pan {
     /// overwrites. Graph and XMP change together: the restamp rewrites the
     /// image's packet.
     pub fn set_fields(&self, id: &str, fields: &[(String, serde_json::Value)]) -> Result<()> {
-        let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
         if fields.is_empty() {
             return Err(anyhow!("nothing to set; give at least one key=value"));
         }
         let settable = settable_fields();
         let mut literals: Vec<(String, Literal)> = Vec::with_capacity(fields.len());
         for (local, value) in fields {
-            let Some(f) = settable.iter().find(|f| &f.local == local) else { return Err(not_settable(local)) };
+            let Some(f) = settable.iter().find(|f| &f.local == local) else {
+                return Err(not_settable(local));
+            };
             let lit = literal_for(f, value).map_err(|m| anyhow!("invalid value: {m}"))?;
             literals.push((local.clone(), lit));
         }
-        let mut t = self.store.start_transaction().context("start transaction")?;
+        let mut t = self
+            .store
+            .start_transaction()
+            .context("start transaction")?;
         for (local, lit) in &literals {
             let old: Vec<Quad> = self
                 .store
-                .quads_for_pattern(Some((&subject).into()), Some(pan_iri(local).as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+                .quads_for_pattern(
+                    Some((&subject).into()),
+                    Some(pan_iri(local).as_ref()),
+                    None,
+                    Some(GraphName::DefaultGraph.as_ref()),
+                )
                 .collect::<std::result::Result<_, _>>()
                 .with_context(|| format!("read {local}"))?;
             for q in &old {
                 t.remove(q.as_ref());
             }
-            t.insert(Quad::new(subject.clone(), pan_iri(local), lit.clone(), GraphName::DefaultGraph).as_ref());
+            t.insert(
+                Quad::new(
+                    subject.clone(),
+                    pan_iri(local),
+                    lit.clone(),
+                    GraphName::DefaultGraph,
+                )
+                .as_ref(),
+            );
         }
         t.commit().context("commit set")?;
         self.restamp(id)
@@ -1340,7 +1700,9 @@ impl Pan {
     /// caption stage's fields and Pan's own are refused the same way `set`
     /// refuses them. Unsetting a field that has no value is not an error.
     pub fn unset_fields(&self, id: &str, locals: &[String]) -> Result<()> {
-        let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
         if locals.is_empty() {
             return Err(anyhow!("nothing to unset; give at least one property name"));
         }
@@ -1350,11 +1712,19 @@ impl Pan {
                 return Err(not_settable(local));
             }
         }
-        let mut t = self.store.start_transaction().context("start transaction")?;
+        let mut t = self
+            .store
+            .start_transaction()
+            .context("start transaction")?;
         for local in locals {
             let old: Vec<Quad> = self
                 .store
-                .quads_for_pattern(Some((&subject).into()), Some(pan_iri(local).as_ref()), None, Some(GraphName::DefaultGraph.as_ref()))
+                .quads_for_pattern(
+                    Some((&subject).into()),
+                    Some(pan_iri(local).as_ref()),
+                    None,
+                    Some(GraphName::DefaultGraph.as_ref()),
+                )
                 .collect::<std::result::Result<_, _>>()
                 .with_context(|| format!("read {local}"))?;
             for q in &old {
@@ -1368,10 +1738,15 @@ impl Pan {
     /// Delete an object: media, thumbnail, data files, vector sidecars +
     /// index entries, and every statement about it or its records.
     pub fn delete(&self, id: &str) -> Result<()> {
-        let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
         let facts = self.facts_for(id)?;
         let pan_val = |local: &str| -> Option<String> {
-            facts.iter().find(|(p, _)| p == &format!("{PAN_NS}{local}")).and_then(|(_, v)| v.first().cloned())
+            facts
+                .iter()
+                .find(|(p, _)| p == &format!("{PAN_NS}{local}"))
+                .and_then(|(_, v)| v.first().cloned())
         };
         // Files: media, thumbnail, every referenced data file.
         let mut rels: Vec<String> = Vec::new();
@@ -1402,13 +1777,21 @@ impl Pan {
                 fs::remove_file(&abs).with_context(|| format!("remove {}", abs.display()))?;
             }
         }
-        let mut t = self.store.start_transaction().context("start transaction")?;
+        let mut t = self
+            .store
+            .start_transaction()
+            .context("start transaction")?;
         let mut targets = vec![subject.clone()];
         targets.extend(linked);
         for s in &targets {
             let qs: Vec<Quad> = self
                 .store
-                .quads_for_pattern(Some(s.into()), None, None, Some(GraphName::DefaultGraph.as_ref()))
+                .quads_for_pattern(
+                    Some(s.into()),
+                    None,
+                    None,
+                    Some(GraphName::DefaultGraph.as_ref()),
+                )
                 .collect::<std::result::Result<_, _>>()
                 .context("scan for delete")?;
             for q in &qs {
@@ -1430,15 +1813,19 @@ impl Pan {
         let mut indexes = self.indexes.lock().unwrap();
         for name in index_names {
             if !indexes.contains_key(&name) {
-                let known = fs::read_to_string(self.layout.hnsw_root.join(&name).join("keymap.json"))
-                    .ok()
-                    .and_then(|raw| serde_json::from_str::<HashMap<String, u64>>(&raw).ok())
-                    .map(|m| m.contains_key(id))
-                    .unwrap_or(false);
+                let known =
+                    fs::read_to_string(self.layout.hnsw_root.join(&name).join("keymap.json"))
+                        .ok()
+                        .and_then(|raw| serde_json::from_str::<HashMap<String, u64>>(&raw).ok())
+                        .map(|m| m.contains_key(id))
+                        .unwrap_or(false);
                 if !known {
                     continue;
                 }
-                indexes.insert(name.clone(), VectorIndex::create(&self.layout.hnsw_root, &name, 0)?);
+                indexes.insert(
+                    name.clone(),
+                    VectorIndex::create(&self.layout.hnsw_root, &name, 0)?,
+                );
             }
             if let Some(vi) = indexes.get_mut(&name) {
                 if let Some(key) = vi.id_to_key.remove(id) {
@@ -1447,7 +1834,11 @@ impl Pan {
                     vi.dirty = true;
                 }
             }
-            let sidecar = self.layout.vector_sidecar_path(&self.media_kind_of(id).unwrap_or_else(|_| "image".into()), &name, id);
+            let sidecar = self.layout.vector_sidecar_path(
+                &self.media_kind_of(id).unwrap_or_else(|_| "image".into()),
+                &name,
+                id,
+            );
             if sidecar.exists() {
                 fs::remove_file(&sidecar).ok();
             }
@@ -1463,16 +1854,29 @@ impl Pan {
         validate_pan_id(id)?;
         let mut indexes = self.indexes.lock().unwrap();
         if !indexes.contains_key(index_name) {
-            indexes.insert(index_name.to_string(), VectorIndex::create(&self.layout.hnsw_root, index_name, vec.len())?);
+            indexes.insert(
+                index_name.to_string(),
+                VectorIndex::create(&self.layout.hnsw_root, index_name, vec.len())?,
+            );
         }
         let vi = indexes.get_mut(index_name).unwrap();
         if vec.len() != vi.dim {
-            return Err(anyhow!("vector dim {} does not match index {} dim {}", vec.len(), index_name, vi.dim));
+            return Err(anyhow!(
+                "vector dim {} does not match index {} dim {}",
+                vec.len(),
+                index_name,
+                vi.dim
+            ));
         }
         if vi.id_to_key.contains_key(id) {
             return Ok(false);
         }
-        npy::write_f32_1d(&self.layout.vector_sidecar_path(&self.media_kind_of(id)?, index_name, id), vec)?;
+        npy::write_f32_1d(
+            &self
+                .layout
+                .vector_sidecar_path(&self.media_kind_of(id)?, index_name, id),
+            vec,
+        )?;
         let key = vi.next_key;
         vi.next_key += 1;
         vi.id_to_key.insert(id.to_string(), key);
@@ -1481,14 +1885,19 @@ impl Pan {
         if vi.index.capacity() < needed {
             vi.index.reserve(needed.max(1024))?;
         }
-        vi.index.add(key, vec).map_err(|e| anyhow!("usearch add (id {}, index {}): {}", id, index_name, e))?;
+        vi.index
+            .add(key, vec)
+            .map_err(|e| anyhow!("usearch add (id {}, index {}): {}", id, index_name, e))?;
         vi.dirty = true;
         Ok(true)
     }
 
     pub fn contains_id(&self, id: &str, index_name: &str) -> bool {
         let indexes = self.indexes.lock().unwrap();
-        indexes.get(index_name).map(|vi| vi.id_to_key.contains_key(id)).unwrap_or(false)
+        indexes
+            .get(index_name)
+            .map(|vi| vi.id_to_key.contains_key(id))
+            .unwrap_or(false)
     }
 
     /// `(dim, count)` for every index visible on disk or in memory.
@@ -1496,11 +1905,21 @@ impl Pan {
         let indexes = self.indexes.lock().unwrap();
         let mut out: Vec<(String, IndexStats)> = indexes
             .iter()
-            .map(|(name, vi)| (name.clone(), IndexStats { dim: vi.dim, count: vi.id_to_key.len() }))
+            .map(|(name, vi)| {
+                (
+                    name.clone(),
+                    IndexStats {
+                        dim: vi.dim,
+                        count: vi.id_to_key.len(),
+                    },
+                )
+            })
             .collect();
         if let Ok(rd) = fs::read_dir(&self.layout.hnsw_root) {
             for e in rd.filter_map(|e| e.ok()) {
-                let Some(name) = e.file_name().to_str().map(String::from) else { continue };
+                let Some(name) = e.file_name().to_str().map(String::from) else {
+                    continue;
+                };
                 if indexes.contains_key(&name) || !e.path().join("index.usearch").exists() {
                     continue;
                 }
@@ -1520,7 +1939,13 @@ impl Pan {
     /// `?s`, the media subject) gates the candidate set; usearch kNN ranks by
     /// cosine similarity to `like`. Pre-filter then search, joined at the
     /// application layer by the id↔key map. Empty `where` = pure kNN.
-    pub fn search(&self, where_clause: &str, like: &[f32], k: usize, index_name: &str) -> Result<Vec<SearchHit>> {
+    pub fn search(
+        &self,
+        where_clause: &str,
+        like: &[f32],
+        k: usize,
+        index_name: &str,
+    ) -> Result<Vec<SearchHit>> {
         validate_index_name(index_name)?;
         let q = format!(
             "{}
@@ -1531,7 +1956,11 @@ impl Pan {
             self.prefix_prologue()
         );
         let mut candidate_ids: HashSet<String> = HashSet::new();
-        if let QueryResults::Solutions(sols) = self.store.query(&q).map_err(|e| anyhow!("search where-clause: {e}"))? {
+        if let QueryResults::Solutions(sols) = self
+            .store
+            .query(&q)
+            .map_err(|e| anyhow!("search where-clause: {e}"))?
+        {
             for s in sols {
                 let s = s?;
                 if let Some(t) = s.get("s") {
@@ -1544,15 +1973,34 @@ impl Pan {
         }
         let mut indexes = self.indexes.lock().unwrap();
         if !indexes.contains_key(index_name) {
-            if self.layout.hnsw_root.join(index_name).join("index.usearch").exists() {
-                indexes.insert(index_name.to_string(), VectorIndex::create(&self.layout.hnsw_root, index_name, 0)?);
+            if self
+                .layout
+                .hnsw_root
+                .join(index_name)
+                .join("index.usearch")
+                .exists()
+            {
+                indexes.insert(
+                    index_name.to_string(),
+                    VectorIndex::create(&self.layout.hnsw_root, index_name, 0)?,
+                );
             }
         }
-        let vi = indexes.get_mut(index_name).ok_or_else(|| anyhow!("no such index: {index_name} (no vectors attached yet?)"))?;
+        let vi = indexes
+            .get_mut(index_name)
+            .ok_or_else(|| anyhow!("no such index: {index_name} (no vectors attached yet?)"))?;
         if vi.dim != like.len() {
-            return Err(anyhow!("query embedding dim {} does not match index {} dim {}", like.len(), index_name, vi.dim));
+            return Err(anyhow!(
+                "query embedding dim {} does not match index {} dim {}",
+                like.len(),
+                index_name,
+                vi.dim
+            ));
         }
-        let candidate_keys: HashSet<u64> = candidate_ids.iter().filter_map(|c| vi.id_to_key.get(c).copied()).collect();
+        let candidate_keys: HashSet<u64> = candidate_ids
+            .iter()
+            .filter_map(|c| vi.id_to_key.get(c).copied())
+            .collect();
         if candidate_keys.is_empty() {
             return Ok(vec![]);
         }
@@ -1560,11 +2008,16 @@ impl Pan {
         let selectivity = (candidate_keys.len() as f32 / total).max(0.001);
         let ef = ((k as f32 / selectivity).clamp(64.0, 4096.0)) as usize;
         vi.index.change_expansion_search(ef);
-        let matches = vi.index.filtered_search(like, k, |key| candidate_keys.contains(&key))?;
+        let matches = vi
+            .index
+            .filtered_search(like, k, |key| candidate_keys.contains(&key))?;
         let mut hits = Vec::with_capacity(matches.keys.len());
         for (key, distance) in matches.keys.iter().zip(matches.distances.iter()) {
             if let Some(id) = vi.key_to_id.get(key) {
-                hits.push(SearchHit { id: id.clone(), score: 1.0 - *distance });
+                hits.push(SearchHit {
+                    id: id.clone(),
+                    score: 1.0 - *distance,
+                });
             }
         }
         Ok(hits)
@@ -1576,7 +2029,9 @@ impl Pan {
     /// copia, pan.yml extras, rdf/rdfs/owl/xsd).
     pub fn query(&self, sparql: &str) -> Result<QueryResults<'_>> {
         let prologue = self.prefix_prologue();
-        self.store.query(&format!("{prologue}{sparql}")).map_err(|e| anyhow!("SPARQL error: {e}"))
+        self.store
+            .query(&format!("{prologue}{sparql}"))
+            .map_err(|e| anyhow!("SPARQL error: {e}"))
     }
 
     fn prefix_prologue(&self) -> String {
@@ -1599,9 +2054,15 @@ impl Pan {
     /// re-authored, every other Description already in the file is kept
     /// verbatim, no other chunk is touched.
     pub fn restamp(&self, id: &str) -> Result<()> {
-        let Some(subject) = self.subject_for(id)? else { return Err(anyhow!("id not found: {id}")) };
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
         let facts = self.facts_for(id)?;
-        let Some(media_path) = facts.iter().find(|(p, _)| p == &format!("{PAN_NS}mediaPath")).and_then(|(_, v)| v.first()) else {
+        let Some(media_path) = facts
+            .iter()
+            .find(|(p, _)| p == &format!("{PAN_NS}mediaPath"))
+            .and_then(|(_, v)| v.first())
+        else {
             return Err(anyhow!("id not found: {id}"));
         };
         let abs = self.layout.abs(media_path);
@@ -1623,12 +2084,20 @@ impl Pan {
     fn image_packet_from(&self, store: &Store, subject: &NamedNode) -> Result<xmp::ImagePacket> {
         let facts = Self::facts_of(store, subject)?;
         let pan_field = |local: &str| -> Option<String> {
-            facts.iter().find(|(p, _)| p == &format!("{PAN_NS}{local}")).and_then(|(_, v)| v.first().cloned())
+            facts
+                .iter()
+                .find(|(p, _)| p == &format!("{PAN_NS}{local}"))
+                .and_then(|(_, v)| v.first().cloned())
         };
         let node_fields = |node_iri: &str| -> Result<HashMap<String, String>> {
             let node = NamedNode::new(node_iri).map_err(|e| anyhow!("node IRI: {e}"))?;
             let mut m = HashMap::new();
-            for q in store.quads_for_pattern(Some((&node).into()), None, None, Some(GraphName::DefaultGraph.as_ref())) {
+            for q in store.quads_for_pattern(
+                Some((&node).into()),
+                None,
+                None,
+                Some(GraphName::DefaultGraph.as_ref()),
+            ) {
                 let q = q.context("read node")?;
                 if let Some(l) = q.predicate.as_str().strip_prefix(PAN_NS) {
                     m.insert(l.to_string(), term_str(&q.object));
@@ -1638,7 +2107,13 @@ impl Pan {
         };
 
         let mut enrichment: Vec<(String, Vec<enrich::EnrichmentRef>)> = Vec::new();
-        for ref_local in ["regionData", "poseData", "captionData", "vectorData", depth::REF_LOCAL] {
+        for ref_local in [
+            "regionData",
+            "poseData",
+            "captionData",
+            "vectorData",
+            depth::REF_LOCAL,
+        ] {
             let mut refs: Vec<enrich::EnrichmentRef> = Vec::new();
             for (pred, values) in &facts {
                 if pred != &format!("{PAN_NS}{ref_local}") {
@@ -1665,7 +2140,11 @@ impl Pan {
         let thumbnail = match pan_field("thumbnail") {
             Some(t) => {
                 let f = node_fields(&t)?;
-                match (f.get("path"), f.get("width").and_then(|w| w.parse().ok()), f.get("height").and_then(|h| h.parse().ok())) {
+                match (
+                    f.get("path"),
+                    f.get("width").and_then(|w| w.parse().ok()),
+                    f.get("height").and_then(|h| h.parse().ok()),
+                ) {
                     // producedDate rides into the file's thumbnail struct from the
                     // Thumbnail node, so file and graph say the same (pan issue #27).
                     (Some(p), Some(w), Some(h)) => Some(xmp::ThumbRef {
@@ -1690,9 +2169,19 @@ impl Pan {
             height: pan_field("height").and_then(|v| v.parse().ok()),
             short_description: pan_field("shortDescription"),
             long_description: pan_field("longDescription"),
-            scene_objects: facts.iter().find(|(p, _)| p == &format!("{PAN_NS}sceneObjects")).map(|(_, v)| v.clone()).unwrap_or_default(),
-            scene: SCENE_FIELDS.iter().filter_map(|l| pan_field(l).map(|v| (l.to_string(), v))).collect(),
-            curation: settable_fields().iter().filter_map(|f| pan_field(&f.local).map(|v| (f.local.clone(), v))).collect(),
+            scene_objects: facts
+                .iter()
+                .find(|(p, _)| p == &format!("{PAN_NS}sceneObjects"))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default(),
+            scene: SCENE_FIELDS
+                .iter()
+                .filter_map(|l| pan_field(l).map(|v| (l.to_string(), v)))
+                .collect(),
+            curation: settable_fields()
+                .iter()
+                .filter_map(|f| pan_field(&f.local).map(|v| (f.local.clone(), v)))
+                .collect(),
             // The references Pan itself put on the image — imageset
             // membership, `<pan/ImageSet/id>` (goodlux, 2026-09-16). A
             // producer's relatedToId (Horae's `<copia/Moment/id>`) stays in
@@ -1728,7 +2217,12 @@ impl Pan {
     }
 
     fn quad(&self, subject: &NamedNode, local: &str, value: &str) -> Quad {
-        Quad::new(subject.clone(), pan_iri(local), Literal::new_simple_literal(value), GraphName::DefaultGraph)
+        Quad::new(
+            subject.clone(),
+            pan_iri(local),
+            Literal::new_simple_literal(value),
+            GraphName::DefaultGraph,
+        )
     }
 }
 

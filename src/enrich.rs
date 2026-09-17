@@ -89,7 +89,13 @@ pub struct EnrichmentRef {
 
 impl EnrichmentRef {
     pub fn new(model: &str, path: &str, count: Option<usize>) -> Self {
-        Self { id: crate::gen_pan_id(), model: model.to_string(), path: path.to_string(), count, produced_date: now_local() }
+        Self {
+            id: crate::gen_pan_id(),
+            model: model.to_string(),
+            path: path.to_string(),
+            count,
+            produced_date: now_local(),
+        }
     }
 
     /// This reference's full IRI, `<pan/Enrichment/id>` — the subject the data
@@ -120,7 +126,10 @@ pub fn build_data_file(ref_iri: &str, records: &[EnrichmentRecord]) -> String {
     out.push_str(&format!("         xmlns:pan=\"{PAN_NS}\">\n"));
 
     // The reference, and the records its file holds.
-    out.push_str(&format!("  <rdf:Description rdf:about=\"{}\">\n", esc(ref_iri)));
+    out.push_str(&format!(
+        "  <rdf:Description rdf:about=\"{}\">\n",
+        esc(ref_iri)
+    ));
     for r in records {
         out.push_str(&format!(
             "    <pan:item rdf:resource=\"{}\"/>\n",
@@ -131,16 +140,25 @@ pub fn build_data_file(ref_iri: &str, records: &[EnrichmentRecord]) -> String {
 
     // Each record, in full.
     for r in records {
-        out.push_str(&format!("  <rdf:Description rdf:about=\"{}\">\n", esc(&r.iri())));
+        out.push_str(&format!(
+            "  <rdf:Description rdf:about=\"{}\">\n",
+            esc(&r.iri())
+        ));
         out.push_str(&format!(
             "    <rdf:type rdf:resource=\"{PAN_NS}{}\"/>\n",
             esc(&r.class)
         ));
-        out.push_str(&format!("    <pan:id>{}</pan:id>\n", esc(&crate::xmp::bracket_of_iri(&r.iri()))));
+        out.push_str(&format!(
+            "    <pan:id>{}</pan:id>\n",
+            esc(&crate::xmp::bracket_of_iri(&r.iri()))
+        ));
         if !r.model.is_empty() {
             out.push_str(&format!("    <pan:model>{}</pan:model>\n", esc(&r.model)));
         }
-        out.push_str(&format!("    <pan:producedDate>{}</pan:producedDate>\n", esc(&r.produced_date)));
+        out.push_str(&format!(
+            "    <pan:producedDate>{}</pan:producedDate>\n",
+            esc(&r.produced_date)
+        ));
         for (local, value) in &r.fields {
             out.push_str(&format!("    <pan:{local}>{}</pan:{local}>\n", esc(value)));
         }
@@ -154,7 +172,8 @@ pub fn build_data_file(ref_iri: &str, records: &[EnrichmentRecord]) -> String {
 /// The quads a data file's content contributes to the graph — produced from
 /// the SAME records the file is written from, so store and file cannot drift.
 pub fn record_quads(ref_iri: &str, records: &[EnrichmentRecord]) -> Result<Vec<Quad>> {
-    let reference = NamedNode::new(ref_iri).map_err(|e| anyhow!("bad reference IRI {ref_iri}: {e}"))?;
+    let reference =
+        NamedNode::new(ref_iri).map_err(|e| anyhow!("bad reference IRI {ref_iri}: {e}"))?;
     let link = NamedNode::new(format!("{PAN_NS}item")).expect("pan:item");
     let rdf_type = NamedNode::new(RDF_TYPE).expect("rdf:type");
     let mut quads = Vec::with_capacity(records.len() * 6);
@@ -170,7 +189,8 @@ pub fn record_quads(ref_iri: &str, records: &[EnrichmentRecord]) -> Result<Vec<Q
         quads.push(Quad::new(
             subj.clone(),
             rdf_type.clone(),
-            NamedNode::new(format!("{PAN_NS}{}", r.class)).map_err(|e| anyhow!("bad class IRI: {e}"))?,
+            NamedNode::new(format!("{PAN_NS}{}", r.class))
+                .map_err(|e| anyhow!("bad class IRI: {e}"))?,
             GraphName::DefaultGraph,
         ));
         quads.push(self_id_quad(&subj)?);
@@ -194,7 +214,8 @@ pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<
     let mut quads = vec![
         Quad::new(
             image,
-            NamedNode::new(format!("{PAN_NS}{ref_local}")).map_err(|e| anyhow!("bad ref predicate: {e}"))?,
+            NamedNode::new(format!("{PAN_NS}{ref_local}"))
+                .map_err(|e| anyhow!("bad ref predicate: {e}"))?,
             node.clone(),
             GraphName::DefaultGraph,
         ),
@@ -204,8 +225,15 @@ pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<
             // The segmentation reference is its own class, the only one
             // that counts (pan.ttl 0.3.6); every other reference is a plain
             // Enrichment.
-            NamedNode::new(format!("{PAN_NS}{}", if ref_local == "regionData" { "RegionData" } else { "Enrichment" }))
-                .expect("reference class IRI"),
+            NamedNode::new(format!(
+                "{PAN_NS}{}",
+                if ref_local == "regionData" {
+                    "RegionData"
+                } else {
+                    "Enrichment"
+                }
+            ))
+            .expect("reference class IRI"),
             GraphName::DefaultGraph,
         ),
         self_id_quad(&node)?,
@@ -238,7 +266,8 @@ pub fn self_id_quad(node: &NamedNode) -> Result<Quad> {
 fn pan_quad(subject: &NamedNode, local: &str, value: &str) -> Result<Quad> {
     Ok(Quad::new(
         subject.clone(),
-        NamedNode::new(format!("{PAN_NS}{local}")).map_err(|e| anyhow!("bad predicate {local}: {e}"))?,
+        NamedNode::new(format!("{PAN_NS}{local}"))
+            .map_err(|e| anyhow!("bad predicate {local}: {e}"))?,
         Literal::new_simple_literal(value),
         GraphName::DefaultGraph,
     ))
@@ -256,7 +285,10 @@ pub fn read_data_file(path: &Path) -> Result<Vec<(String, String, Term)>> {
     for q in store.iter() {
         let q = q.context("read parsed data file")?;
         out.push((
-            q.subject.to_string().trim_matches(|c| c == '<' || c == '>').to_string(),
+            q.subject
+                .to_string()
+                .trim_matches(|c| c == '<' || c == '>')
+                .to_string(),
             q.predicate.as_str().to_string(),
             q.object,
         ));
@@ -340,7 +372,10 @@ mod tests {
         assert!(has("count", "15"));
         assert!(has("model", "sam3"));
         assert!(
-            quads.iter().any(|q| q.predicate.as_str() == RDF_TYPE && q.object.to_string().contains("RegionData")),
+            quads
+                .iter()
+                .any(|q| q.predicate.as_str() == RDF_TYPE
+                    && q.object.to_string().contains("RegionData")),
             "a regionData reference is typed pan:RegionData: {quads:?}"
         );
     }
@@ -351,8 +386,17 @@ mod tests {
     fn pose_reference_is_plain_and_carries_no_count() {
         let r = EnrichmentRef::new("rtmw-x-l", "image/pose/2026/09/16/abc.xml", Some(2));
         let quads = ref_quads("https://repolex.ai/pan/Image/abcdefgh", "poseData", &r).unwrap();
-        assert!(!quads.iter().any(|q| q.predicate.as_str() == format!("{PAN_NS}count")), "{quads:?}");
-        assert!(quads.iter().any(|q| q.predicate.as_str() == RDF_TYPE && q.object.to_string().ends_with("Enrichment>")), "{quads:?}");
+        assert!(
+            !quads
+                .iter()
+                .any(|q| q.predicate.as_str() == format!("{PAN_NS}count")),
+            "{quads:?}"
+        );
+        assert!(
+            quads.iter().any(|q| q.predicate.as_str() == RDF_TYPE
+                && q.object.to_string().ends_with("Enrichment>")),
+            "{quads:?}"
+        );
     }
 
     /// A caption or vector reference names one file holding one answer;
@@ -363,9 +407,13 @@ mod tests {
         let r = EnrichmentRef::new("qwen/qwen3.8-27b", "image/caption/2026/09/16/abc.xml", None);
         let quads = ref_quads("https://repolex.ai/pan/Image/abcdefgh", "captionData", &r).unwrap();
         assert!(
-            !quads.iter().any(|q| q.predicate.as_str() == format!("{PAN_NS}count")),
+            !quads
+                .iter()
+                .any(|q| q.predicate.as_str() == format!("{PAN_NS}count")),
             "caption reference must not carry pan:count: {quads:?}"
         );
-        assert!(quads.iter().any(|q| q.predicate.as_str() == format!("{PAN_NS}path")));
+        assert!(quads
+            .iter()
+            .any(|q| q.predicate.as_str() == format!("{PAN_NS}path")));
     }
 }

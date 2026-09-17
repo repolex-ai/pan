@@ -64,7 +64,13 @@ pub fn link_for(stage: &str) -> Option<&'static str> {
 pub async fn run(d: Arc<Daemon>) {
     let every = Duration::from_secs(d.cfg.interval_secs);
     let mut loops = tokio::task::JoinSet::new();
-    for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE, STAGE_SAM3, STAGE_DEPTH] {
+    for stage in [
+        STAGE_EMBED,
+        STAGE_CAPTION,
+        STAGE_POSE,
+        STAGE_SAM3,
+        STAGE_DEPTH,
+    ] {
         if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
             continue;
         }
@@ -144,13 +150,21 @@ pub async fn mark_ready_pass(d: Arc<Daemon>) -> usize {
 pub async fn run_pass(d: Arc<Daemon>) -> usize {
     let mut done = 0usize;
     for store in d.stores.clone() {
-        for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE, STAGE_SAM3, STAGE_DEPTH] {
+        for stage in [
+            STAGE_EMBED,
+            STAGE_CAPTION,
+            STAGE_POSE,
+            STAGE_SAM3,
+            STAGE_DEPTH,
+        ] {
             if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
                 continue;
             }
             match run_stage(d.clone(), store.clone(), stage).await {
                 Ok(n) => done += n,
-                Err(e) => tracing::error!(store = %store.entry.id, stage, "stage pass failed: {e:#}"),
+                Err(e) => {
+                    tracing::error!(store = %store.entry.id, stage, "stage pass failed: {e:#}")
+                }
             }
         }
     }
@@ -176,13 +190,23 @@ const QUOTA_HOLD: Duration = Duration::from_secs(600);
 const BUSY_WAIT: Duration = Duration::from_secs(5);
 
 async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str) -> Result<usize> {
-    let ep = d.cfg.models.get(stage).cloned().ok_or_else(|| anyhow!("stage {stage} not configured"))?;
+    let ep = d
+        .cfg
+        .models
+        .get(stage)
+        .cloned()
+        .ok_or_else(|| anyhow!("stage {stage} not configured"))?;
     // Which address this pass calls. A hold on the primary sends the stage to
     // its fallback (if it has one); a hold on both means wait. The primary is
     // probed again the moment its hold expires, so the door gets the traffic
     // back as soon as it is up.
     let held = |key: &str| -> bool {
-        d.stage_hold.lock().unwrap().get(key).map(|u| *u > Instant::now()).unwrap_or(false)
+        d.stage_hold
+            .lock()
+            .unwrap()
+            .get(key)
+            .map(|u| *u > Instant::now())
+            .unwrap_or(false)
     };
     let fallback_key = format!("{stage}/fallback");
     let target = if !held(stage) {
@@ -192,7 +216,11 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
     } else {
         return Ok(0);
     };
-    let hold_key: String = if target.via == "fallback" { fallback_key } else { stage.to_string() };
+    let hold_key: String = if target.via == "fallback" {
+        fallback_key
+    } else {
+        stage.to_string()
+    };
     let link = link_for(stage).ok_or_else(|| anyhow!("unknown stage {stage}"))?;
     let batch = d.cfg.batch;
     // Ask for more than the batch so items on hold do not starve the ones
@@ -201,7 +229,10 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
         let s = store.clone();
         let model = ep.model.clone();
         let since = d.cfg.backfill_since.clone();
-        tokio::task::spawn_blocking(move || s.pan.pending_for(link, &model, batch * 4, since.as_deref())).await??
+        tokio::task::spawn_blocking(move || {
+            s.pan.pending_for(link, &model, batch * 4, since.as_deref())
+        })
+        .await??
     };
     let work: Vec<PendingItem> = pending
         .into_iter()
@@ -300,12 +331,22 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                 log_call(outcome, Some(&msg));
                 d.record_attempt(&store.entry.id, &item.id, stage, msg, terminal);
                 if quota {
-                    d.stage_hold.lock().unwrap().insert(hold_key.clone(), Instant::now() + QUOTA_HOLD);
+                    d.stage_hold
+                        .lock()
+                        .unwrap()
+                        .insert(hold_key.clone(), Instant::now() + QUOTA_HOLD);
                     tracing::warn!(stage, url = %target.url, "provider account out of credit — holding the stage for {}s; add credits at the provider", QUOTA_HOLD.as_secs());
                     set.abort_all();
                 } else if server_down {
-                    d.stage_hold.lock().unwrap().insert(hold_key.clone(), Instant::now() + SERVER_DOWN_HOLD);
-                    let next = if target.via == "primary" && ep.fallback.is_some() { "switching to fallback" } else { "waiting" };
+                    d.stage_hold
+                        .lock()
+                        .unwrap()
+                        .insert(hold_key.clone(), Instant::now() + SERVER_DOWN_HOLD);
+                    let next = if target.via == "primary" && ep.fallback.is_some() {
+                        "switching to fallback"
+                    } else {
+                        "waiting"
+                    };
                     tracing::warn!(stage, url = %target.url, via = target.via, "endpoint unreachable — holding it for {}s, {next}", SERVER_DOWN_HOLD.as_secs());
                     set.abort_all();
                 }
@@ -329,8 +370,14 @@ async fn run_one(
 ) -> Result<()> {
     // pand is the one thing allowed to read the media file.
     let abs = store.pan.layout.abs(&item.media_path);
-    let bytes = tokio::fs::read(&abs).await.with_context(|| format!("read {}", abs.display()))?;
-    let media_type = if item.media_type.is_empty() { "image/png" } else { &item.media_type };
+    let bytes = tokio::fs::read(&abs)
+        .await
+        .with_context(|| format!("read {}", abs.display()))?;
+    let media_type = if item.media_type.is_empty() {
+        "image/png"
+    } else {
+        &item.media_type
+    };
 
     match stage {
         STAGE_EMBED => {
@@ -339,7 +386,9 @@ async fn run_one(
             // 2026-09-08). pending_for holds an image back until the caption
             // stage has written its fields, so the packet carries them.
             let packet = crate::xmp::read_xmp_packet_from_bytes(&bytes)?.unwrap_or_default();
-            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            d.counters
+                .model_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let r = d.iris.embed(t, &bytes, media_type, &packet, meter).await?;
             let s = store.clone();
             let id = item.id.clone();
@@ -351,7 +400,9 @@ async fn run_one(
                 // Everything the server said besides the vector rides along:
                 // its HF model id, precision, provider … (m3rc's Salad answers
                 // label themselves). precision/provider land on the record.
-                s.pan.write_embedding(&id, &model, &model, &r.vector, &r.extra).map(|_| ())
+                s.pan
+                    .write_embedding(&id, &model, &model, &r.vector, &r.extra)
+                    .map(|_| ())
             })
             .await??;
         }
@@ -361,7 +412,11 @@ async fn run_one(
             // does (Rob, 2026-09-05); the model recorded is the one the SERVER
             // names in its answer, falling back to config only if it is silent.
             let Some(prompt) = ep.prompt.as_deref().filter(|p| !p.trim().is_empty()) else {
-                return Err(CallError::Terminal(format!("caption stage {} has no `prompt` in config; nothing was sent", ep.url)).into());
+                return Err(CallError::Terminal(format!(
+                    "caption stage {} has no `prompt` in config; nothing was sent",
+                    ep.url
+                ))
+                .into());
             };
             // The caption provider gets PIXELS ONLY: a same-size, high-quality
             // JPEG re-encoded from the stored image, so neither Horae's copia
@@ -371,8 +426,21 @@ async fn run_one(
                 let b = bytes.clone();
                 tokio::task::spawn_blocking(move || crate::wire::caption_copy(&b)).await??
             };
-            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.vlm(t, &ep.model, &wire.bytes, wire.media_type, prompt, ep.extra_body.as_ref(), meter).await?;
+            d.counters
+                .model_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let r = d
+                .iris
+                .vlm(
+                    t,
+                    &ep.model,
+                    &wire.bytes,
+                    wire.media_type,
+                    prompt,
+                    ep.extra_body.as_ref(),
+                    meter,
+                )
+                .await?;
             if r.text.trim().is_empty() {
                 return Err(CallError::Terminal("no caption text returned".into()).into());
             }
@@ -380,15 +448,25 @@ async fn run_one(
             // 0.3.4). A key the ontology does not declare fails this image
             // for good: the prompt is the schema, and a wrong prompt is a
             // config error, not something to retry.
-            let perception = crate::Perception::parse(&r.text).map_err(|e| CallError::Terminal(format!("caption answer: {e}")))?;
+            let perception = crate::Perception::parse(&r.text)
+                .map_err(|e| CallError::Terminal(format!("caption answer: {e}")))?;
             let s = store.clone();
             let id = item.id.clone();
-            let model = r.model.clone().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| ep.model.clone());
+            let model = r
+                .model
+                .clone()
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_else(|| ep.model.clone());
             let text = r.text.clone();
-            tokio::task::spawn_blocking(move || write_perception(&s, &id, &model, &text, &perception)).await??;
+            tokio::task::spawn_blocking(move || {
+                write_perception(&s, &id, &model, &text, &perception)
+            })
+            .await??;
         }
         STAGE_POSE => {
-            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            d.counters
+                .model_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let r = d.iris.see_pose(t, &bytes, media_type, meter).await?;
             if r.keypoints.is_empty() {
                 // The eye reports "no people" and "I failed" the same way (200
@@ -398,7 +476,9 @@ async fn run_one(
                 let id = item.id.clone();
                 let model = ep.model.clone();
                 tokio::task::spawn_blocking(move || {
-                    s.pan.write_enrichment(&id, "pose", "poseData", &model, &[], None).map(|_| ())
+                    s.pan
+                        .write_enrichment(&id, "pose", "poseData", &model, &[], None)
+                        .map(|_| ())
                 })
                 .await??;
                 return Ok(());
@@ -445,7 +525,8 @@ async fn run_one(
                         rec
                     })
                     .collect();
-                s.pan.write_enrichment(&id, "pose", "poseData", &model, &records, None)?;
+                s.pan
+                    .write_enrichment(&id, "pose", "poseData", &model, &records, None)?;
                 Ok(())
             })
             .await??;
@@ -461,13 +542,20 @@ async fn run_one(
             let model = ep.model.clone();
             if prompts.is_empty() {
                 tokio::task::spawn_blocking(move || {
-                    s.pan.write_enrichment(&id, "sam3", "regionData", &model, &[], None).map(|_| ())
+                    s.pan
+                        .write_enrichment(&id, "sam3", "regionData", &model, &[], None)
+                        .map(|_| ())
                 })
                 .await??;
                 return Ok(());
             }
-            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let (regions, raw) = d.iris.segment(t, &bytes, media_type, &prompts, meter).await?;
+            d.counters
+                .model_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let (regions, raw) = d
+                .iris
+                .segment(t, &bytes, media_type, &prompts, meter)
+                .await?;
             tokio::task::spawn_blocking(move || -> Result<()> {
                 let records: Vec<EnrichmentRecord> = regions
                     .iter()
@@ -476,7 +564,10 @@ async fn run_one(
                             .field("descriptor", &r.prompt)
                             .field("score", format!("{:.4}", r.score));
                         if r.bbox.len() == 4 {
-                            rec = rec.field("bbox", format!("{},{},{},{}", r.bbox[0], r.bbox[1], r.bbox[2], r.bbox[3]));
+                            rec = rec.field(
+                                "bbox",
+                                format!("{},{},{},{}", r.bbox[0], r.bbox[1], r.bbox[2], r.bbox[3]),
+                            );
                         }
                         if let Some(p) = &r.polygon {
                             if !p.is_empty() {
@@ -486,7 +577,9 @@ async fn run_one(
                         rec
                     })
                     .collect();
-                let rel = s.pan.write_enrichment(&id, "sam3", "regionData", &model, &records, None)?;
+                let rel =
+                    s.pan
+                        .write_enrichment(&id, "sam3", "regionData", &model, &records, None)?;
                 // Everything the server said, verbatim, beside the record.
                 let side = s.pan.layout.abs(&rel).with_extension("json");
                 crate::write_atomic(&side, serde_json::to_string_pretty(&raw)?.as_bytes())?;
@@ -498,10 +591,14 @@ async fn run_one(
             // One map per image, always: there is no "found nothing" for
             // depth, so an empty answer is the node failing, and the image
             // stays pending (transient) rather than being retired.
-            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            d.counters
+                .model_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let answer = d.iris.depth(t, &bytes, media_type, meter).await?;
             if answer.is_empty() {
-                return Err(CallError::Transient("depth: node answered without a map".into()).into());
+                return Err(
+                    CallError::Transient("depth: node answered without a map".into()).into(),
+                );
             }
             if let Some(m) = answer.model.as_deref() {
                 if m != ep.model {
@@ -511,7 +608,10 @@ async fn run_one(
             let s = store.clone();
             let id = item.id.clone();
             let model = ep.model.clone();
-            tokio::task::spawn_blocking(move || s.pan.write_depth(&id, &model, &answer).map(|_| ())).await??;
+            tokio::task::spawn_blocking(move || {
+                s.pan.write_depth(&id, &model, &answer).map(|_| ())
+            })
+            .await??;
         }
         other => return Err(anyhow!("stage {other} is not runnable")),
     }
@@ -520,10 +620,21 @@ async fn run_one(
 
 /// The model's whole answer goes into the Caption record verbatim (save
 /// everything); the parsed fields go onto the object.
-fn write_perception(s: &StoreHandle, id: &str, model: &str, raw: &str, p: &crate::Perception) -> Result<()> {
+fn write_perception(
+    s: &StoreHandle,
+    id: &str,
+    model: &str,
+    raw: &str,
+    p: &crate::Perception,
+) -> Result<()> {
     let rec = EnrichmentRecord::new(gen_pan_id(), "Caption", model).field("text", raw);
-    s.pan.write_enrichment(id, "caption", "captionData", model, std::slice::from_ref(&rec), Some(model))?;
+    s.pan.write_enrichment(
+        id,
+        "caption",
+        "captionData",
+        model,
+        std::slice::from_ref(&rec),
+        Some(model),
+    )?;
     s.pan.set_perception(id, p)
 }
-
-

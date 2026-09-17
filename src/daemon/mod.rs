@@ -112,7 +112,11 @@ impl Limiter {
     }
 
     pub async fn acquire(&self) -> tokio::sync::OwnedSemaphorePermit {
-        self.sem.clone().acquire_owned().await.expect("limiter semaphore never closes")
+        self.sem
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("limiter semaphore never closes")
     }
 
     /// The window right now.
@@ -181,9 +185,18 @@ impl Daemon {
         let default_id = match &cfg.default {
             Some(p) => stores
                 .iter()
-                .find(|s| &s.entry.declared == p || &s.entry.root == p || s.entry.id == p.to_string_lossy())
+                .find(|s| {
+                    &s.entry.declared == p
+                        || &s.entry.root == p
+                        || s.entry.id == p.to_string_lossy()
+                })
                 .map(|s| s.entry.id.clone())
-                .ok_or_else(|| anyhow!("default {} is not one of the configured stores", p.display()))?,
+                .ok_or_else(|| {
+                    anyhow!(
+                        "default {} is not one of the configured stores",
+                        p.display()
+                    )
+                })?,
             None => stores[0].entry.id.clone(),
         };
         let funnels = cfg
@@ -223,7 +236,9 @@ impl Daemon {
     /// structurally impossible.
     pub fn store_for(&self, named: Option<&str>) -> Result<Arc<StoreHandle>> {
         match named {
-            None | Some("") => self.store(&self.default_id).ok_or_else(|| anyhow!("default store missing")),
+            None | Some("") => self
+                .store(&self.default_id)
+                .ok_or_else(|| anyhow!("default store missing")),
             Some(id) => self.store(id).ok_or_else(|| anyhow!("unknown store: {id}")),
         }
     }
@@ -240,7 +255,9 @@ impl Daemon {
         match found.len() {
             0 => Ok(None),
             1 => Ok(found.pop()),
-            n => Err(anyhow!("imageset {set_id} exists in {n} stores — ambiguous")),
+            n => Err(anyhow!(
+                "imageset {set_id} exists in {n} stores — ambiguous"
+            )),
         }
     }
 
@@ -260,11 +277,22 @@ impl Daemon {
         }
     }
 
-    pub fn record_attempt(&self, store: &str, media: &str, stage: &str, error: String, terminal: bool) {
+    pub fn record_attempt(
+        &self,
+        store: &str,
+        media: &str,
+        stage: &str,
+        error: String,
+        terminal: bool,
+    ) {
         let mut a = self.attempts.lock().unwrap();
         a.insert(
             (store.to_string(), media.to_string(), stage.to_string()),
-            Attempt { at: Instant::now(), error, terminal },
+            Attempt {
+                at: Instant::now(),
+                error,
+                terminal,
+            },
         );
     }
 
@@ -287,7 +315,8 @@ impl Daemon {
 
     pub fn last_attempt(&self, store: &str, media: &str, stage: &str) -> Option<Attempt> {
         let a = self.attempts.lock().unwrap();
-        a.get(&(store.to_string(), media.to_string(), stage.to_string())).cloned()
+        a.get(&(store.to_string(), media.to_string(), stage.to_string()))
+            .cloned()
     }
 }
 

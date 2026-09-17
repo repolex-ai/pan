@@ -216,7 +216,10 @@ fn map_err(e: anyhow::Error) -> ApiError {
         ApiError(StatusCode::BAD_REQUEST, msg)
     } else {
         tracing::error!("internal error: {msg}");
-        ApiError(StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal error".to_string(),
+        )
     }
 }
 
@@ -267,11 +270,26 @@ async fn health(State(d): State<Shared>) -> Json<HealthResponse> {
             .cfg
             .models
             .iter()
-            .map(|(k, v)| (k.clone(), if v.enabled { v.model.clone() } else { format!("{} (off)", v.model) }))
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    if v.enabled {
+                        v.model.clone()
+                    } else {
+                        format!("{} (off)", v.model)
+                    },
+                )
+            })
             .collect(),
         pid: std::process::id(),
-        images_stored: d.counters.images_stored.load(std::sync::atomic::Ordering::Relaxed),
-        model_calls: d.counters.model_calls.load(std::sync::atomic::Ordering::Relaxed),
+        images_stored: d
+            .counters
+            .images_stored
+            .load(std::sync::atomic::Ordering::Relaxed),
+        model_calls: d
+            .counters
+            .model_calls
+            .load(std::sync::atomic::Ordering::Relaxed),
         counts,
         windows,
     })
@@ -290,7 +308,15 @@ async fn stores(State(d): State<Shared>) -> Json<Vec<StoreInfo>> {
                     .pan
                     .index_stats()
                     .into_iter()
-                    .map(|(n, st)| (n, IndexInfo { dim: st.dim, count: st.count }))
+                    .map(|(n, st)| {
+                        (
+                            n,
+                            IndexInfo {
+                                dim: st.dim,
+                                count: st.count,
+                            },
+                        )
+                    })
                     .collect(),
             })
             .collect(),
@@ -305,7 +331,11 @@ async fn stores(State(d): State<Shared>) -> Json<Vec<StoreInfo>> {
 #[utoipa::path(post, path = "/media", tag = "media",
     request_body(content = Vec<u8>, content_type = "image/png", description = "The media file, raw bytes. Content-Type names the media type."),
     responses((status = 201, body = Delivered), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
-async fn deliver(State(d): State<Shared>, headers: axum::http::HeaderMap, body: axum::body::Bytes) -> Result<(StatusCode, Json<Delivered>), ApiError> {
+async fn deliver(
+    State(d): State<Shared>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<Delivered>), ApiError> {
     ingest(&d, None, &headers, body).await
 }
 
@@ -323,26 +353,48 @@ async fn deliver_to(
     ingest(&d, Some(&store_id), &headers, body).await
 }
 
-async fn ingest(d: &Daemon, store_id: Option<&str>, headers: &axum::http::HeaderMap, body: axum::body::Bytes) -> Result<(StatusCode, Json<Delivered>), ApiError> {
+async fn ingest(
+    d: &Daemon,
+    store_id: Option<&str>,
+    headers: &axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<Delivered>), ApiError> {
     let store = d.store_for(store_id).map_err(map_err)?;
     if body.is_empty() {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "empty body: the request body must be the media file's bytes".into()));
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "empty body: the request body must be the media file's bytes".into(),
+        ));
     }
     // Media type: the Content-Type header, parameters stripped. A PNG is
     // recognisable without one; anything else must say what it is.
     let declared = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
+        .map(|s| {
+            s.split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase()
+        })
         .filter(|s| !s.is_empty() && s != "application/octet-stream");
     let content_type = match declared {
         Some(ct) => ct,
         None if crate::xmp::is_png(&body) => "image/png".to_string(),
-        None => return Err(ApiError(StatusCode::BAD_REQUEST, "Content-Type required: the bytes are not a PNG and no media type was given".into())),
+        None => {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "Content-Type required: the bytes are not a PNG and no media type was given".into(),
+            ))
+        }
     };
     // Pan stores media. A JSON or form body here is a caller still speaking
     // Pool's wire; say so instead of filing its JSON as an image.
-    if !(content_type.starts_with("image/") || content_type.starts_with("video/") || content_type.starts_with("audio/")) {
+    if !(content_type.starts_with("image/")
+        || content_type.starts_with("video/")
+        || content_type.starts_with("audio/"))
+    {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
             format!("Content-Type {content_type} is not media. The request body must be the file itself (raw bytes, Content-Type image/png etc.); metadata travels inside the file's XMP."),
@@ -354,7 +406,9 @@ async fn ingest(d: &Daemon, store_id: Option<&str>, headers: &axum::http::Header
         .await
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(map_err)?;
-    d.counters.images_stored.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    d.counters
+        .images_stored
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     tracing::info!(store = %store.entry.id, id = %res.id, statements = res.statements, "stored");
     Ok((
         StatusCode::CREATED,
@@ -373,7 +427,11 @@ async fn ingest(d: &Daemon, store_id: Option<&str>, headers: &axum::http::Header
 #[utoipa::path(post, path = "/media/{id}/set", tag = "media", params(("id" = String, Path)),
     request_body(content = HashMap<String, serde_json::Value>, description = "One JSON object keyed by property local name; only the person-settable fields of pan.ttl (rating, isPicked, isRejected)"),
     responses((status = 200, body = FactsResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
-async fn set_fields(State(d): State<Shared>, AxPath(given): AxPath<String>, Json(body): Json<HashMap<String, serde_json::Value>>) -> Result<Json<FactsResponse>, ApiError> {
+async fn set_fields(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+    Json(body): Json<HashMap<String, serde_json::Value>>,
+) -> Result<Json<FactsResponse>, ApiError> {
     let (store, id) = locate(&d, &given)?;
     let mut fields: Vec<(String, serde_json::Value)> = body.into_iter().collect();
     fields.sort_by(|a, b| a.0.cmp(&b.0));
@@ -389,7 +447,11 @@ async fn set_fields(State(d): State<Shared>, AxPath(given): AxPath<String>, Json
 #[utoipa::path(post, path = "/media/{id}/unset", tag = "media", params(("id" = String, Path)),
     request_body(content = Vec<String>, description = "The property local names to remove"),
     responses((status = 200, body = FactsResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
-async fn unset_fields(State(d): State<Shared>, AxPath(given): AxPath<String>, Json(body): Json<Vec<String>>) -> Result<Json<FactsResponse>, ApiError> {
+async fn unset_fields(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+    Json(body): Json<Vec<String>>,
+) -> Result<Json<FactsResponse>, ApiError> {
     let (store, id) = locate(&d, &given)?;
     let s2 = store.clone();
     let id2 = id.clone();
@@ -402,19 +464,34 @@ async fn unset_fields(State(d): State<Shared>, AxPath(given): AxPath<String>, Js
 
 fn facts_response(store: &Arc<super::StoreHandle>, id: &str) -> Result<FactsResponse, ApiError> {
     let facts = store.pan.facts_for(id).map_err(map_err)?;
-    let iri = store.pan.subject_for(id).map_err(map_err)?.map(|n| n.into_string()).unwrap_or_default();
-    Ok(FactsResponse { id: media_iri_bracket(&iri), store: store.entry.id.clone(), facts: facts.into_iter().collect() })
+    let iri = store
+        .pan
+        .subject_for(id)
+        .map_err(map_err)?
+        .map(|n| n.into_string())
+        .unwrap_or_default();
+    Ok(FactsResponse {
+        id: media_iri_bracket(&iri),
+        store: store.entry.id.clone(),
+        facts: facts.into_iter().collect(),
+    })
 }
 
 fn locate(d: &Daemon, given: &str) -> Result<(Arc<super::StoreHandle>, String), ApiError> {
     let id = bare_id(given);
-    let store = d.locate(&id).map_err(map_err)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("id not found: {given}")))?;
+    let store = d
+        .locate(&id)
+        .map_err(map_err)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("id not found: {given}")))?;
     Ok((store, id))
 }
 
 #[utoipa::path(get, path = "/media/{id}", tag = "media", params(("id" = String, Path, description = "<pan/Image/x>, full IRI, or bare id")),
     responses((status = 200, description = "The media bytes"), (status = 404, body = ErrorBody)))]
-async fn get_media(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Result<Response, ApiError> {
+async fn get_media(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+) -> Result<Response, ApiError> {
     let (store, id) = locate(&d, &given)?;
     let (bytes, facts) = tokio::task::spawn_blocking(move || store.pan.get(&id))
         .await
@@ -430,7 +507,10 @@ async fn get_media(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Re
 
 #[utoipa::path(get, path = "/media/{id}/thumbnail", tag = "media", params(("id" = String, Path)),
     responses((status = 200, description = "JPEG thumbnail"), (status = 404, body = ErrorBody)))]
-async fn get_thumbnail(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Result<Response, ApiError> {
+async fn get_thumbnail(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+) -> Result<Response, ApiError> {
     let (store, id) = locate(&d, &given)?;
     let facts = store.pan.facts_for(&id).map_err(map_err)?;
     let node = facts
@@ -444,13 +524,21 @@ async fn get_thumbnail(State(d): State<Shared>, AxPath(given): AxPath<String>) -
         .map_err(map_err)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "thumbnail node has no path".into()))?;
     let abs = store.pan.layout.abs(&path);
-    let bytes = tokio::fs::read(&abs).await.map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("read thumbnail: {e}")))?;
+    let bytes = tokio::fs::read(&abs).await.map_err(|e| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("read thumbnail: {e}"),
+        )
+    })?;
     Ok(([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
 }
 
 #[utoipa::path(delete, path = "/media/{id}", tag = "media", params(("id" = String, Path)),
     responses((status = 204), (status = 404, body = ErrorBody)))]
-async fn delete_media(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Result<StatusCode, ApiError> {
+async fn delete_media(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+) -> Result<StatusCode, ApiError> {
     let (store, id) = locate(&d, &given)?;
     tokio::task::spawn_blocking(move || {
         store.pan.delete(&id)?;
@@ -464,10 +552,18 @@ async fn delete_media(State(d): State<Shared>, AxPath(given): AxPath<String>) ->
 
 #[utoipa::path(get, path = "/media/{id}/facts", tag = "media", params(("id" = String, Path)),
     responses((status = 200, body = FactsResponse), (status = 404, body = ErrorBody)))]
-async fn get_facts(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Result<Json<FactsResponse>, ApiError> {
+async fn get_facts(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+) -> Result<Json<FactsResponse>, ApiError> {
     let (store, id) = locate(&d, &given)?;
     let facts = store.pan.facts_for(&id).map_err(map_err)?;
-    let iri = store.pan.subject_for(&id).map_err(map_err)?.map(|n| n.into_string()).unwrap_or_default();
+    let iri = store
+        .pan
+        .subject_for(&id)
+        .map_err(map_err)?
+        .map(|n| n.into_string())
+        .unwrap_or_default();
     Ok(Json(FactsResponse {
         id: media_iri_bracket(&iri),
         store: store.entry.id.clone(),
@@ -477,7 +573,10 @@ async fn get_facts(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Re
 
 #[utoipa::path(get, path = "/media/{id}/state", tag = "media", params(("id" = String, Path)),
     responses((status = 200, body = StateResponse), (status = 404, body = ErrorBody)))]
-async fn get_state(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Result<Json<StateResponse>, ApiError> {
+async fn get_state(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+) -> Result<Json<StateResponse>, ApiError> {
     let (store, id) = locate(&d, &given)?;
     let st: MediaState = store
         .pan
@@ -485,27 +584,64 @@ async fn get_state(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Re
         .map_err(map_err)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("id not found: {given}")))?;
     let present = |link: &str| -> Vec<String> {
-        st.enrichment.iter().find(|(l, _)| l == link).map(|(_, m)| m.clone()).unwrap_or_default()
+        st.enrichment
+            .iter()
+            .find(|(l, _)| l == link)
+            .map(|(_, m)| m.clone())
+            .unwrap_or_default()
     };
     let mut stages_out = HashMap::new();
-    for stage in [stages::STAGE_EMBED, stages::STAGE_CAPTION, stages::STAGE_POSE, stages::STAGE_SAM3] {
+    for stage in [
+        stages::STAGE_EMBED,
+        stages::STAGE_CAPTION,
+        stages::STAGE_POSE,
+        stages::STAGE_SAM3,
+    ] {
         let link = stages::link_for(stage).unwrap_or_default();
         let models = present(link);
         let status = match d.cfg.models.get(stage) {
-            None => StageStatus { status: if models.is_empty() { "off".into() } else { "done".into() }, models, error: None, terminal: None },
+            None => StageStatus {
+                status: if models.is_empty() {
+                    "off".into()
+                } else {
+                    "done".into()
+                },
+                models,
+                error: None,
+                terminal: None,
+            },
             Some(ep) if !ep.enabled => StageStatus {
-                status: if models.iter().any(|m| m == &ep.model) { "done".into() } else { "off".into() },
+                status: if models.iter().any(|m| m == &ep.model) {
+                    "done".into()
+                } else {
+                    "off".into()
+                },
                 models,
                 error: None,
                 terminal: None,
             },
             Some(ep) => {
                 if models.iter().any(|m| m == &ep.model) {
-                    StageStatus { status: "done".into(), models, error: None, terminal: None }
+                    StageStatus {
+                        status: "done".into(),
+                        models,
+                        error: None,
+                        terminal: None,
+                    }
                 } else if let Some(a) = d.last_attempt(&store.entry.id, &id, stage) {
-                    StageStatus { status: "holding".into(), models, error: Some(a.error), terminal: Some(a.terminal) }
+                    StageStatus {
+                        status: "holding".into(),
+                        models,
+                        error: Some(a.error),
+                        terminal: Some(a.terminal),
+                    }
                 } else {
-                    StageStatus { status: "pending".into(), models, error: None, terminal: None }
+                    StageStatus {
+                        status: "pending".into(),
+                        models,
+                        error: None,
+                        terminal: None,
+                    }
                 }
             }
         };
@@ -545,9 +681,17 @@ async fn store_sparql_post(
     headers: axum::http::HeaderMap,
     body: String,
 ) -> Result<Response, ApiError> {
-    let ct = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let ct = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     let sparql = if ct.starts_with("application/x-www-form-urlencoded") {
-        form_query(&body).ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "form body has no query= field".into()))?
+        form_query(&body).ok_or_else(|| {
+            ApiError(
+                StatusCode::BAD_REQUEST,
+                "form body has no query= field".into(),
+            )
+        })?
     } else {
         body
     };
@@ -562,7 +706,10 @@ async fn store_sparql_get(
     AxPath(id): AxPath<String>,
     axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<Response, ApiError> {
-    let sparql = q.get("query").cloned().ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "missing ?query=".into()))?;
+    let sparql = q
+        .get("query")
+        .cloned()
+        .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "missing ?query=".into()))?;
     run_sparql(&d, &id, &sparql).await
 }
 
@@ -596,7 +743,9 @@ fn urlencoding_decode(s: &str) -> Option<String> {
 }
 
 async fn run_sparql(d: &Daemon, id: &str, sparql: &str) -> Result<Response, ApiError> {
-    let store = d.store(id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown store: {id}")))?;
+    let store = d
+        .store(id)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown store: {id}")))?;
     let results = store.pan.query(sparql).map_err(map_err)?;
     serialize_results(results)
 }
@@ -612,22 +761,39 @@ fn serialize_results(results: crate::QueryResults) -> Result<Response, ApiError>
                 .map_err(|e| internal(format!("serialize results: {e}")))?;
             for sol in solutions {
                 let sol = sol.map_err(|e| internal(format!("read solution: {e}")))?;
-                w.serialize(&sol).map_err(|e| internal(format!("serialize solution: {e}")))?;
+                w.serialize(&sol)
+                    .map_err(|e| internal(format!("serialize solution: {e}")))?;
             }
-            let buf = w.finish().map_err(|e| internal(format!("finish results: {e}")))?;
-            Ok(([(header::CONTENT_TYPE, "application/sparql-results+json")], buf).into_response())
+            let buf = w
+                .finish()
+                .map_err(|e| internal(format!("finish results: {e}")))?;
+            Ok((
+                [(header::CONTENT_TYPE, "application/sparql-results+json")],
+                buf,
+            )
+                .into_response())
         }
         crate::QueryResults::Boolean(b) => {
-            let buf = ser.serialize_boolean_to_writer(Vec::new(), b).map_err(|e| internal(format!("serialize boolean: {e}")))?;
-            Ok(([(header::CONTENT_TYPE, "application/sparql-results+json")], buf).into_response())
+            let buf = ser
+                .serialize_boolean_to_writer(Vec::new(), b)
+                .map_err(|e| internal(format!("serialize boolean: {e}")))?;
+            Ok((
+                [(header::CONTENT_TYPE, "application/sparql-results+json")],
+                buf,
+            )
+                .into_response())
         }
         crate::QueryResults::Graph(triples) => {
-            let mut w = oxigraph::io::RdfSerializer::from_format(oxigraph::io::RdfFormat::NTriples).for_writer(Vec::new());
+            let mut w = oxigraph::io::RdfSerializer::from_format(oxigraph::io::RdfFormat::NTriples)
+                .for_writer(Vec::new());
             for t in triples {
                 let t = t.map_err(|e| internal(format!("read triple: {e}")))?;
-                w.serialize_triple(t.as_ref()).map_err(|e| internal(format!("serialize triple: {e}")))?;
+                w.serialize_triple(t.as_ref())
+                    .map_err(|e| internal(format!("serialize triple: {e}")))?;
             }
-            let buf = w.finish().map_err(|e| internal(format!("finish graph: {e}")))?;
+            let buf = w
+                .finish()
+                .map_err(|e| internal(format!("finish graph: {e}")))?;
             Ok(([(header::CONTENT_TYPE, "application/n-triples")], buf).into_response())
         }
     }
@@ -635,7 +801,10 @@ fn serialize_results(results: crate::QueryResults) -> Result<Response, ApiError>
 
 #[utoipa::path(post, path = "/search", tag = "query", request_body = SearchBody,
     responses((status = 200, body = SearchResponse), (status = 400, body = ErrorBody)))]
-async fn search(State(d): State<Shared>, Json(body): Json<SearchBody>) -> Result<Json<SearchResponse>, ApiError> {
+async fn search(
+    State(d): State<Shared>,
+    Json(body): Json<SearchBody>,
+) -> Result<Json<SearchResponse>, ApiError> {
     let store = d.store_for(body.store.as_deref()).map_err(map_err)?;
     // Default index = the embedding model pand is configured with (indexes
     // are named by model); a store's own index_id is the fallback when no
@@ -648,18 +817,33 @@ async fn search(State(d): State<Shared>, Json(body): Json<SearchBody>) -> Result
             .unwrap_or_else(|| store.pan.cfg.index_id.clone())
     });
     let k = body.k.unwrap_or(10);
-    let hits = store.pan.search(&body.r#where, &body.vector, k, &index).map_err(map_err)?;
+    let hits = store
+        .pan
+        .search(&body.r#where, &body.vector, k, &index)
+        .map_err(map_err)?;
     let mut out = Vec::with_capacity(hits.len());
     for h in hits {
-        let iri = store.pan.subject_for(&h.id).map_err(map_err)?.map(|n| n.into_string()).unwrap_or(h.id.clone());
-        out.push(Hit { id: media_iri_bracket(&iri), score: h.score });
+        let iri = store
+            .pan
+            .subject_for(&h.id)
+            .map_err(map_err)?
+            .map(|n| n.into_string())
+            .unwrap_or(h.id.clone());
+        out.push(Hit {
+            id: media_iri_bracket(&iri),
+            score: h.score,
+        });
     }
     Ok(Json(SearchResponse { hits: out }))
 }
 
 // ── ImageSets (issue #4; pan.ttl 0.4.2) ─────────────────────────────────────
 
-fn imageset_out(store: &Arc<super::StoreHandle>, p: crate::ImageSet, media: Option<Vec<String>>) -> ImageSetResponse {
+fn imageset_out(
+    store: &Arc<super::StoreHandle>,
+    p: crate::ImageSet,
+    media: Option<Vec<String>>,
+) -> ImageSetResponse {
     ImageSetResponse {
         id: bracket_iri(&p.iri),
         iri: p.iri,
@@ -678,55 +862,101 @@ async fn imagesets(State(d): State<Shared>) -> Result<Json<Vec<ImageSetResponse>
 
 #[utoipa::path(get, path = "/stores/{id}/imagesets", tag = "imageset", params(("id" = String, Path, description = "Store id")),
     responses((status = 200, body = Vec<ImageSetResponse>), (status = 404, body = ErrorBody)))]
-async fn store_imagesets(State(d): State<Shared>, AxPath(store_id): AxPath<String>) -> Result<Json<Vec<ImageSetResponse>>, ApiError> {
+async fn store_imagesets(
+    State(d): State<Shared>,
+    AxPath(store_id): AxPath<String>,
+) -> Result<Json<Vec<ImageSetResponse>>, ApiError> {
     imagesets_in(&d, Some(&store_id)).await
 }
 
-async fn imagesets_in(d: &Daemon, store_id: Option<&str>) -> Result<Json<Vec<ImageSetResponse>>, ApiError> {
+async fn imagesets_in(
+    d: &Daemon,
+    store_id: Option<&str>,
+) -> Result<Json<Vec<ImageSetResponse>>, ApiError> {
     let store = d.store_for(store_id).map_err(map_err)?;
     let sets = store.pan.imageset_list().map_err(map_err)?;
-    Ok(Json(sets.into_iter().map(|p| imageset_out(&store, p, None)).collect()))
+    Ok(Json(
+        sets.into_iter()
+            .map(|p| imageset_out(&store, p, None))
+            .collect(),
+    ))
 }
 
 #[utoipa::path(post, path = "/imagesets", tag = "imageset",
     request_body(content = ImageSetCreateBody, description = "The set's description; nothing else is on a set"),
     responses((status = 201, body = ImageSetResponse), (status = 400, body = ErrorBody)))]
-async fn create_imageset(State(d): State<Shared>, Json(body): Json<ImageSetCreateBody>) -> Result<(StatusCode, Json<ImageSetResponse>), ApiError> {
+async fn create_imageset(
+    State(d): State<Shared>,
+    Json(body): Json<ImageSetCreateBody>,
+) -> Result<(StatusCode, Json<ImageSetResponse>), ApiError> {
     create_imageset_in(&d, None, body).await
 }
 
 #[utoipa::path(post, path = "/stores/{id}/imagesets", tag = "imageset", params(("id" = String, Path, description = "Store id")),
     request_body(content = ImageSetCreateBody),
     responses((status = 201, body = ImageSetResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
-async fn create_store_imageset(State(d): State<Shared>, AxPath(store_id): AxPath<String>, Json(body): Json<ImageSetCreateBody>) -> Result<(StatusCode, Json<ImageSetResponse>), ApiError> {
+async fn create_store_imageset(
+    State(d): State<Shared>,
+    AxPath(store_id): AxPath<String>,
+    Json(body): Json<ImageSetCreateBody>,
+) -> Result<(StatusCode, Json<ImageSetResponse>), ApiError> {
     create_imageset_in(&d, Some(&store_id), body).await
 }
 
-async fn create_imageset_in(d: &Daemon, store_id: Option<&str>, body: ImageSetCreateBody) -> Result<(StatusCode, Json<ImageSetResponse>), ApiError> {
+async fn create_imageset_in(
+    d: &Daemon,
+    store_id: Option<&str>,
+    body: ImageSetCreateBody,
+) -> Result<(StatusCode, Json<ImageSetResponse>), ApiError> {
     let store = d.store_for(store_id).map_err(map_err)?;
     let s2 = store.clone();
-    let p = tokio::task::spawn_blocking(move || s2.pan.imageset_create(body.description.as_deref()))
-        .await
-        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(map_err)?;
-    Ok((StatusCode::CREATED, Json(imageset_out(&store, p, Some(Vec::new())))))
+    let p =
+        tokio::task::spawn_blocking(move || s2.pan.imageset_create(body.description.as_deref()))
+            .await
+            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(map_err)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(imageset_out(&store, p, Some(Vec::new()))),
+    ))
 }
 
 fn locate_imageset(d: &Daemon, given: &str) -> Result<(Arc<super::StoreHandle>, String), ApiError> {
     let id = bare_id(given);
-    let store = d.locate_imageset(&id).map_err(map_err)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("imageset not found: {given}")))?;
+    let store = d.locate_imageset(&id).map_err(map_err)?.ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            format!("imageset not found: {given}"),
+        )
+    })?;
     Ok((store, id))
 }
 
-fn imageset_response(store: &Arc<super::StoreHandle>, id: &str) -> Result<ImageSetResponse, ApiError> {
-    let p = store.pan.imageset_get(id).map_err(map_err)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("imageset not found: {id}")))?;
-    let media = store.pan.imageset_members(id).map_err(map_err)?.iter().map(|iri| bracket_iri(iri)).collect();
+fn imageset_response(
+    store: &Arc<super::StoreHandle>,
+    id: &str,
+) -> Result<ImageSetResponse, ApiError> {
+    let p = store
+        .pan
+        .imageset_get(id)
+        .map_err(map_err)?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("imageset not found: {id}")))?;
+    let media = store
+        .pan
+        .imageset_members(id)
+        .map_err(map_err)?
+        .iter()
+        .map(|iri| bracket_iri(iri))
+        .collect();
     Ok(imageset_out(store, p, Some(media)))
 }
 
 #[utoipa::path(get, path = "/imagesets/{id}", tag = "imageset", params(("id" = String, Path, description = "<pan/ImageSet/x>, full IRI, or bare id")),
     responses((status = 200, body = ImageSetResponse), (status = 404, body = ErrorBody)))]
-async fn get_imageset(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Result<Json<ImageSetResponse>, ApiError> {
+async fn get_imageset(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+) -> Result<Json<ImageSetResponse>, ApiError> {
     let (store, id) = locate_imageset(&d, &given)?;
     imageset_response(&store, &id).map(Json)
 }
@@ -734,31 +964,53 @@ async fn get_imageset(State(d): State<Shared>, AxPath(given): AxPath<String>) ->
 #[utoipa::path(post, path = "/imagesets/{id}/add", tag = "imageset", params(("id" = String, Path)),
     request_body(content = ImageSetMemberBody, description = "The media to put in the set"),
     responses((status = 200, body = ImageSetResponse), (status = 404, body = ErrorBody)))]
-async fn imageset_add(State(d): State<Shared>, AxPath(given): AxPath<String>, Json(body): Json<ImageSetMemberBody>) -> Result<Json<ImageSetResponse>, ApiError> {
+async fn imageset_add(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+    Json(body): Json<ImageSetMemberBody>,
+) -> Result<Json<ImageSetResponse>, ApiError> {
     imageset_member(&d, &given, &body.media, true).await
 }
 
 #[utoipa::path(post, path = "/imagesets/{id}/remove", tag = "imageset", params(("id" = String, Path)),
     request_body(content = ImageSetMemberBody, description = "The media to take out of the set"),
     responses((status = 200, body = ImageSetResponse), (status = 404, body = ErrorBody)))]
-async fn imageset_remove(State(d): State<Shared>, AxPath(given): AxPath<String>, Json(body): Json<ImageSetMemberBody>) -> Result<Json<ImageSetResponse>, ApiError> {
+async fn imageset_remove(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+    Json(body): Json<ImageSetMemberBody>,
+) -> Result<Json<ImageSetResponse>, ApiError> {
     imageset_member(&d, &given, &body.media, false).await
 }
 
-async fn imageset_member(d: &Daemon, given: &str, media: &str, add: bool) -> Result<Json<ImageSetResponse>, ApiError> {
+async fn imageset_member(
+    d: &Daemon,
+    given: &str,
+    media: &str,
+    add: bool,
+) -> Result<Json<ImageSetResponse>, ApiError> {
     let (store, set_id) = locate_imageset(d, given)?;
     let media_id = bare_id(media);
     // The image must be in the SAME store as the set: a set never reaches
     // across stores.
     if store.pan.subject_for(&media_id).map_err(map_err)?.is_none() {
-        return Err(ApiError(StatusCode::NOT_FOUND, format!("id not found in store {}: {media}", store.entry.id)));
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("id not found in store {}: {media}", store.entry.id),
+        ));
     }
     let s2 = store.clone();
     let sid = set_id.clone();
-    tokio::task::spawn_blocking(move || if add { s2.pan.imageset_add(&sid, &media_id) } else { s2.pan.imageset_remove(&sid, &media_id) })
-        .await
-        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(map_err)?;
+    tokio::task::spawn_blocking(move || {
+        if add {
+            s2.pan.imageset_add(&sid, &media_id)
+        } else {
+            s2.pan.imageset_remove(&sid, &media_id)
+        }
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(map_err)?;
     imageset_response(&store, &set_id).map(Json)
 }
 
@@ -797,9 +1049,15 @@ pub fn router(d: Shared) -> Router {
         .route("/imagesets/{id}", get(get_imageset))
         .route("/imagesets/{id}/add", post(imageset_add))
         .route("/imagesets/{id}/remove", post(imageset_remove))
-        .route("/stores/{id}/imagesets", get(store_imagesets).post(create_store_imageset))
+        .route(
+            "/stores/{id}/imagesets",
+            get(store_imagesets).post(create_store_imageset),
+        )
         .route("/stores/{id}/media", post(deliver_to))
-        .route("/stores/{id}/sparql", get(store_sparql_get).post(store_sparql_post))
+        .route(
+            "/stores/{id}/sparql",
+            get(store_sparql_get).post(store_sparql_post),
+        )
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
         .layer(tower_http::trace::TraceLayer::new_for_http())
@@ -811,7 +1069,11 @@ pub async fn serve(d: Shared) -> anyhow::Result<()> {
     let app = router(d.clone());
     let addr = format!("{}:{}", d.cfg.bind, d.cfg.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("pand serving on http://{addr} (swagger at /swagger-ui); {} store(s), default {}", d.stores.len(), d.default_id);
+    tracing::info!(
+        "pand serving on http://{addr} (swagger at /swagger-ui); {} store(s), default {}",
+        d.stores.len(),
+        d.default_id
+    );
     let ladder = tokio::spawn(stages::run(d.clone()));
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

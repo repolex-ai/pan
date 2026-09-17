@@ -45,8 +45,12 @@ pub fn resolve_all(declared: &[PathBuf]) -> Result<Vec<StoreEntry>> {
 
 pub fn resolve_one(declared: &Path) -> Result<StoreEntry> {
     if declared.join(".git").exists() {
-        let sha = genesis_sha(declared)
-            .with_context(|| format!("{} is a git repository but its genesis SHA could not be read", declared.display()))?;
+        let sha = genesis_sha(declared).with_context(|| {
+            format!(
+                "{} is a git repository but its genesis SHA could not be read",
+                declared.display()
+            )
+        })?;
         return Ok(StoreEntry {
             id: sha,
             root: declared.join(".pan"),
@@ -116,7 +120,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".git")).unwrap();
         std::fs::create_dir_all(dir.path().join(".lex")).unwrap();
-        std::fs::write(dir.path().join(".lex/repo.yml"), "kit: soul\ngenesis_sha: abc123\n").unwrap();
+        std::fs::write(
+            dir.path().join(".lex/repo.yml"),
+            "kit: soul\ngenesis_sha: abc123\n",
+        )
+        .unwrap();
         let e = resolve_one(dir.path()).unwrap();
         assert_eq!(e.id, "abc123");
         assert_eq!(e.root, dir.path().join(".pan"));

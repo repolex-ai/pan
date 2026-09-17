@@ -83,10 +83,18 @@ pub struct Target {
 
 impl ModelEndpoint {
     pub fn primary(&self) -> Target {
-        Target { url: self.url.clone(), auth: self.auth.clone(), via: "primary" }
+        Target {
+            url: self.url.clone(),
+            auth: self.auth.clone(),
+            via: "primary",
+        }
     }
     pub fn fallback_target(&self) -> Option<Target> {
-        self.fallback.as_ref().map(|f| Target { url: f.url.clone(), auth: f.auth.clone(), via: "fallback" })
+        self.fallback.as_ref().map(|f| Target {
+            url: f.url.clone(),
+            auth: f.auth.clone(),
+            via: "fallback",
+        })
     }
 }
 
@@ -195,7 +203,10 @@ impl DaemonConfig {
     /// is declared in the store's graph as `pan:mediaRoot`; nothing reads it by
     /// convention.
     pub fn media_root_for(&self, store_id: &str) -> Option<PathBuf> {
-        self.media_volume.as_ref().map(|v| v.join(media_folder_name(store_id)).join(MEDIA_DIR_ON_VOLUME))
+        self.media_volume.as_ref().map(|v| {
+            v.join(media_folder_name(store_id))
+                .join(MEDIA_DIR_ON_VOLUME)
+        })
     }
 
     pub fn load() -> Result<Self> {
@@ -204,13 +215,17 @@ impl DaemonConfig {
 
     pub fn load_from(path: &Path) -> Result<Self> {
         let yml: ConfigYml = if path.exists() {
-            let raw = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+            let raw = std::fs::read_to_string(path)
+                .with_context(|| format!("read {}", path.display()))?;
             serde_yaml::from_str(&raw).with_context(|| format!("parse {}", path.display()))?
         } else {
             ConfigYml::default()
         };
         if yml.log_keep_days == Some(0) {
-            return Err(anyhow!("{}: log_keep_days must be at least 1 (it would delete today's log)", path.display()));
+            return Err(anyhow!(
+                "{}: log_keep_days must be at least 1 (it would delete today's log)",
+                path.display()
+            ));
         }
         let mut stores: Vec<PathBuf> = yml.stores.iter().map(|p| expand_home(p)).collect();
         if stores.is_empty() {
@@ -219,17 +234,36 @@ impl DaemonConfig {
         let mut models = yml.models;
         for (stage, m) in models.iter_mut() {
             if m.url.is_empty() || m.model.is_empty() {
-                return Err(anyhow!("{}: every model needs both url and model", path.display()));
+                return Err(anyhow!(
+                    "{}: every model needs both url and model",
+                    path.display()
+                ));
             }
             if m.concurrency == 0 {
-                return Err(anyhow!("{}: model concurrency must be at least 1", path.display()));
+                return Err(anyhow!(
+                    "{}: model concurrency must be at least 1",
+                    path.display()
+                ));
             }
             if let Some(name) = m.prompt.take() {
-                let file = path.parent().unwrap_or(Path::new(".")).join("prompts").join(name.trim());
-                let text = std::fs::read_to_string(&file)
-                    .with_context(|| format!("{}: stage {stage} names prompt file {} which cannot be read", path.display(), file.display()))?;
+                let file = path
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join("prompts")
+                    .join(name.trim());
+                let text = std::fs::read_to_string(&file).with_context(|| {
+                    format!(
+                        "{}: stage {stage} names prompt file {} which cannot be read",
+                        path.display(),
+                        file.display()
+                    )
+                })?;
                 if text.trim().is_empty() {
-                    return Err(anyhow!("{}: prompt file {} is empty", path.display(), file.display()));
+                    return Err(anyhow!(
+                        "{}: prompt file {} is empty",
+                        path.display(),
+                        file.display()
+                    ));
                 }
                 m.prompt = Some(text);
             }
@@ -245,7 +279,9 @@ impl DaemonConfig {
             interval_secs: yml.interval_secs.unwrap_or(5),
             batch: yml.batch.unwrap_or(8),
             backfill_since: yml.backfill_since.filter(|s| !s.trim().is_empty()),
-            log_keep_days: yml.log_keep_days.unwrap_or(super::calllog::DEFAULT_KEEP_DAYS),
+            log_keep_days: yml
+                .log_keep_days
+                .unwrap_or(super::calllog::DEFAULT_KEEP_DAYS),
         })
     }
 
@@ -283,7 +319,10 @@ mod tests {
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
         assert_eq!(cfg.stores.len(), 2);
-        assert!(!cfg.stores[1].to_string_lossy().starts_with('~'), "home expanded");
+        assert!(
+            !cfg.stores[1].to_string_lossy().starts_with('~'),
+            "home expanded"
+        );
         assert_eq!(cfg.default, Some(PathBuf::from("/souls/a")));
         assert_eq!(cfg.port, 7402);
         assert_eq!(cfg.models["embed"].concurrency, 2);
@@ -294,7 +333,11 @@ mod tests {
     fn disabled_stage_is_declared_but_not_active() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("config.yml");
-        std::fs::write(&p, "models:\n  pose:\n    url: http://x/see_pose\n    model: rtmw\n    enabled: false\n").unwrap();
+        std::fs::write(
+            &p,
+            "models:\n  pose:\n    url: http://x/see_pose\n    model: rtmw\n    enabled: false\n",
+        )
+        .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
         assert!(cfg.models.contains_key("pose"));
         assert_eq!(cfg.active_models().count(), 0);
@@ -306,23 +349,39 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(&p, "media_volume: /Volumes/p02\n").unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
-        let root = cfg.media_root_for("700c5bd4a969723107c1b92b83c0f1ec1497d9d4").unwrap();
+        let root = cfg
+            .media_root_for("700c5bd4a969723107c1b92b83c0f1ec1497d9d4")
+            .unwrap();
         assert_eq!(root, PathBuf::from("/Volumes/p02/700c5b/pan"));
         // The all-zeros bare store id shortens the same way.
-        assert_eq!(media_folder_name("0000000000000000000000000000000000000000"), "000000");
+        assert_eq!(
+            media_folder_name("0000000000000000000000000000000000000000"),
+            "000000"
+        );
     }
 
     #[test]
     fn log_keep_days_defaults_to_a_month_and_refuses_zero() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("config.yml");
-        assert_eq!(DaemonConfig::load_from(&p).unwrap().log_keep_days, 30, "missing file");
+        assert_eq!(
+            DaemonConfig::load_from(&p).unwrap().log_keep_days,
+            30,
+            "missing file"
+        );
         std::fs::write(&p, "port: 7401\n").unwrap();
-        assert_eq!(DaemonConfig::load_from(&p).unwrap().log_keep_days, 30, "missing key");
+        assert_eq!(
+            DaemonConfig::load_from(&p).unwrap().log_keep_days,
+            30,
+            "missing key"
+        );
         std::fs::write(&p, "log_keep_days: 7\n").unwrap();
         assert_eq!(DaemonConfig::load_from(&p).unwrap().log_keep_days, 7);
         std::fs::write(&p, "log_keep_days: 0\n").unwrap();
-        assert!(DaemonConfig::load_from(&p).is_err(), "zero would delete today's file");
+        assert!(
+            DaemonConfig::load_from(&p).is_err(),
+            "zero would delete today's file"
+        );
     }
 
     #[test]
@@ -345,11 +404,23 @@ mod tests {
         let c = DaemonConfig::load_from(&p).unwrap();
         let ep = &c.models["pose"];
         let prim = ep.primary();
-        assert_eq!((prim.url.as_str(), prim.auth.as_deref(), prim.via), ("http://door/percept/pose", None, "primary"));
+        assert_eq!(
+            (prim.url.as_str(), prim.auth.as_deref(), prim.via),
+            ("http://door/percept/pose", None, "primary")
+        );
         let fb = ep.fallback_target().unwrap();
-        assert_eq!((fb.url.as_str(), fb.auth.as_deref(), fb.via), ("https://node.example/pose", Some("Bearer abc"), "fallback"));
+        assert_eq!(
+            (fb.url.as_str(), fb.auth.as_deref(), fb.via),
+            ("https://node.example/pose", Some("Bearer abc"), "fallback")
+        );
         // Without a fallback there is no fallback target — the stage waits.
-        std::fs::write(&p, "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n").unwrap();
-        assert!(DaemonConfig::load_from(&p).unwrap().models["pose"].fallback_target().is_none());
+        std::fs::write(
+            &p,
+            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n",
+        )
+        .unwrap();
+        assert!(DaemonConfig::load_from(&p).unwrap().models["pose"]
+            .fallback_target()
+            .is_none());
     }
 }

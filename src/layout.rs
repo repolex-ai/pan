@@ -143,7 +143,11 @@ impl PanLayout {
     /// Readers never parse it back — `pan:mediaPath` in the graph is the path.
     pub fn file_stem(created_date: &str, id: &str) -> String {
         // created_date is RFC 3339 with offset: 2026-09-04T03:49:53-07:00
-        let digits: String = created_date.chars().take(19).filter(|c| c.is_ascii_digit()).collect();
+        let digits: String = created_date
+            .chars()
+            .take(19)
+            .filter(|c| c.is_ascii_digit())
+            .collect();
         let (d, t) = digits.split_at(digits.len().min(8));
         format!("{d}-{t}-{id}")
     }
@@ -152,20 +156,32 @@ impl PanLayout {
     /// `<kind>/img/source/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.<ext>`. For images
     /// `ext` is always `png`; other kinds keep their own extension.
     pub fn media_rel_path(media_kind: &str, shard: &str, stem: &str, ext: &str) -> String {
-        Self::img_rel_path(media_kind, Self::SOURCE_SUBDIR, &format!("{shard}/{stem}.{ext}"))
+        Self::img_rel_path(
+            media_kind,
+            Self::SOURCE_SUBDIR,
+            &format!("{shard}/{stem}.{ext}"),
+        )
     }
 
     /// Media-root-relative path of the bytes as they arrived, when they were
     /// not already the source format: `<kind>/img/original/YYYY/MM/DD/<stem>.<ext>`.
     /// Kept for the record; nothing reads it again.
     pub fn original_rel_path(media_kind: &str, shard: &str, stem: &str, ext: &str) -> String {
-        Self::img_rel_path(media_kind, Self::ORIGINAL_SUBDIR, &format!("{shard}/{stem}.{ext}"))
+        Self::img_rel_path(
+            media_kind,
+            Self::ORIGINAL_SUBDIR,
+            &format!("{shard}/{stem}.{ext}"),
+        )
     }
 
     /// Media-root-relative path of a derived JPEG rendition, named by its long
     /// edge: `<kind>/img/jpg/YYYY/MM/DD/<stem>_<longEdge>.jpg`.
     pub fn jpg_rel_path(media_kind: &str, shard: &str, stem: &str, long_edge: u32) -> String {
-        Self::img_rel_path(media_kind, Self::JPG_SUBDIR, &format!("{shard}/{stem}_{long_edge}.jpg"))
+        Self::img_rel_path(
+            media_kind,
+            Self::JPG_SUBDIR,
+            &format!("{shard}/{stem}_{long_edge}.jpg"),
+        )
     }
 
     /// Media-root-relative path of an upscaled rendition, named by its long
@@ -173,7 +189,11 @@ impl PanLayout {
     /// `<kind>/img/upscale/YYYY/MM/DD/<stem>_<longEdge>.png`. The place is
     /// reserved (goodlux, 2026-09-16); no stage writes here yet.
     pub fn upscale_rel_path(media_kind: &str, shard: &str, stem: &str, long_edge: u32) -> String {
-        Self::img_rel_path(media_kind, Self::UPSCALE_SUBDIR, &format!("{shard}/{stem}_{long_edge}.png"))
+        Self::img_rel_path(
+            media_kind,
+            Self::UPSCALE_SUBDIR,
+            &format!("{shard}/{stem}_{long_edge}.png"),
+        )
     }
 
     /// The thumbnail is the `long_edge` JPEG rendition; no folder of its own.
@@ -184,12 +204,17 @@ impl PanLayout {
     /// Media-root-relative path of a vector sidecar:
     /// `<kind>/data/vectors/<index>/<id>.npy` (index name flattened for the path).
     pub fn vector_rel_path(media_kind: &str, index_name: &str, id: &str) -> String {
-        Self::data_rel_path(media_kind, Self::VECTORS_SUBDIR, &format!("{}/{id}.npy", Self::file_safe_model(index_name)))
+        Self::data_rel_path(
+            media_kind,
+            Self::VECTORS_SUBDIR,
+            &format!("{}/{id}.npy", Self::file_safe_model(index_name)),
+        )
     }
 
     /// Absolute path of a vector sidecar.
     pub fn vector_sidecar_path(&self, media_kind: &str, index_name: &str, id: &str) -> PathBuf {
-        self.media_root.join(Self::vector_rel_path(media_kind, index_name, id))
+        self.media_root
+            .join(Self::vector_rel_path(media_kind, index_name, id))
     }
 
     /// Media-root-relative path of the embedding's data file — the vectorData
@@ -197,13 +222,23 @@ impl PanLayout {
     /// `<kind>/data/vectors/<index>/<id>.xml`. The same shape every other
     /// stage's record has, so the record is rebuildable from disk (issue #31).
     pub fn vector_record_rel_path(media_kind: &str, index_name: &str, id: &str) -> String {
-        Self::data_rel_path(media_kind, Self::VECTORS_SUBDIR, &format!("{}/{id}.xml", Self::file_safe_model(index_name)))
+        Self::data_rel_path(
+            media_kind,
+            Self::VECTORS_SUBDIR,
+            &format!("{}/{id}.xml", Self::file_safe_model(index_name)),
+        )
     }
 
     /// Media-root-relative path of an enricher's data file:
     /// `<kind>/data/<stage>/YYYY/MM/DD/<id>[.<variant>].xml`. The variant is a
     /// model id and is flattened for the path.
-    pub fn enrichment_rel_path(media_kind: &str, kind: &str, shard: &str, id: &str, variant: Option<&str>) -> String {
+    pub fn enrichment_rel_path(
+        media_kind: &str,
+        kind: &str,
+        shard: &str,
+        id: &str,
+        variant: Option<&str>,
+    ) -> String {
         let file = match variant {
             Some(v) => format!("{shard}/{id}.{}.xml", Self::file_safe_model(v)),
             None => format!("{shard}/{id}.xml"),
@@ -213,8 +248,18 @@ impl PanLayout {
 
     /// Media-root-relative path of a stage's overlay picture, beside its
     /// record: `<kind>/data/<stage>/YYYY/MM/DD/<id>.<model>.png`.
-    pub fn overlay_rel_path(media_kind: &str, kind: &str, shard: &str, id: &str, model: &str) -> String {
-        Self::data_rel_path(media_kind, kind, &format!("{shard}/{id}.{}.png", Self::file_safe_model(model)))
+    pub fn overlay_rel_path(
+        media_kind: &str,
+        kind: &str,
+        shard: &str,
+        id: &str,
+        model: &str,
+    ) -> String {
+        Self::data_rel_path(
+            media_kind,
+            kind,
+            &format!("{shard}/{id}.{}.png", Self::file_safe_model(model)),
+        )
     }
 
     /// Absolute path for a media-root-relative path.
@@ -231,44 +276,105 @@ mod tests {
     fn resolve_defaults_into_the_pocket() {
         let l = PanLayout::resolve(Path::new("/soul/.pan"), None);
         assert_eq!(l.pocket, PathBuf::from("/soul/.pan/_ignore"));
-        assert_eq!(l.oxigraph_root, PathBuf::from("/soul/.pan/_ignore/oxigraph"));
+        assert_eq!(
+            l.oxigraph_root,
+            PathBuf::from("/soul/.pan/_ignore/oxigraph")
+        );
         assert_eq!(l.hnsw_root, PathBuf::from("/soul/.pan/_ignore/hnsw"));
         assert_eq!(l.media_root, PathBuf::from("/soul/.pan/_ignore/media"));
     }
 
     #[test]
     fn media_root_override_relocates_media_but_not_the_graph() {
-        let l = PanLayout::resolve(Path::new("/soul/.pan"), Some(Path::new("/Volumes/p02/_pan/abc/pan")));
-        assert_eq!(l.oxigraph_root, PathBuf::from("/soul/.pan/_ignore/oxigraph"));
+        let l = PanLayout::resolve(
+            Path::new("/soul/.pan"),
+            Some(Path::new("/Volumes/p02/_pan/abc/pan")),
+        );
+        assert_eq!(
+            l.oxigraph_root,
+            PathBuf::from("/soul/.pan/_ignore/oxigraph")
+        );
         assert_eq!(l.media_root, PathBuf::from("/Volumes/p02/_pan/abc/pan"));
-        assert_eq!(l.abs("image/img/source/2026/09/04/x.png"), PathBuf::from("/Volumes/p02/_pan/abc/pan/image/img/source/2026/09/04/x.png"));
+        assert_eq!(
+            l.abs("image/img/source/2026/09/04/x.png"),
+            PathBuf::from("/Volumes/p02/_pan/abc/pan/image/img/source/2026/09/04/x.png")
+        );
     }
 
     #[test]
     fn pixels_under_img_records_under_data() {
         let stem = PanLayout::file_stem("2026-09-04T03:49:53-07:00", "k7m2p9x4");
-        assert_eq!(stem, "20260904-034953-k7m2p9x4", "date, time, pan id, local time");
-        assert_eq!(PanLayout::media_rel_path("image", "2026/09/04", &stem, "png"), "image/img/source/2026/09/04/20260904-034953-k7m2p9x4.png");
-        assert_eq!(PanLayout::original_rel_path("image", "2026/09/04", &stem, "jpg"), "image/img/original/2026/09/04/20260904-034953-k7m2p9x4.jpg");
-        assert_eq!(PanLayout::thumbnail_rel_path("image", "2026/09/04", &stem, 512), "image/img/jpg/2026/09/04/20260904-034953-k7m2p9x4_512.jpg");
-        assert_eq!(PanLayout::jpg_rel_path("image", "2026/09/04", &stem, 2048), "image/img/jpg/2026/09/04/20260904-034953-k7m2p9x4_2048.jpg");
-        assert_eq!(PanLayout::upscale_rel_path("image", "2026/09/04", &stem, 4096), "image/img/upscale/2026/09/04/20260904-034953-k7m2p9x4_4096.png", "an upscale is PNG, beside jpg/, named by its long edge");
-        assert_eq!(PanLayout::vector_rel_path("image", "m", "k7m2p9x4"), "image/data/vectors/m/k7m2p9x4.npy");
-        assert_eq!(PanLayout::vector_record_rel_path("image", "m", "k7m2p9x4"), "image/data/vectors/m/k7m2p9x4.xml");
-        assert_eq!(PanLayout::enrichment_rel_path("image", "caption", "2026/09/04", "k7m2p9x4", Some("m")), "image/data/caption/2026/09/04/k7m2p9x4.m.xml");
-        assert_eq!(PanLayout::enrichment_rel_path("image", "sam3", "2026/09/04", "k7m2p9x4", None), "image/data/sam3/2026/09/04/k7m2p9x4.xml");
-        assert_eq!(PanLayout::overlay_rel_path("image", "pose", "2026/09/04", "k7m2p9x4", "rtmw-x-l"), "image/data/pose/2026/09/04/k7m2p9x4.rtmw-x-l.png");
+        assert_eq!(
+            stem, "20260904-034953-k7m2p9x4",
+            "date, time, pan id, local time"
+        );
+        assert_eq!(
+            PanLayout::media_rel_path("image", "2026/09/04", &stem, "png"),
+            "image/img/source/2026/09/04/20260904-034953-k7m2p9x4.png"
+        );
+        assert_eq!(
+            PanLayout::original_rel_path("image", "2026/09/04", &stem, "jpg"),
+            "image/img/original/2026/09/04/20260904-034953-k7m2p9x4.jpg"
+        );
+        assert_eq!(
+            PanLayout::thumbnail_rel_path("image", "2026/09/04", &stem, 512),
+            "image/img/jpg/2026/09/04/20260904-034953-k7m2p9x4_512.jpg"
+        );
+        assert_eq!(
+            PanLayout::jpg_rel_path("image", "2026/09/04", &stem, 2048),
+            "image/img/jpg/2026/09/04/20260904-034953-k7m2p9x4_2048.jpg"
+        );
+        assert_eq!(
+            PanLayout::upscale_rel_path("image", "2026/09/04", &stem, 4096),
+            "image/img/upscale/2026/09/04/20260904-034953-k7m2p9x4_4096.png",
+            "an upscale is PNG, beside jpg/, named by its long edge"
+        );
+        assert_eq!(
+            PanLayout::vector_rel_path("image", "m", "k7m2p9x4"),
+            "image/data/vectors/m/k7m2p9x4.npy"
+        );
+        assert_eq!(
+            PanLayout::vector_record_rel_path("image", "m", "k7m2p9x4"),
+            "image/data/vectors/m/k7m2p9x4.xml"
+        );
+        assert_eq!(
+            PanLayout::enrichment_rel_path("image", "caption", "2026/09/04", "k7m2p9x4", Some("m")),
+            "image/data/caption/2026/09/04/k7m2p9x4.m.xml"
+        );
+        assert_eq!(
+            PanLayout::enrichment_rel_path("image", "sam3", "2026/09/04", "k7m2p9x4", None),
+            "image/data/sam3/2026/09/04/k7m2p9x4.xml"
+        );
+        assert_eq!(
+            PanLayout::overlay_rel_path("image", "pose", "2026/09/04", "k7m2p9x4", "rtmw-x-l"),
+            "image/data/pose/2026/09/04/k7m2p9x4.rtmw-x-l.png"
+        );
         assert_eq!(PanLayout::media_kind("video/mp4"), "video");
     }
 
     #[test]
     fn a_slash_in_a_model_id_never_makes_a_folder() {
-        assert_eq!(PanLayout::file_safe_model("qwen/qwen3.8-27b"), "qwen-qwen3.8-27b");
         assert_eq!(
-            PanLayout::enrichment_rel_path("image", "caption", "2026/09/08", "ygjjmvkw", Some("qwen/qwen3.8-27b")),
+            PanLayout::file_safe_model("qwen/qwen3.8-27b"),
+            "qwen-qwen3.8-27b"
+        );
+        assert_eq!(
+            PanLayout::enrichment_rel_path(
+                "image",
+                "caption",
+                "2026/09/08",
+                "ygjjmvkw",
+                Some("qwen/qwen3.8-27b")
+            ),
             "image/data/caption/2026/09/08/ygjjmvkw.qwen-qwen3.8-27b.xml"
         );
-        assert_eq!(PanLayout::vector_rel_path("image", "org/model", "x"), "image/data/vectors/org-model/x.npy");
-        assert_eq!(PanLayout::overlay_rel_path("image", "pose", "2026/09/08", "x", "a/b"), "image/data/pose/2026/09/08/x.a-b.png");
+        assert_eq!(
+            PanLayout::vector_rel_path("image", "org/model", "x"),
+            "image/data/vectors/org-model/x.npy"
+        );
+        assert_eq!(
+            PanLayout::overlay_rel_path("image", "pose", "2026/09/08", "x", "a/b"),
+            "image/data/pose/2026/09/08/x.a-b.png"
+        );
     }
 }
