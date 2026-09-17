@@ -1,0 +1,94 @@
+# CI for pan. Four jobs, each answering one question:
+#   rust             does it build and do the tests pass?
+#   ontology         does pan.ttl pass the kit checker (errors only; advisories are read, not gated)?
+#   exiftool-config  is exiftool/ExifTool_config what gen_config.py makes from pan.ttl + copia.ttl?
+#   kit-mirror       is ontology/pan.ttl byte-identical to the copy in git-lex-kit-pan?
+#
+# fmt and clippy run but do not gate (continue-on-error): both were red when
+# this workflow was written (2026-09-16); flipping them to gating is a
+# one-line change once the tree is clean.
+#
+# kit-mirror is red whenever pan.ttl lands on main before its mirror commit
+# in git-lex-kit-pan. That is the point: the mirror step is a rule, and this
+# is what says it was skipped.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt --check (advisory)
+        continue-on-error: true
+        run: cargo fmt --check
+      - name: cargo clippy (advisory)
+        continue-on-error: true
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --all-targets --locked
+
+  ontology:
+    name: ontology (kit checker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install rdflib
+      - name: fetch check-kit-ontology.py from git-lex-kit-base
+        run: curl -sfL https://raw.githubusercontent.com/repolex-ai/git-lex-kit-base/main/reference/check-kit-ontology.py -o /tmp/check-kit-ontology.py
+      - name: check ontology/pan.ttl
+        # exits 1 on errors only; advisories print and pass
+        run: python3 /tmp/check-kit-ontology.py ontology/pan.ttl
+
+  exiftool-config:
+    name: exiftool config matches the ontologies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: fetch copia.ttl from git-lex-kit-copia main
+        # The committed config does not record which copia version it was
+        # generated from, so main is the reference.
+        run: curl -sfL https://raw.githubusercontent.com/repolex-ai/git-lex-kit-copia/main/ontology/copia/copia.ttl -o /tmp/copia.ttl
+      - name: regenerate and diff
+        run: |
+          python3 exiftool/gen_config.py ontology/pan.ttl /tmp/copia.ttl > /tmp/ExifTool_config
+          if ! diff -u exiftool/ExifTool_config /tmp/ExifTool_config; then
+            echo "::error::exiftool/ExifTool_config is stale. Run:"
+            echo "::error::  python3 exiftool/gen_config.py ontology/pan.ttl <path-to>/copia.ttl > exiftool/ExifTool_config"
+            echo "::error::then commit the result and install it with: cp exiftool/ExifTool_config ~/.ExifTool_config"
+            exit 1
+          fi
+
+  kit-mirror:
+    name: pan.ttl mirrored to git-lex-kit-pan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: compare with git-lex-kit-pan main
+        run: |
+          curl -sfL https://raw.githubusercontent.com/repolex-ai/git-lex-kit-pan/main/ontology/pan/pan.ttl -o /tmp/kit-pan.ttl
+          if ! cmp -s ontology/pan.ttl /tmp/kit-pan.ttl; then
+            echo "::error::ontology/pan.ttl differs from git-lex-kit-pan/ontology/pan/pan.ttl on main."
+            echo "::error::The mirror step was skipped: copy ontology/pan.ttl to git-lex-kit-pan/ontology/pan/pan.ttl, commit and push there."
+            diff -u /tmp/kit-pan.ttl ontology/pan.ttl | head -40
+            exit 1
+          fi
+          echo "identical"
