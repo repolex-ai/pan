@@ -66,7 +66,7 @@ The id is the last eight characters and is the same id the graph uses:
 `<pan/Image/v5ha2dfd>`.
 
 The image's XMP carries everything Pan knows about it under the `pan`
-namespace: id, creation time, path, type, size, the short and long
+namespace: id, creation time, path, type, the source file it was made from, size, the short and long
 descriptions, the scene objects, the scene fields, the thumbnail, and one
 reference per model run. What a producer wrote into the file before it
 arrived is kept untouched.

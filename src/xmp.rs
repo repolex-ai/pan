@@ -84,6 +84,9 @@ pub struct ImagePacket {
     pub media_path: String,
     pub created_date: String,
     pub media_type: String,
+    /// The file this source was made from (pan:sourceFile): the original
+    /// under img/original/ when converted, the source itself otherwise.
+    pub source_file: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
     /// One sentence (pan:shortDescription) and the detailed description
@@ -178,6 +181,9 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
     ];
     if !p.media_type.is_empty() {
         ident.push(("mediaType".into(), FieldValue::Scalar(p.media_type.clone())));
+    }
+    if !p.source_file.is_empty() {
+        ident.push(("sourceFile".into(), FieldValue::Scalar(p.source_file.clone())));
     }
     if let Some(w) = p.width {
         ident.push(("width".into(), FieldValue::Scalar(w.to_string())));
@@ -946,6 +952,7 @@ pub(crate) mod tests {
         build_packet(&ImagePacket {
             iri: format!("https://repolex.ai/pan/Image/{id}"),
             media_path: media.into(),
+            source_file: String::new(),
             created_date: created.into(),
             ..Default::default()
         })
@@ -1038,6 +1045,7 @@ pub(crate) mod tests {
         let pan_desc = build_pan_description(&ImagePacket {
             iri: "https://repolex.ai/pan/Image/abc123xy".into(),
             media_path: "image/2026/09/04/abc123xy.png".into(),
+            source_file: String::new(),
             created_date: "2026-09-04T01:00:00-07:00".into(),
             curation: vec![],
             thumbnail: Some(ThumbRef { id: "th1umb01".into(), path: "image/img/jpg/2026/09/04/abc123xy_512.jpg".into(), width: 341, height: 512 }),
@@ -1243,6 +1251,7 @@ mod flat_block_tests {
         let p = ImagePacket {
             iri: "https://repolex.ai/pan/Image/altocnif".into(),
             media_path: "image/2026/09/05/20260905-000009-altocnif.png".into(),
+            source_file: String::new(),
             created_date: "2026-09-05T00:00:09-07:00".into(),
             short_description: Some("A wolf on a ridge at dusk.".into()),
             long_description: Some("A grey wolf stands on a rocky ridge, lit from the left by a low sun.".into()),
@@ -1316,6 +1325,7 @@ mod flat_block_tests {
         let desc = build_pan_description(&ImagePacket {
             iri: "https://repolex.ai/pan/Image/altocnif".into(),
             media_path: "image/2026/09/05/20260905-000009-altocnif.png".into(),
+            source_file: String::new(),
             created_date: "2026-09-05T00:00:09-07:00".into(),
             media_type: "image/png".into(),
             width: Some(1280),

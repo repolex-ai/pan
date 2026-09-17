@@ -35,7 +35,7 @@ crc32fast = "1"
 flate2 = "1"
 base64 = "0.22"
 # Thumbnails: decode png/jpeg/webp/gif, resize, encode jpeg.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff"] }
 
 # HTTP surface: axum 0.8 + utoipa Swagger (the interface spec, shipped from commit one).
 axum = "0.8"

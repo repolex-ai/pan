@@ -52,6 +52,9 @@ fn a_jpeg_arrival_is_kept_as_original_and_worked_from_as_png() {
     let (_, facts) = store.get(&r.id).unwrap();
     let media_type = facts.iter().find(|(p, _)| p.ends_with("/mediaType")).map(|(_, v)| v[0].clone()).unwrap();
     assert_eq!(media_type, "image/png", "the stored bytes are PNG, and the graph says so");
+    let source_file = facts.iter().find(|(p, _)| p.ends_with("/sourceFile")).map(|(_, v)| v[0].clone()).unwrap();
+    assert_eq!(source_file, original, "pan:sourceFile names the original the PNG was made from");
+    assert!(packet.contains(&format!("<pan:sourceFile>{original}</pan:sourceFile>")), "sourceFile rides in the XMP");
     let thumb = facts.iter().find(|(p, _)| p.ends_with("/thumbnail")).expect("a thumbnail node");
     assert_eq!(thumb.1.len(), 1);
     let thumb_path = std::fs::read_dir(store.layout.media_root.join("image/img/jpg")).map(|_| ()).is_ok();
@@ -65,6 +68,9 @@ fn a_png_arrival_has_no_original() {
     assert!(r.original_path.is_none());
     assert!(r.media_path.starts_with("image/img/source/"));
     assert!(!store.layout.media_root.join("image/img/original").exists());
+    let (_, facts) = store.get(&r.id).unwrap();
+    let source_file = facts.iter().find(|(p, _)| p.ends_with("/sourceFile")).map(|(_, v)| v[0].clone()).unwrap();
+    assert_eq!(source_file, r.media_path, "a PNG arrival's sourceFile is the source itself");
     let thumbs: Vec<_> = walk(&store.layout.media_root.join("image/img/jpg"));
     assert_eq!(thumbs.len(), 1);
     assert!(thumbs[0].ends_with(&format!("{}_512.jpg", r.id)), "{}", thumbs[0]);
@@ -83,4 +89,25 @@ fn walk(dir: &std::path::Path) -> Vec<String> {
         }
     }
     out
+}
+
+fn tiff(w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x * 5) as u8, (y * 9) as u8, 77]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(img).write_to(&mut out, image::ImageFormat::Tiff).unwrap();
+    out.into_inner()
+}
+
+#[test]
+fn a_tiff_arrival_converts_to_png_with_the_same_pixels() {
+    let (_dir, store) = open();
+    let arrival = tiff(48, 32);
+    let r = store.put(&arrival, Some("image/tiff")).unwrap();
+    let original = r.original_path.clone().expect("a converted arrival keeps its original");
+    assert!(original.ends_with(&format!("{}.tiff", r.id)) || original.ends_with(&format!("{}.tif", r.id)), "{original}");
+    let source = std::fs::read(store.layout.abs(&r.media_path)).unwrap();
+    assert!(pan::xmp::is_png(&source));
+    let a = image::load_from_memory(&arrival).unwrap().to_rgb8();
+    let b = image::load_from_memory(&source).unwrap().to_rgb8();
+    assert_eq!(a.as_raw(), b.as_raw(), "same pixels in the PNG as in the TIFF");
 }

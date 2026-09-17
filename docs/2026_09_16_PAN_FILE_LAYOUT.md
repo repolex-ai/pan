@@ -42,6 +42,10 @@ finds all of either, and neither side needs to know the other's folder names.
   written inside it, and every stage reads this file and no other. When the
   arrival was not PNG, this is the decoded pixels written as PNG; the pixels
   are the same as the decoder saw, verified by the conversion's own test.
+  The image carries `pan:sourceFile`, the path of the file it was made from:
+  the `img/original/` file when the arrival was converted, its own path when
+  the arrival was already PNG. It is always present and pand writes it; it
+  cannot be set by hand.
 - **`img/jpg/`** — derived JPEG renditions. Today there is one, the 512 px
   thumbnail. Other sizes go in the same folder with their own suffix.
 - **`data/caption/`** — one XML file per caption run: the reference, the

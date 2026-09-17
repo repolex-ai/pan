@@ -71,6 +71,7 @@
     sceneStyle => { },
     score => { },
     shortDescription => { },
+    sourceFile => { },
     sourceFormat => { },
     text => { },
     vectorPath => { },

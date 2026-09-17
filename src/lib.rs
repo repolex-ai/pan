@@ -318,7 +318,7 @@ pub const PERCEPTION_FIELDS: [&str; 15] = [
 
 /// Fields Pan itself writes about a media object at ingest or at stage
 /// completion. A person may never set these by hand.
-pub const STRUCTURAL_FIELDS: [&str; 6] = ["mediaPath", "mediaType", "width", "height", "createdDate", "readyDate"];
+pub const STRUCTURAL_FIELDS: [&str; 7] = ["mediaPath", "mediaType", "sourceFile", "width", "height", "createdDate", "readyDate"];
 
 /// One property a person may set on a media object: its local name and the
 /// datatype the ontology declares for it (`xsd:integer`, `xsd:boolean`,
@@ -790,10 +790,12 @@ impl Pan {
         let kind = PanLayout::media_kind(&media_type);
         let rel_path = PanLayout::media_rel_path(kind, &shard, &stem, ext);
         let abs_path = self.layout.abs(&rel_path);
-        // The arrival, kept beside the source when it was converted. A
-        // `pan:sourceFile` fact naming it belongs on the image once the
-        // ontology declares it; until then the path is only in PutResult.
+        // The arrival, kept beside the source when it was converted.
         let original_rel = convert.then(|| PanLayout::original_rel_path(kind, &shard, &stem, arrived_ext));
+        // pan:sourceFile (pan.ttl 0.4.3, goodlux 2026-09-16): the file this
+        // source was made from — the original when converted, the source
+        // itself when it arrived as PNG. Always present; one rule.
+        let source_file = original_rel.clone().unwrap_or_else(|| rel_path.clone());
 
         let mut quads = vec![
             Quad::new(subject.clone(), rdf_type(), pan_iri(media_class(&media_type)), GraphName::DefaultGraph),
@@ -803,6 +805,7 @@ impl Pan {
             // git-lex:createdDate, the universal (goodlux, 2026-09-05; renamed with base kit 0.18.0, 2026-09-16).
             Quad::new(subject.clone(), git_lex_iri("createdDate"), Literal::new_simple_literal(&created_date), GraphName::DefaultGraph),
             self.quad(&subject, "mediaType", &media_type),
+            self.quad(&subject, "sourceFile", &source_file),
         ];
 
         // Whatever XMP the file arrived with is THE metadata (Rob, 2026-09-04:
@@ -1645,6 +1648,7 @@ impl Pan {
             media_path: pan_field("mediaPath").unwrap_or_default(),
             created_date: git_lex_field("createdDate").unwrap_or_default(),
             media_type: pan_field("mediaType").unwrap_or_default(),
+            source_file: pan_field("sourceFile").unwrap_or_default(),
             width: pan_field("width").and_then(|v| v.parse().ok()),
             height: pan_field("height").and_then(|v| v.parse().ok()),
             short_description: pan_field("shortDescription"),

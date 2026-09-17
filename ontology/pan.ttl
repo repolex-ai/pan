@@ -44,11 +44,20 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.2" .
+    owl:versionInfo "0.4.3" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.3 (2026-09-16, ruled by goodlux): THE SOURCE FILE.
+#   + pan:sourceFile on pan:Media — the file this source PNG was made from,
+#     relative to pan:mediaRoot. The managed store keeps ONE working format,
+#     PNG; a JPEG, WebP or TIFF that arrives is kept as delivered under
+#     img/original/ and never read again, and the PNG made from it is the
+#     source. sourceFile names that original. A PNG arrival points at the
+#     source itself, so the field is always present and one rule holds.
+#   Structural: written by pand at ingest, never by hand, refused by pan set.
+#   Not done: carrying the arrival's ICC/EXIF/XMP into the PNG (issue #23).
 # v0.4.2 (2026-09-16, ruled by goodlux): PHOTOSET EXTENDS subtexture:Set.
 #   (1) pan:Photoset rdfs:subClassOf subtexture:Set — the new base ontology
 #       (subtexture.ttl 0.1.0, 2026-09-16) declares Set and Sequence under
@@ -339,6 +348,14 @@ pan:mediaPath a owl:DatatypeProperty ;
 pan:mediaType a owl:DatatypeProperty ;
     rdfs:label "media type" ;
     rdfs:comment "MIME type of the stored bytes, e.g. image/png." ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:string .
+
+# The file the source was made from. Under img/original/ when the arrival was
+# not PNG; the source's own pan:mediaPath when it was. Always present.
+pan:sourceFile a owl:DatatypeProperty ;
+    rdfs:label "source file" ;
+    rdfs:comment "Path of the file this source was made from, relative to pan:mediaRoot; the source's own path when it arrived as PNG. Never an absolute path; never omitted." ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:string .
 
@@ -796,6 +813,7 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty git-lex:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:mediaPath  ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:mediaType  ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:sourceFile ; owl:cardinality 1 ] ,
     # When Pan created this record and its id (RFC3339, system local time):
     # the universal git-lex:createdDate, inherited from git-lex:Thing (base kit 0.18.0).
     [ a owl:Restriction ; owl:onProperty git-lex:createdDate ; owl:cardinality 1 ] ,
