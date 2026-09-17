@@ -33,6 +33,7 @@ use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 pub mod config;
 pub mod convert;
 pub mod daemon;
+pub mod depth;
 pub mod enrich;
 pub mod facts;
 pub mod layout;
@@ -592,6 +593,7 @@ pub struct StoreCounts {
     pub embeddings: u64,
     pub poses: u64,
     pub regions: u64,
+    pub depths: u64,
 }
 
 /// What exists for one media object, read from the graph alone.
@@ -603,7 +605,7 @@ pub struct MediaState {
     pub created_date: String,
     pub ready_date: Option<String>,
     pub thumbnail: bool,
-    /// enrichment reference (vectorData / captionData / regionData / poseData)
+    /// enrichment reference (vectorData / captionData / regionData / poseData / depthData)
     /// → models that have run on this object (a run with nothing found counts).
     pub enrichment: Vec<(String, Vec<String>)>,
 }
@@ -984,7 +986,7 @@ impl Pan {
             facts.iter().find(|(p, _)| p == &format!("{PAN_NS}{local}")).and_then(|(_, v)| v.first().cloned())
         };
         let mut enrichment = Vec::new();
-        for link in ["vectorData", "captionData", "regionData", "poseData"] {
+        for link in ["vectorData", "captionData", "regionData", "poseData", depth::REF_LOCAL] {
             let mut models: Vec<String> = Vec::new();
             for (pred, values) in &facts {
                 if pred != &format!("{PAN_NS}{link}") {
@@ -1150,6 +1152,7 @@ impl Pan {
             embeddings: count("?s pan:vectorData ?d . ?d pan:item ?e .")?,
             poses: count("?s pan:poseData ?d . ?d pan:item ?p .")?,
             regions: count("?s pan:regionData ?d . ?d pan:item ?r .")?,
+            depths: count(&format!("?s pan:{} ?d . ?d pan:item ?m .", depth::REF_LOCAL))?,
         })
     }
 
@@ -1617,7 +1620,7 @@ impl Pan {
         };
 
         let mut enrichment: Vec<(String, Vec<enrich::EnrichmentRef>)> = Vec::new();
-        for ref_local in ["regionData", "poseData", "captionData", "vectorData"] {
+        for ref_local in ["regionData", "poseData", "captionData", "vectorData", depth::REF_LOCAL] {
             let mut refs: Vec<enrich::EnrichmentRef> = Vec::new();
             for (pred, values) in &facts {
                 if pred != &format!("{PAN_NS}{ref_local}") {

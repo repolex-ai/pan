@@ -1,0 +1,10 @@
+{
+  "depth_png_b64": "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAAAAACMmsGiAAAAF0lEQVR4nGNgUPHIAeEJDEC8hQGIbwAAMrQGwbNv9q4AAAAASUVORK5CYII=",
+  "min": -1.2637,
+  "max": 9.3984,
+  "width": 4,
+  "height": 4,
+  "model": "depth-anything/Depth-Anything-V2-Base-hf",
+  "precision": "fp16-cuda",
+  "provider": "salad"
+}

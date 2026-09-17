@@ -19,6 +19,8 @@
 //!                           nouns the caption model listed), so this stage
 //!                           waits for a caption. The whole server answer is
 //!                           kept as a .json beside the record.
+//!   depth   `/percept/depth` → one pan:Depth per image: the map PNG and the
+//!                           node's sidecar beside the record (issue #24).
 
 use anyhow::{anyhow, Context, Result};
 use std::sync::Arc;
@@ -34,6 +36,7 @@ pub const STAGE_EMBED: &str = "embed";
 pub const STAGE_CAPTION: &str = "caption";
 pub const STAGE_POSE: &str = "pose";
 pub const STAGE_SAM3: &str = "sam3";
+pub const STAGE_DEPTH: &str = crate::depth::STAGE;
 
 /// Which graph link a stage's completion is read from: the data REFERENCE
 /// (`pan:regionData`, …), not a record (records hang off the reference via `pan:item`). A run that
@@ -47,6 +50,7 @@ pub fn link_for(stage: &str) -> Option<&'static str> {
         STAGE_CAPTION => Some("captionData"),
         STAGE_POSE => Some("poseData"),
         STAGE_SAM3 => Some("regionData"),
+        STAGE_DEPTH => Some(crate::depth::REF_LOCAL),
         _ => None,
     }
 }
@@ -60,7 +64,7 @@ pub fn link_for(stage: &str) -> Option<&'static str> {
 pub async fn run(d: Arc<Daemon>) {
     let every = Duration::from_secs(d.cfg.interval_secs);
     let mut loops = tokio::task::JoinSet::new();
-    for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE, STAGE_SAM3] {
+    for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE, STAGE_SAM3, STAGE_DEPTH] {
         if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
             continue;
         }
@@ -140,7 +144,7 @@ pub async fn mark_ready_pass(d: Arc<Daemon>) -> usize {
 pub async fn run_pass(d: Arc<Daemon>) -> usize {
     let mut done = 0usize;
     for store in d.stores.clone() {
-        for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE, STAGE_SAM3] {
+        for stage in [STAGE_EMBED, STAGE_CAPTION, STAGE_POSE, STAGE_SAM3, STAGE_DEPTH] {
             if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
                 continue;
             }
@@ -489,6 +493,25 @@ async fn run_one(
                 Ok(())
             })
             .await??;
+        }
+        STAGE_DEPTH => {
+            // One map per image, always: there is no "found nothing" for
+            // depth, so an empty answer is the node failing, and the image
+            // stays pending (transient) rather than being retired.
+            d.counters.model_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let answer = d.iris.depth(t, &bytes, media_type, meter).await?;
+            if answer.is_empty() {
+                return Err(CallError::Transient("depth: node answered without a map".into()).into());
+            }
+            if let Some(m) = answer.model.as_deref() {
+                if m != ep.model {
+                    tracing::warn!(configured = %ep.model, served = %m, "depth: the node names a different model than config; recording the configured name");
+                }
+            }
+            let s = store.clone();
+            let id = item.id.clone();
+            let model = ep.model.clone();
+            tokio::task::spawn_blocking(move || s.pan.write_depth(&id, &model, &answer).map(|_| ())).await??;
         }
         other => return Err(anyhow!("stage {other} is not runnable")),
     }

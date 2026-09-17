@@ -29,6 +29,7 @@
 //!           ├── caption/YYYY/MM/DD/<id>.<model>.xml
 //!           ├── pose/YYYY/MM/DD/<id>.xml (+ <id>.<model>.png overlay)
 //!           ├── sam3/YYYY/MM/DD/<id>.xml
+//!           ├── depth/YYYY/MM/DD/<id>.xml (+ <id>.<model>.png map, <id>.<model>.json sidecar)
 //!           └── vectors/<model>/<id>.npy (+ .json)
 //! ```
 //!

@@ -71,6 +71,7 @@ pub struct StoreCountsOut {
     pub embeddings: u64,
     pub poses: u64,
     pub regions: u64,
+    pub depths: u64,
 }
 
 /// The receipt for one stored file.
@@ -242,6 +243,7 @@ async fn health(State(d): State<Shared>) -> Json<HealthResponse> {
                         embeddings: c.embeddings,
                         poses: c.poses,
                         regions: c.regions,
+                        depths: c.depths,
                     }
                 })
                 .collect()
