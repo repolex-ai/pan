@@ -333,6 +333,9 @@ impl Iris {
     /// `choices[0].message.content` itself. `extra_body` (config) is merged
     /// into the top level verbatim — that is where `provider`,
     /// `chat_template_kwargs.enable_thinking`, `max_tokens` live.
+    // Eight inputs because that is the chat request's contract with the door;
+    // a struct would only rename them.
+    #[allow(clippy::too_many_arguments)]
     pub async fn vlm(
         &self,
         t: &Target,

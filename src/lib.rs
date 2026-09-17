@@ -23,6 +23,7 @@
 use anyhow::{anyhow, Context, Result};
 pub use oxigraph::model::Term;
 use oxigraph::model::{GraphName, Literal, NamedNode, Quad};
+use oxigraph::sparql::SparqlEvaluator;
 pub use oxigraph::sparql::{QueryResults, QuerySolution};
 use oxigraph::store::Store;
 use std::collections::{HashMap, HashSet};
@@ -590,7 +591,7 @@ impl Perception {
                         serde_json::Value::Null => String::new(),
                         x => x.to_string(),
                     };
-                    if !val.is_empty() && val.to_ascii_uppercase() != "N/A" {
+                    if !val.is_empty() && !val.eq_ignore_ascii_case("N/A") {
                         out.scene.push((other.to_string(), val));
                     }
                 }
@@ -751,6 +752,10 @@ pub struct StoreCounts {
     pub regions: u64,
     pub depths: u64,
 }
+
+/// The facts of one node as `pan info` shows them: one entry per predicate
+/// IRI with every value it carries, sorted by predicate.
+pub type NodeFacts = Vec<(String, Vec<String>)>;
 
 /// What exists for one media object, read from the graph alone.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1180,7 +1185,7 @@ impl Pan {
     // ── read ──────────────────────────────────────────────────────────────────
 
     /// Media bytes + facts by id.
-    pub fn get(&self, id: &str) -> Result<(Vec<u8>, Vec<(String, Vec<String>)>)> {
+    pub fn get(&self, id: &str) -> Result<(Vec<u8>, NodeFacts)> {
         let facts = self.facts_for(id)?;
         let media_path = facts
             .iter()
@@ -1194,14 +1199,14 @@ impl Pan {
 
     /// All facts on the object's subject: full-IRI predicate → values. Empty =
     /// unknown id.
-    pub fn facts_for(&self, id: &str) -> Result<Vec<(String, Vec<String>)>> {
+    pub fn facts_for(&self, id: &str) -> Result<NodeFacts> {
         let Some(subject) = self.subject_for(id)? else {
             return Ok(vec![]);
         };
         Self::facts_of(&self.store, &subject)
     }
 
-    fn facts_of(store: &Store, subject: &NamedNode) -> Result<Vec<(String, Vec<String>)>> {
+    fn facts_of(store: &Store, subject: &NamedNode) -> Result<NodeFacts> {
         let mut map: HashMap<String, Vec<String>> = HashMap::new();
         for quad in store.quads_for_pattern(
             Some(subject.into()),
@@ -1223,16 +1228,19 @@ impl Pan {
     pub fn node_field(&self, node_iri: &str, local: &str) -> Result<Option<String>> {
         let node =
             NamedNode::new(node_iri).map_err(|e| anyhow!("invalid node IRI {node_iri}: {e}"))?;
-        for q in self.store.quads_for_pattern(
-            Some((&node).into()),
-            Some(pan_iri(local).as_ref()),
-            None,
-            Some(GraphName::DefaultGraph.as_ref()),
-        ) {
-            let q = q.context("read node field")?;
-            return Ok(Some(term_str(&q.object)));
+        let first = self
+            .store
+            .quads_for_pattern(
+                Some((&node).into()),
+                Some(pan_iri(local).as_ref()),
+                None,
+                Some(GraphName::DefaultGraph.as_ref()),
+            )
+            .next();
+        match first {
+            Some(q) => Ok(Some(term_str(&q.context("read node field")?.object))),
+            None => Ok(None),
         }
-        Ok(None)
     }
 
     /// What exists for one object, from the graph alone.
@@ -1956,9 +1964,11 @@ impl Pan {
             self.prefix_prologue()
         );
         let mut candidate_ids: HashSet<String> = HashSet::new();
-        if let QueryResults::Solutions(sols) = self
-            .store
-            .query(&q)
+        if let QueryResults::Solutions(sols) = SparqlEvaluator::new()
+            .parse_query(&q)
+            .map_err(|e| anyhow!("search where-clause: {e}"))?
+            .on_store(&self.store)
+            .execute()
             .map_err(|e| anyhow!("search where-clause: {e}"))?
         {
             for s in sols {
@@ -1972,19 +1982,18 @@ impl Pan {
             return Ok(vec![]);
         }
         let mut indexes = self.indexes.lock().unwrap();
-        if !indexes.contains_key(index_name) {
-            if self
+        if !indexes.contains_key(index_name)
+            && self
                 .layout
                 .hnsw_root
                 .join(index_name)
                 .join("index.usearch")
                 .exists()
-            {
-                indexes.insert(
-                    index_name.to_string(),
-                    VectorIndex::create(&self.layout.hnsw_root, index_name, 0)?,
-                );
-            }
+        {
+            indexes.insert(
+                index_name.to_string(),
+                VectorIndex::create(&self.layout.hnsw_root, index_name, 0)?,
+            );
         }
         let vi = indexes
             .get_mut(index_name)
@@ -2029,8 +2038,11 @@ impl Pan {
     /// copia, pan.yml extras, rdf/rdfs/owl/xsd).
     pub fn query(&self, sparql: &str) -> Result<QueryResults<'_>> {
         let prologue = self.prefix_prologue();
-        self.store
-            .query(&format!("{prologue}{sparql}"))
+        SparqlEvaluator::new()
+            .parse_query(&format!("{prologue}{sparql}"))
+            .map_err(|e| anyhow!("SPARQL error: {e}"))?
+            .on_store(&self.store)
+            .execute()
             .map_err(|e| anyhow!("SPARQL error: {e}"))
     }
 

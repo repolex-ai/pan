@@ -85,7 +85,7 @@ fn wrong_dim_query_does_not_poison_index() {
     let put = store.put(&png, Some("image/png")).unwrap();
 
     let good: Vec<f32> = {
-        let mut v = vec![0.1f32; 8];
+        let mut v = [0.1f32; 8];
         v[0] = 1.0;
         let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
         v.iter().map(|x| x / n).collect()
@@ -159,16 +159,14 @@ fn traversal_index_name_is_rejected() {
 fn standard_adobe_xmp_ingests_and_garbage_is_refused() {
     // Build a PNG carrying a hand-rolled standard-Adobe packet.
     let png = make_png(4);
-    let packet = format!(
-        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
+    let packet = "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
          <x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n\
          <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
          <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n\
          <dc:title>Adobe Title</dc:title>\n\
          </rdf:Description>\n\
-         </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
-    );
-    let adobe_png = pan::xmp::write_packet_into_png_bytes(&png, &packet).unwrap();
+         </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>";
+    let adobe_png = pan::xmp::write_packet_into_png_bytes(&png, packet).unwrap();
 
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(

@@ -28,7 +28,6 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::PAN_NS;
 
-const XMP_TEXT_KEY: &str = "XML:com.adobe.xmp";
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
 // ── Packet authoring (lifted from Pool, pan: for pool:) ────────────────────
@@ -542,8 +541,12 @@ pub struct ParsedSubject {
     /// pointing at them: one inner list per struct, each a list of its fields.
     /// This is where an enrichment reference bag arrives — a predicate with
     /// several structured members, none of which is a plain literal.
-    pub structs: Vec<(String, Vec<Vec<(String, ObjTerm)>>)>,
+    pub structs: StructBags,
 }
+
+/// Struct-valued predicates of one subject: for each predicate, the structs
+/// it points at, each struct a list of its (field IRI, value) pairs.
+pub type StructBags = Vec<(String, Vec<Vec<(String, ObjTerm)>>)>;
 
 /// Parse an XMP packet with oxigraph's real RDF/XML parser.
 ///
@@ -720,10 +723,7 @@ pub fn parse_packet(packet: &str) -> Result<Vec<ParsedSubject>> {
     // Owner key: None = the media object (rdf:about=""), Some(iri) = a named
     // subject, Some("_:x") = a struct node (the `pan:image` wrapper owns the
     // reference bags, so it must be a valid owner or its contents vanish).
-    let mut structs_by_subject: HashMap<
-        Option<String>,
-        Vec<(String, Vec<Vec<(String, ObjTerm)>>)>,
-    > = HashMap::new();
+    let mut structs_by_subject: HashMap<Option<String>, StructBags> = HashMap::new();
     for quad in store.iter() {
         let quad = quad.context("XMP quad (struct-attach pass)")?;
         let owner: Option<String> = match &quad.subject {
