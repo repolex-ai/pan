@@ -14,7 +14,7 @@ configured.
 ```
 <store root>/                       <repo>/.pan, or the bare store directory
 ├── pan.yml                         config (optional)
-├── photosets/                      one file per curated set; committed
+├── imagesets/                      one file per curated set; committed
 │   └── abcd2345.xml
 └── _ignore/                        machine-local, never committed
     ├── oxigraph/                   the graph
@@ -55,7 +55,7 @@ finds all of either, and neither side needs to know the other's folder names.
 
 ## Each folder
 
-- **`photosets/`** — one XMP-style file per set a person curates, named by
+- **`imagesets/`** — one XMP-style file per set a person curates, named by
   the set's id. A set carries exactly its id, its description and its
   created date; it keeps no member list. Membership is `pan:relatedToId`
   on the image, written into the image's XMP and the graph. On every open

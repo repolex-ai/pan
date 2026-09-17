@@ -1,7 +1,8 @@
-//! Photosets over the Pan core (issue #4; pan.ttl 0.4.2, goodlux 2026-09-16):
-//! a set is three facts in its own file and in the graph; membership is
-//! pan:relatedToId on the image, in the graph AND in the image's XMP; the
-//! graph is rebuilt from photosets/*.xml on open.
+//! ImageSets over the Pan core (issue #4; pan.ttl 0.4.2, goodlux 2026-09-16;
+//! renamed from Photoset, pan.ttl 0.4.7, goodlux 2026-09-17): a set is three
+//! facts in its own file and in the graph; membership is pan:relatedToId on
+//! the image, in the graph AND in the image's XMP; the graph is rebuilt from
+//! imagesets/*.xml on open; only a pan:Image may be a member.
 
 use pan::Pan;
 
@@ -45,44 +46,44 @@ fn related_to(store: &Pan, id: &str) -> Vec<String> {
 fn a_set_is_a_file_and_a_node_and_membership_is_an_edge_from_the_image() {
     let dir = tempfile::tempdir().unwrap();
     let store = open_at(dir.path());
-    let set = store.photoset_create(Some("  portraits  ")).unwrap();
+    let set = store.imageset_create(Some("  portraits  ")).unwrap();
     assert_eq!(set.description.as_deref(), Some("portraits"), "trimmed, one value");
-    assert_eq!(set.iri, format!("{}Photoset/{}", pan::PAN_MEDIA_NS, set.id));
+    assert_eq!(set.iri, format!("{}ImageSet/{}", pan::PAN_MEDIA_NS, set.id));
 
-    // The file: photosets/<id>.xml at the store root, the three facts only.
-    let file = dir.path().join("photosets").join(format!("{}.xml", set.id));
+    // The file: imagesets/<id>.xml at the store root, the three facts only.
+    let file = dir.path().join("imagesets").join(format!("{}.xml", set.id));
     let text = std::fs::read_to_string(&file).expect("the set has its own file");
-    assert!(text.contains(&format!("<pan:id>&lt;pan/Photoset/{}&gt;</pan:id>", set.id)), "{text}");
+    assert!(text.contains(&format!("<pan:id>&lt;pan/ImageSet/{}&gt;</pan:id>", set.id)), "{text}");
     assert!(text.contains("<pan:description>portraits</pan:description>"), "{text}");
     assert!(text.contains("<pan:createdDate>"), "{text}");
     assert!(!text.contains("member") && !text.contains("git-lex"), "{text}");
 
     // The graph: the node under the universals.
-    let listed = store.photoset_list().unwrap();
+    let listed = store.imageset_list().unwrap();
     assert_eq!(listed, vec![set.clone()]);
-    assert_eq!(store.photoset_get(&set.id).unwrap(), Some(set.clone()));
+    assert_eq!(store.imageset_get(&set.id).unwrap(), Some(set.clone()));
     let mut typed = 0;
     if let pan::QueryResults::Solutions(sols) =
-        store.query(&format!("SELECT ?d WHERE {{ <{}> a pan:Photoset ; git-lex:description ?d ; git-lex:createdDate ?c }}", set.iri)).unwrap()
+        store.query(&format!("SELECT ?d WHERE {{ <{}> a pan:ImageSet ; pan:description ?d ; pan:createdDate ?c }}", set.iri)).unwrap()
     {
         for s in sols {
             s.unwrap();
             typed += 1;
         }
     }
-    assert_eq!(typed, 1, "the set is a pan:Photoset with git-lex:description and git-lex:createdDate in the graph");
+    assert_eq!(typed, 1, "the set is a pan:ImageSet with pan:description and pan:createdDate in the graph");
 
     // Membership: relatedToId from the image, in the graph and in its XMP.
     let a = store.put(&make_png(8, 8, 1), Some("image/png")).unwrap().id;
     let b = store.put(&make_png(8, 8, 2), Some("image/png")).unwrap().id;
-    store.photoset_add(&set.id, &a).unwrap();
-    store.photoset_add(&set.id, &b).unwrap();
-    store.photoset_add(&set.id, &a).unwrap(); // twice is once
+    store.imageset_add(&set.id, &a).unwrap();
+    store.imageset_add(&set.id, &b).unwrap();
+    store.imageset_add(&set.id, &a).unwrap(); // twice is once
     assert_eq!(related_to(&store, &a), vec![set.iri.clone()], "one edge, the set's IRI, not a string");
     let xmp = xmp_of(&store, &a);
-    assert!(xmp.contains(&format!("<pan:relatedToId>&lt;pan/Photoset/{}&gt;</pan:relatedToId>", set.id)), "{xmp}");
+    assert!(xmp.contains(&format!("<pan:relatedToId>&lt;pan/ImageSet/{}&gt;</pan:relatedToId>", set.id)), "{xmp}");
     assert_eq!(xmp.matches("<pan:relatedToId>").count(), 1, "{xmp}");
-    let mut members = store.photoset_members(&set.id).unwrap();
+    let mut members = store.imageset_members(&set.id).unwrap();
     members.sort();
     let mut want = vec![format!("{}Image/{a}", pan::PAN_MEDIA_NS), format!("{}Image/{b}", pan::PAN_MEDIA_NS)];
     want.sort();
@@ -90,25 +91,41 @@ fn a_set_is_a_file_and_a_node_and_membership_is_an_edge_from_the_image() {
     assert!(!std::fs::read_to_string(&file).unwrap().contains(&a), "adding a member does not touch the set's file");
 
     // Two sets, one image: two edges, two elements.
-    let set2 = store.photoset_create(None).unwrap();
+    let set2 = store.imageset_create(None).unwrap();
     assert_eq!(set2.description, None, "a set may have no description");
-    store.photoset_add(&set2.id, &a).unwrap();
+    store.imageset_add(&set2.id, &a).unwrap();
     assert_eq!(related_to(&store, &a).len(), 2);
     assert_eq!(xmp_of(&store, &a).matches("<pan:relatedToId>").count(), 2);
 
     // Remove: the edge goes from the graph and the XMP; the other set stays.
-    store.photoset_remove(&set.id, &a).unwrap();
-    store.photoset_remove(&set.id, &a).unwrap(); // not a member = no change
+    store.imageset_remove(&set.id, &a).unwrap();
+    store.imageset_remove(&set.id, &a).unwrap(); // not a member = no change
     assert_eq!(related_to(&store, &a), vec![set2.iri.clone()]);
     let xmp = xmp_of(&store, &a);
-    assert!(!xmp.contains(&format!("Photoset/{}", set.id)), "{xmp}");
-    assert!(xmp.contains(&format!("Photoset/{}", set2.id)), "{xmp}");
-    assert_eq!(store.photoset_members(&set.id).unwrap(), vec![format!("{}Image/{b}", pan::PAN_MEDIA_NS)]);
+    assert!(!xmp.contains(&format!("ImageSet/{}", set.id)), "{xmp}");
+    assert!(xmp.contains(&format!("ImageSet/{}", set2.id)), "{xmp}");
+    assert_eq!(store.imageset_members(&set.id).unwrap(), vec![format!("{}Image/{b}", pan::PAN_MEDIA_NS)]);
 
     // Unknown set or image: refused, nothing written.
-    assert!(store.photoset_add("zzzzzzzz", &a).unwrap_err().to_string().contains("photoset not found"));
-    assert!(store.photoset_add(&set.id, "zzzzzzzz").unwrap_err().to_string().contains("id not found"));
-    assert_eq!(store.photoset_get("zzzzzzzz").unwrap(), None);
+    assert!(store.imageset_add("zzzzzzzz", &a).unwrap_err().to_string().contains("imageset not found"));
+    assert!(store.imageset_add(&set.id, "zzzzzzzz").unwrap_err().to_string().contains("id not found"));
+    assert_eq!(store.imageset_get("zzzzzzzz").unwrap(), None);
+}
+
+#[test]
+fn an_imageset_refuses_media_that_is_not_an_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_at(dir.path());
+    let set = store.imageset_create(Some("images only")).unwrap();
+    // Anything not image/* is stored as delivered under the base class pan:Media.
+    let other = store.put(b"not a picture at all", Some("application/octet-stream")).unwrap().id;
+    let err = store.imageset_add(&set.id, &other).unwrap_err().to_string();
+    assert!(err.contains("pan:Media") && err.contains("not a pan:Image") && err.contains("images only"), "{err}");
+    assert_eq!(store.imageset_members(&set.id).unwrap(), Vec::<String>::new(), "nothing was written");
+    assert!(related_to(&store, &other).is_empty(), "no edge on the refused media");
+    let image = store.put(&make_png(8, 8, 9), Some("image/png")).unwrap().id;
+    store.imageset_add(&set.id, &image).unwrap();
+    assert_eq!(store.imageset_members(&set.id).unwrap(), vec![format!("{}Image/{image}", pan::PAN_MEDIA_NS)]);
 }
 
 #[test]
@@ -116,40 +133,40 @@ fn the_graph_is_rebuilt_from_the_set_files_on_open() {
     let dir = tempfile::tempdir().unwrap();
     let (set, edited) = {
         let store = open_at(dir.path());
-        let set = store.photoset_create(Some("first")).unwrap();
+        let set = store.imageset_create(Some("first")).unwrap();
         // A set written by hand while pand was down: a file is enough.
-        let edited = pan::Photoset {
+        let edited = pan::ImageSet {
             id: "handmade".into(),
-            iri: format!("{}Photoset/handmade", pan::PAN_MEDIA_NS),
+            iri: format!("{}ImageSet/handmade", pan::PAN_MEDIA_NS),
             description: Some("made by hand".into()),
             created_date: "2026-09-16T10:00:00-07:00".into(),
         };
-        std::fs::write(dir.path().join("photosets/handmade.xml"), pan::photoset::build_photoset_file(&edited)).unwrap();
+        std::fs::write(dir.path().join("imagesets/handmade.xml"), pan::imageset::build_imageset_file(&edited)).unwrap();
         // And the first set's file changed its description under the graph's feet.
-        let changed = pan::Photoset { description: Some("renamed on disk".into()), ..set.clone() };
-        std::fs::write(dir.path().join("photosets").join(format!("{}.xml", set.id)), pan::photoset::build_photoset_file(&changed)).unwrap();
+        let changed = pan::ImageSet { description: Some("renamed on disk".into()), ..set.clone() };
+        std::fs::write(dir.path().join("imagesets").join(format!("{}.xml", set.id)), pan::imageset::build_imageset_file(&changed)).unwrap();
         (set, edited)
     };
     let store = open_at(dir.path());
-    let mut listed = store.photoset_list().unwrap();
+    let mut listed = store.imageset_list().unwrap();
     listed.sort_by(|a, b| a.id.cmp(&b.id));
     assert_eq!(listed.len(), 2, "both files became nodes");
-    assert_eq!(store.photoset_get("handmade").unwrap(), Some(edited));
-    assert_eq!(store.photoset_get(&set.id).unwrap().unwrap().description.as_deref(), Some("renamed on disk"), "the file wins over the graph");
+    assert_eq!(store.imageset_get("handmade").unwrap(), Some(edited));
+    assert_eq!(store.imageset_get(&set.id).unwrap().unwrap().description.as_deref(), Some("renamed on disk"), "the file wins over the graph");
 }
 
 #[test]
 fn a_set_file_whose_name_and_id_disagree_refuses_the_open() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("pan.yml"), "storage_id: test-store\n").unwrap();
-    std::fs::create_dir_all(dir.path().join("photosets")).unwrap();
-    let p = pan::Photoset {
+    std::fs::create_dir_all(dir.path().join("imagesets")).unwrap();
+    let p = pan::ImageSet {
         id: "abcd2345".into(),
-        iri: format!("{}Photoset/abcd2345", pan::PAN_MEDIA_NS),
+        iri: format!("{}ImageSet/abcd2345", pan::PAN_MEDIA_NS),
         description: None,
         created_date: "2026-09-16T10:00:00-07:00".into(),
     };
-    std::fs::write(dir.path().join("photosets/other.xml"), pan::photoset::build_photoset_file(&p)).unwrap();
+    std::fs::write(dir.path().join("imagesets/other.xml"), pan::imageset::build_imageset_file(&p)).unwrap();
     let err = match Pan::open(dir.path()) {
         Ok(_) => panic!("a set file whose name and id disagree must refuse the open"),
         Err(e) => format!("{e:#}"),

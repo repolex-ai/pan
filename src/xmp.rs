@@ -79,7 +79,7 @@ pub struct ThumbRef {
 
 #[derive(Debug, Clone, Default)]
 pub struct ImagePacket {
-    /// The media object's full IRI (`git-lex:id`).
+    /// The media object's full IRI (`pan:id`).
     pub iri: String,
     pub media_path: String,
     pub created_date: String,
@@ -101,8 +101,8 @@ pub struct ImagePacket {
     /// Facts a person set with `pan set`, `(local name, value)`, e.g.
     /// `("rating", "4")` — the settable fields of pan.ttl.
     pub curation: Vec<(String, String)>,
-    /// References Pan itself put on the image, in bracket form — photoset
-    /// membership, `<pan/Photoset/id>`, one `pan:relatedToId` element each
+    /// References Pan itself put on the image, in bracket form — imageset
+    /// membership, `<pan/ImageSet/id>`, one `pan:relatedToId` element each
     /// (pan.ttl 0.4.2). A producer's relatedToId is not here: it stays in
     /// the producer's own Description.
     pub related_to: Vec<String>,
@@ -166,11 +166,10 @@ pub fn build_packet(p: &ImagePacket) -> String {
 /// namespaces, never git-lex (goodlux, 2026-09-07). Other namespaces ride in
 /// their own Descriptions, untouched.
 ///
-/// Identity and creation time are `pan:id` and `pan:createdDate` in the file;
-/// in the graph the same two facts are the universal `git-lex:id` and
-/// `git-lex:createdDate` (a pan:Image is a git-lex Thing; universal renamed with base kit 0.18.0). The
-/// file names are Pan's, the graph names are git-lex's; the conversion is at
-/// the boundary, never in the file (goodlux, 2026-09-05 and 2026-09-07).
+/// Identity and creation time are `pan:id` and `pan:createdDate`, in the
+/// file AND in the graph — one spelling, no translation at the boundary
+/// (goodlux, 2026-09-17). pan:id is the universal id by owl:equivalentProperty
+/// in pan.ttl, so a git-lex or subtexture query still finds it.
 ///
 /// Every identity in the file is written in git-lex's angle-bracket form,
 /// `<pan/Image/id>` — the same text a soul writes in frontmatter — never the
@@ -404,7 +403,8 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
         .map_err(|e| anyhow!("XMP in the file is not valid RDF/XML: {e}"))?;
     // Pan's own Description is already out. What is left out here is only
     // what must never travel between stores: pan: vocabulary (a previous
-    // store's paths and records) and git-lex:id (identity). Everything else a
+    // store's paths and records) and a git-lex:id some older writer put in
+    // the file (identity of that store, never this object's). Everything else a
     // producer asserts loads as written — Pan builds no rules around what a
     // particular producer happens to send (Rob, 2026-09-07); a wrong subject
     // in a producer's block is the producer's to fix.

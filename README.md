@@ -29,10 +29,10 @@ pan info  '<https://repolex.ai/pan/Image/k7m2p9x4>'
 pan set '<https://repolex.ai/pan/Image/k7m2p9x4>' rating=4 isPicked=true
 
 # 5. Curate a set; membership is written on the image, in the graph and its XMP
-pan photoset create "portraits"
-# → <pan/Photoset/abcd2345>
-pan photoset add '<pan/Photoset/abcd2345>' '<pan/Image/k7m2p9x4>'
-pan photoset show '<pan/Photoset/abcd2345>'
+pan imageset create "portraits"
+# → <pan/ImageSet/abcd2345>
+pan imageset add '<pan/ImageSet/abcd2345>' '<pan/Image/k7m2p9x4>'
+pan imageset show '<pan/ImageSet/abcd2345>'
 
 # 6. Query the knowledge graph via SPARQL
 pan query 'SELECT ?s ?r WHERE { ?s pan:rating ?r . FILTER(?r >= 4) }'
@@ -69,7 +69,7 @@ Pan bridges this gap by turning any local directory or external photographic vol
   * **3D Depth & Spatial Geometry:** Understands focal planes, depth-of-field, and subject isolation (`depth-anything-v2-base`).
   * **Face Recognition:** Identifies and groups the same person across years of historical shoots without manual tagging (`insightface`).
   * **Visual Similarity & Duplicate Detection:** Finds visually similar frames and flags near-duplicate burst shots instantly.
-* **LoRA & Fine-Tuning Dataset Curation & Evaluation:** Curate, prep, track, and evaluate model training runs from a single unified system. Assemble training candidates into Photosets, generate rich captions and descriptive tags, track model checkpoints, and **directly compare generated synthetic renders side-by-side with your actual ground-truth source photos** to verify subject likeness, lighting transfer, and anatomical fidelity.
+* **LoRA & Fine-Tuning Dataset Curation & Evaluation:** Curate, prep, track, and evaluate model training runs from a single unified system. Assemble training candidates into ImageSets, generate rich captions and descriptive tags, track model checkpoints, and **directly compare generated synthetic renders side-by-side with your actual ground-truth source photos** to verify subject likeness, lighting transfer, and anatomical fidelity.
 * **Crash-Proof & Drive-Friendly:** All metadata is stored in standard industry-standard formats (open XMP sidecars and local graph files) directly alongside your media. Unplugging an external hard drive mid-scan or rebooting your computer will never corrupt your catalog; Pan resumes indexing automatically right where it left off.
 * **Instant Culling & Agent Dual-Control:** Pairs directly with `pan-ui` for ultra-fast keyboard-driven photo review and culling. Autonomous AI agents can also steer the screen in real-time (`pansee`) to present visual search results directly to you.
 

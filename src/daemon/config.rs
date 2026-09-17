@@ -137,7 +137,7 @@ pub struct DaemonConfig {
     pub interval_secs: u64,
     pub batch: usize,
     /// The backfill floor: images created BEFORE this (RFC 3339, local offset,
-    /// same shape as git-lex:createdDate) are never handed to a stage. Newest
+    /// same shape as pan:createdDate) are never handed to a stage. Newest
     /// first still applies above it. Absent = no floor, walk everything.
     /// (Rob, 2026-09-05: a reasonable floor is mine to pick; picked midnight
     /// of the day the remote stages first came on.)
