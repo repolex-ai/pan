@@ -539,7 +539,7 @@ mod perception_tests {
         // pan.ttl 0.4.1 (goodlux, 2026-09-16): the deployment node and its
         // six properties, declared ahead of the code that will write them.
         for decl in [
-            "\npan:Instance a owl:Class ;\n    rdfs:subClassOf git-lex:Thing",
+            "\npan:Instance a owl:Class ;\n    rdfs:subClassOf pan:Node",
             "\npan:primaryGraph a owl:DatatypeProperty",
             "\npan:localGraph a owl:DatatypeProperty",
             "\npan:fsRoot a owl:DatatypeProperty",
