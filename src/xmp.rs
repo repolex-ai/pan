@@ -1040,7 +1040,7 @@ pub(crate) mod tests {
             media_path: "image/2026/09/04/abc123xy.png".into(),
             created_date: "2026-09-04T01:00:00-07:00".into(),
             curation: vec![],
-            thumbnail: Some(ThumbRef { id: "th1umb01".into(), path: "thumbnail/2026/09/04/abc123xy.jpg".into(), width: 341, height: 512 }),
+            thumbnail: Some(ThumbRef { id: "th1umb01".into(), path: "image/img/jpg/2026/09/04/abc123xy_512.jpg".into(), width: 341, height: 512 }),
             ..Default::default()
         });
         let packet = compose_packet(Some(&arrived), &pan_desc);
@@ -1249,7 +1249,7 @@ mod flat_block_tests {
             scene_objects: vec!["wolf".into(), "rock".into(), "sky".into()],
             scene: vec![("sceneMood".into(), "still".into())],
             curation: vec![],
-            thumbnail: Some(ThumbRef { id: "th2umb02".into(), path: "thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), width: 341, height: 512 }),
+            thumbnail: Some(ThumbRef { id: "th2umb02".into(), path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(), width: 341, height: 512 }),
             enrichment: vec![(
                 "captionData".into(),
                 vec![crate::enrich::EnrichmentRef {
@@ -1324,7 +1324,7 @@ mod flat_block_tests {
             long_description: Some("A sample caption, at length.".into()),
             scene_objects: vec!["wolf".into()],
             curation: vec![],
-            thumbnail: Some(ThumbRef { id: "th3umb03".into(), path: "thumbnail/2026/09/05/20260905-000009-altocnif.jpg".into(), width: 341, height: 512 }),
+            thumbnail: Some(ThumbRef { id: "th3umb03".into(), path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(), width: 341, height: 512 }),
             enrichment: vec![(
                 "captionData".into(),
                 vec![crate::enrich::EnrichmentRef {

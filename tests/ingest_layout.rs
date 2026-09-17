@@ -1,0 +1,86 @@
+//! Where an arrival lands (goodlux, 2026-09-16): the source is always a PNG
+//! under img/source/, a non-PNG arrival is kept as delivered under
+//! img/original/, the thumbnail is the _512 JPEG under img/jpg/.
+
+use pan::Pan;
+
+fn open() -> (tempfile::TempDir, Pan) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("pan.yml"), "storage_id: test-store\n").unwrap();
+    let store = Pan::open(dir.path()).unwrap();
+    (dir, store)
+}
+
+fn jpeg(w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x * 5) as u8, (y * 9) as u8, 77]));
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92).encode_image(&img).unwrap();
+    out
+}
+
+fn png(w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x * 5) as u8, (y * 9) as u8, 77]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(img).write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+#[test]
+fn a_jpeg_arrival_is_kept_as_original_and_worked_from_as_png() {
+    let (_dir, store) = open();
+    let arrival = jpeg(64, 40);
+    let r = store.put(&arrival, Some("image/jpeg")).unwrap();
+
+    assert!(r.media_path.starts_with("image/img/source/"), "{}", r.media_path);
+    assert!(r.media_path.ends_with(&format!("{}.png", r.id)), "{}", r.media_path);
+    let original = r.original_path.clone().expect("a converted arrival keeps its original");
+    assert!(original.starts_with("image/img/original/"), "{original}");
+    assert!(original.ends_with(&format!("{}.jpg", r.id)), "{original}");
+
+    let source = std::fs::read(store.layout.abs(&r.media_path)).unwrap();
+    assert!(pan::xmp::is_png(&source), "the source is a PNG");
+    let packet = pan::xmp::read_xmp_packet_from_bytes(&source).unwrap().expect("Pan's XMP is inside the source");
+    assert!(packet.contains(&format!("&lt;pan/Image/{}&gt;", r.id)));
+
+    let kept = std::fs::read(store.layout.abs(&original)).unwrap();
+    assert_eq!(kept, arrival, "the original is the bytes as delivered");
+
+    let a = image::load_from_memory(&arrival).unwrap().to_rgb8();
+    let b = image::load_from_memory(&source).unwrap().to_rgb8();
+    assert_eq!(a.as_raw(), b.as_raw(), "same pixels in the PNG as the decoder saw");
+
+    let (_, facts) = store.get(&r.id).unwrap();
+    let media_type = facts.iter().find(|(p, _)| p.ends_with("/mediaType")).map(|(_, v)| v[0].clone()).unwrap();
+    assert_eq!(media_type, "image/png", "the stored bytes are PNG, and the graph says so");
+    let thumb = facts.iter().find(|(p, _)| p.ends_with("/thumbnail")).expect("a thumbnail node");
+    assert_eq!(thumb.1.len(), 1);
+    let thumb_path = std::fs::read_dir(store.layout.media_root.join("image/img/jpg")).map(|_| ()).is_ok();
+    assert!(thumb_path, "thumbnails live under img/jpg/");
+}
+
+#[test]
+fn a_png_arrival_has_no_original() {
+    let (_dir, store) = open();
+    let r = store.put(&png(64, 40), Some("image/png")).unwrap();
+    assert!(r.original_path.is_none());
+    assert!(r.media_path.starts_with("image/img/source/"));
+    assert!(!store.layout.media_root.join("image/img/original").exists());
+    let thumbs: Vec<_> = walk(&store.layout.media_root.join("image/img/jpg"));
+    assert_eq!(thumbs.len(), 1);
+    assert!(thumbs[0].ends_with(&format!("{}_512.jpg", r.id)), "{}", thumbs[0]);
+}
+
+fn walk(dir: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walk(&p));
+            } else {
+                out.push(p.to_string_lossy().into_owned());
+            }
+        }
+    }
+    out
+}

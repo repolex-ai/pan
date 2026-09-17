@@ -33,13 +33,18 @@ kind, then by what the file is.
 ```
 <media root>/                          the store's media, one folder per media kind
 └── image/
-    ├── source/YYYY/MM/DD/             the media files, bytes as delivered, XMP written in
-    │   └── 20260907-043526-v5ha2dfd.png
-    ├── thumbnail/YYYY/MM/DD/          512 px JPEG per file
-    ├── caption/YYYY/MM/DD/            one XML record per model run, beside the model's raw answer
-    ├── pose/YYYY/MM/DD/               keypoints per person, plus an overlay image
-    ├── sam3/YYYY/MM/DD/               regions per prompt (bbox, polygon, score), plus the raw answer
-    └── vectors/<model>/               one .npy per image, plus the server's answer as .json
+    ├── img/                               pixels: the pictures and their renditions
+    │   ├── original/YYYY/MM/DD/           what arrived, when it was not PNG; kept, never read again
+    │   │   └── 20260907-043526-v5ha2dfd.jpg
+    │   ├── source/YYYY/MM/DD/             THE image: always PNG, XMP written in, what every stage reads
+    │   │   └── 20260907-043526-v5ha2dfd.png
+    │   └── jpg/YYYY/MM/DD/                derived JPEG sizes, named by long edge; the thumbnail is _512
+    │       └── 20260907-043526-v5ha2dfd_512.jpg
+    └── data/                              model output: records about the picture
+        ├── caption/YYYY/MM/DD/            one XML record per model run, the raw answer inside
+        ├── pose/YYYY/MM/DD/               keypoints per person, plus an overlay image
+        ├── sam3/YYYY/MM/DD/               regions per prompt (bbox, polygon, score)
+        └── vectors/<model>/               one .npy per image, plus the server's answer as .json
 
 <store root>/                          the store itself
 ├── pan.yml                            the store's own settings (today: its id)
@@ -50,7 +55,11 @@ kind, then by what the file is.
 
 A bare store puts its media root inside `_ignore/media/`. When a media volume
 is configured, the media root is `<volume>/_pan/<first 6 chars of the store
-id>/pan/` and the folder above is what you find there.
+id>/pan/` and the folder above is what you find there. The full layout, with
+the naming rules, is in `docs/2026_09_16_PAN_FILE_LAYOUT.md`.
+
+The source image is always PNG. A JPEG, WebP, GIF or TIFF that arrives is
+converted once, and the bytes as delivered are kept under `img/original/`.
 
 The file name of a stored image is `<local date>-<local time>-<id>.<ext>`.
 The id is the last eight characters and is the same id the graph uses:

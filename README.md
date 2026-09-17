@@ -115,7 +115,7 @@ models:                                  # External perception model stages (opt
 
 1. **XMP Harvest:** Incoming image metadata is parsed using an RDF/XML parser (`rdf:about=""` binds to the new image node).
 2. **Disk Storage:** Image bytes land in the store path, and Pan appends its own identity and enrichment block to the XMP packet.
-3. **Thumbnail Generation:** 512px square-padded JPEG thumbnails are generated for fast preview.
+3. **Thumbnail Generation:** a 512 px long-edge JPEG rendition is written under `img/jpg/` for fast preview.
 4. **Atomic Graph Commit:** Statements and file records are committed to Oxigraph in a single atomic transaction.
 5. **Background Stage Ladder:** `pand` queries the graph for images lacking configured model outputs, invokes models via bounded HTTP worker pools, and saves vectors (`.npy`) and overlays (`.xml`/`.png`).
 
@@ -130,10 +130,15 @@ models:                                  # External perception model stages (opt
     ├── oxigraph/                             # Oxigraph embedded RDF database
     ├── hnsw/                                 # Vector search indexes
     │   └── <model>/                          # USearch HNSW index per embedding model
-    └── media/                                # Media assets (or symlink to external volume)
-        ├── image/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.png
-        ├── thumbnail/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.jpg
-        ├── vectors/<model>/<id>.npy
-        ├── caption/YYYY/MM/DD/<id>.<model>.xml
-        └── pose/YYYY/MM/DD/<id>.xml
+    └── media/                                # Media root (or <volume>/_pan/<6-char id>/pan)
+        └── image/                            # one folder per media kind
+            ├── img/                          # pixels
+            │   ├── original/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.jpg   # the arrival, when it was not PNG
+            │   ├── source/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.png     # THE image: always PNG, XMP inside
+            │   └── jpg/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>_512.jpg    # derived JPEG sizes, named by long edge
+            └── data/                         # model output
+                ├── caption/YYYY/MM/DD/<id>.<model>.xml
+                ├── pose/YYYY/MM/DD/<id>.xml
+                ├── sam3/YYYY/MM/DD/<id>.xml
+                └── vectors/<model>/<id>.npy
 ```

@@ -31,6 +31,7 @@ use std::sync::Mutex;
 use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 
 pub mod config;
+pub mod convert;
 pub mod daemon;
 pub mod enrich;
 pub mod facts;
@@ -283,6 +284,9 @@ pub struct PutResult {
     /// The full IRI written for this object (`git-lex:id`).
     pub iri: String,
     pub media_path: String,
+    /// Where the bytes as delivered were kept, when the arrival was not PNG
+    /// and was converted (`img/original/…`). None = the arrival was stored as is.
+    pub original_path: Option<String>,
     pub created_date: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -669,7 +673,7 @@ impl Pan {
         }
         if let Ok(kinds) = fs::read_dir(&self.layout.media_root) {
             for k in kinds.filter_map(|e| e.ok()) {
-                let v = k.path().join(PanLayout::VECTORS_SUBDIR);
+                let v = k.path().join(PanLayout::DATA_SUBDIR).join(PanLayout::VECTORS_SUBDIR);
                 if v.is_dir() {
                     fs::remove_dir_all(&v).with_context(|| format!("remove {}", v.display()))?;
                 }
@@ -749,18 +753,34 @@ impl Pan {
     /// Order: bytes on disk (with Pan's XMP written in, nothing stripped) →
     /// thumbnail → ONE graph transaction. Failure before the commit removes
     /// the files written so far.
-    pub fn put(&self, bytes: &[u8], content_type: Option<&str>) -> Result<PutResult> {
-        let png = xmp::is_png(bytes);
-        let media_type = content_type
+    pub fn put(&self, arrived: &[u8], content_type: Option<&str>) -> Result<PutResult> {
+        let arrived_png = xmp::is_png(arrived);
+        let arrived_type = content_type
             .map(|s| s.to_string())
-            .unwrap_or_else(|| if png { "image/png".to_string() } else { "application/octet-stream".to_string() });
-        let ext = match media_type.as_str() {
+            .unwrap_or_else(|| if arrived_png { "image/png".to_string() } else { "application/octet-stream".to_string() });
+        let arrived_ext = match arrived_type.as_str() {
             "image/png" => "png",
             "image/jpeg" => "jpg",
             "image/webp" => "webp",
             "image/gif" => "gif",
+            "image/tiff" => "tiff",
             _ => "bin",
         };
+
+        // The managed store keeps ONE working format for images: PNG
+        // (goodlux, 2026-09-16). A non-PNG image is decoded once and written
+        // as PNG under img/source/; the bytes as delivered are kept under
+        // img/original/ and never read again. Other media kinds are stored as
+        // delivered. Metadata carry-over from the arrival is #23.
+        let convert = arrived_type.starts_with("image/") && !arrived_png;
+        let converted: Vec<u8>;
+        let (bytes, media_type, ext): (&[u8], String, &str) = if convert {
+            converted = convert::to_png(arrived).with_context(|| format!("convert {arrived_type} arrival to PNG"))?;
+            (&converted, "image/png".to_string(), "png")
+        } else {
+            (arrived, arrived_type.clone(), arrived_ext)
+        };
+        let png = xmp::is_png(bytes);
 
         let id = self.mint_pan_id()?;
         let subject = media_subject_iri(&media_type, &id)?;
@@ -770,6 +790,10 @@ impl Pan {
         let kind = PanLayout::media_kind(&media_type);
         let rel_path = PanLayout::media_rel_path(kind, &shard, &stem, ext);
         let abs_path = self.layout.abs(&rel_path);
+        // The arrival, kept beside the source when it was converted. A
+        // `pan:sourceFile` fact naming it belongs on the image once the
+        // ontology declares it; until then the path is only in PutResult.
+        let original_rel = convert.then(|| PanLayout::original_rel_path(kind, &shard, &stem, arrived_ext));
 
         let mut quads = vec![
             Quad::new(subject.clone(), rdf_type(), pan_iri(media_class(&media_type)), GraphName::DefaultGraph),
@@ -812,7 +836,7 @@ impl Pan {
                     height = Some(t.source_height);
                     quads.push(self.quad(&subject, "width", &t.source_width.to_string()));
                     quads.push(self.quad(&subject, "height", &t.source_height.to_string()));
-                    let rel = PanLayout::thumbnail_rel_path(kind, &shard, &stem);
+                    let rel = PanLayout::thumbnail_rel_path(kind, &shard, &stem, thumbnail::THUMB_MAX_EDGE);
                     let tid = gen_pan_id();
                     let tnode = NamedNode::new(format!("{PAN_MEDIA_NS}Thumbnail/{tid}")).map_err(|e| anyhow!("thumbnail IRI: {e}"))?;
                     quads.push(Quad::new(subject.clone(), pan_iri("thumbnail"), tnode.clone(), GraphName::DefaultGraph));
@@ -854,12 +878,22 @@ impl Pan {
                 }
                 write_atomic(&tabs, &thumb_jpeg).with_context(|| format!("write thumbnail {}", tabs.display()))?;
             }
+            if let Some(rel) = &original_rel {
+                let oabs = self.layout.abs(rel);
+                if let Some(parent) = oabs.parent() {
+                    fs::create_dir_all(parent).context("create original shard dir")?;
+                }
+                write_atomic(&oabs, arrived).with_context(|| format!("write original {}", oabs.display()))?;
+            }
             self.insert_quads(&quads)?;
             Ok(())
         };
         if let Err(e) = land() {
             let _ = fs::remove_file(&abs_path);
             if let Some(xmp::ThumbRef { path: rel, .. }) = &thumb {
+                let _ = fs::remove_file(self.layout.abs(rel));
+            }
+            if let Some(rel) = &original_rel {
                 let _ = fs::remove_file(self.layout.abs(rel));
             }
             return Err(e);
@@ -869,6 +903,7 @@ impl Pan {
             id,
             iri: subject.into_string(),
             media_path: rel_path,
+            original_path: original_rel,
             created_date,
             width,
             height,

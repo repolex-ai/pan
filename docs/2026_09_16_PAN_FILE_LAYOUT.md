@@ -1,0 +1,88 @@
+# Pan file layout
+
+Where Pan puts every file, and the rules the names follow. Ruled by goodlux,
+2026-09-16. This is what `pand` writes from that day on; nothing older is
+migrated.
+
+## The tree
+
+```
+<media root>/                       one per store; <volume>/_pan/<6-char id>/pan, or <store>/_ignore/media
+└── image/                          one folder per media kind (image, video, audio)
+    ├── img/                        PIXELS: the pictures and their renditions
+    │   ├── original/YYYY/MM/DD/
+    │   │   └── 20260916-101500-abcd1234.jpg
+    │   ├── source/YYYY/MM/DD/
+    │   │   └── 20260916-101500-abcd1234.png
+    │   └── jpg/YYYY/MM/DD/
+    │       └── 20260916-101500-abcd1234_512.jpg
+    └── data/                       MODEL OUTPUT: records about the pictures
+        ├── caption/YYYY/MM/DD/
+        │   └── abcd1234.qwen-qwen3.8-27b.xml
+        ├── pose/YYYY/MM/DD/
+        │   ├── abcd1234.xml
+        │   └── abcd1234.rtmw-x-l.png
+        ├── sam3/YYYY/MM/DD/
+        │   └── abcd1234.xml
+        └── vectors/
+            └── qwen3-vl-embedding-2b/
+                ├── abcd1234.npy
+                └── abcd1234.json
+```
+
+`img/` holds pictures. `data/` holds what models said about them. One glob
+finds all of either, and neither side needs to know the other's folder names.
+
+## Each folder
+
+- **`img/original/`** — the file exactly as it arrived, when it was not a
+  PNG (JPEG, WebP, GIF, TIFF). Kept for the record. Nothing reads it again.
+  A PNG arrival has no entry here.
+- **`img/source/`** — the image Pan works from. Always PNG. Pan's XMP is
+  written inside it, and every stage reads this file and no other. When the
+  arrival was not PNG, this is the decoded pixels written as PNG; the pixels
+  are the same as the decoder saw, verified by the conversion's own test.
+- **`img/jpg/`** — derived JPEG renditions. Today there is one, the 512 px
+  thumbnail. Other sizes go in the same folder with their own suffix.
+- **`data/caption/`** — one XML file per caption run: the reference, the
+  Caption record, and the model's whole answer verbatim.
+- **`data/pose/`** — one XML file per pose run, one Pose record per person,
+  plus the model's skeleton overlay as a PNG beside it.
+- **`data/sam3/`** — one XML file per segmentation run, one Region record per
+  thing outlined.
+- **`data/vectors/<model>/`** — one `.npy` vector per image per embedding
+  model, with the server's full answer beside it as `.json`. The searchable
+  copy lives in the store's index; these files are the rebuild source.
+
+## Naming rules
+
+**The stem.** `YYYYMMDD-HHMMSS-<id>`: the date and time the image was stored,
+in system local time, and its eight-character Pan id. The id is the same one
+the graph uses, `<pan/Image/abcd1234>`. Readers never parse the stem; the
+graph's `pan:mediaPath` is the path.
+
+**Sizes are suffixes, never folders.** A derived rendition carries its long
+edge in the file name: `_512`, `_1024`, `_2048`. There is no `thumbnail/`, no
+`large/`, no `preview/`. A folder names a format (`jpg/`, and `png/` if a PNG
+rendition such as an upscale is ever made); the suffix names the size. When
+a size changes, nothing is renamed but the file.
+
+**Square crops, reserved.** If a grid ever needs a square crop, it is
+`_<edge>_sq`, for example `…_512_sq.jpg`. Not built.
+
+**Model ids in file names.** A model id can contain a slash
+(`qwen/qwen3.8-27b`). In a file name every slash becomes a dash
+(`abcd1234.qwen-qwen3.8-27b.xml`, `vectors/qwen-qwen3.8-27b/`), because a
+slash in a path is a folder. The graph's `pan:model` keeps the real id.
+
+**Date shards everywhere.** Every per-image file sits under `YYYY/MM/DD/` of
+the image's stored date, so no folder ever holds more than one day's images.
+Vectors are the exception: they are keyed by model, and the index rebuild
+reads them all at once.
+
+## What the graph knows
+
+Every path in the graph (`pan:mediaPath`, `pan:path`, `pan:vectorPath`) is
+relative to the media root, and the media root is a fact on the store's own
+node (`pan:mediaRoot`). A reader resolves a path by joining the two; it never
+guesses from a naming convention.

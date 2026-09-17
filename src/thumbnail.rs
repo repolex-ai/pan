@@ -1,7 +1,7 @@
 //! Thumbnail generation — a reduced rendition Pan makes at ingest.
 //!
 //! Longest edge bounded to [`THUMB_MAX_EDGE`], JPEG output. Written beside
-//! the media under `thumbnail/YYYY/MM/DD/<id>.jpg` and declared on the image
+//! the media under `<kind>/img/jpg/YYYY/MM/DD/<stem>_512.jpg` and declared on the image
 //! as a `pan:Thumbnail` node (path, width, height) — never left to filesystem
 //! convention.
 

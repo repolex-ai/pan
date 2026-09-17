@@ -415,10 +415,12 @@ async fn run_one(
                         .and_then(|(_, v)| v.first().cloned())
                         .unwrap_or_default();
                     let shard = created.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
-                    let rel = crate::layout::PanLayout::derived_rel_path(
+                    let rel = crate::layout::PanLayout::overlay_rel_path(
                         crate::layout::PanLayout::media_kind(&media_type_owned),
                         "pose",
-                        &format!("{shard}/{id}.{model}.png"),
+                        &shard,
+                        &id,
+                        &model,
                     );
                     let abs = s.pan.layout.abs(&rel);
                     if let Some(p) = abs.parent() {
