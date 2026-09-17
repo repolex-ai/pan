@@ -150,6 +150,34 @@ pub struct Hit {
     pub score: f32,
 }
 
+/// One photoset: its three facts and, when asked for by id, its members.
+#[derive(Serialize, ToSchema)]
+pub struct PhotosetResponse {
+    /// `<pan/Photoset/abcd2345>` — the identity, bracket form.
+    pub id: String,
+    pub iri: String,
+    pub store: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub created_date: String,
+    /// The media whose `pan:relatedToId` names this set, bracket form.
+    /// Omitted from the list; present on one set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct PhotosetCreateBody {
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct PhotosetMemberBody {
+    /// `<pan/Image/x>`, the full IRI, or the bare id.
+    pub media: String,
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct ErrorBody {
     pub error: String,
@@ -182,6 +210,7 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("not a property a person may set")
         || msg.contains("nothing to set")
         || msg.contains("nothing to unset")
+        || msg.contains("photoset file")
     {
         ApiError(StatusCode::BAD_REQUEST, msg)
     } else {
@@ -626,16 +655,124 @@ async fn search(State(d): State<Shared>, Json(body): Json<SearchBody>) -> Result
     Ok(Json(SearchResponse { hits: out }))
 }
 
+// ── Photosets (issue #4; pan.ttl 0.4.2) ─────────────────────────────────────
+
+fn photoset_out(store: &Arc<super::StoreHandle>, p: crate::Photoset, media: Option<Vec<String>>) -> PhotosetResponse {
+    PhotosetResponse {
+        id: bracket_iri(&p.iri),
+        iri: p.iri,
+        store: store.entry.id.clone(),
+        description: p.description,
+        created_date: p.created_date,
+        media,
+    }
+}
+
+#[utoipa::path(get, path = "/photosets", tag = "photoset",
+    responses((status = 200, body = Vec<PhotosetResponse>)))]
+async fn photosets(State(d): State<Shared>) -> Result<Json<Vec<PhotosetResponse>>, ApiError> {
+    photosets_in(&d, None).await
+}
+
+#[utoipa::path(get, path = "/stores/{id}/photosets", tag = "photoset", params(("id" = String, Path, description = "Store id")),
+    responses((status = 200, body = Vec<PhotosetResponse>), (status = 404, body = ErrorBody)))]
+async fn store_photosets(State(d): State<Shared>, AxPath(store_id): AxPath<String>) -> Result<Json<Vec<PhotosetResponse>>, ApiError> {
+    photosets_in(&d, Some(&store_id)).await
+}
+
+async fn photosets_in(d: &Daemon, store_id: Option<&str>) -> Result<Json<Vec<PhotosetResponse>>, ApiError> {
+    let store = d.store_for(store_id).map_err(map_err)?;
+    let sets = store.pan.photoset_list().map_err(map_err)?;
+    Ok(Json(sets.into_iter().map(|p| photoset_out(&store, p, None)).collect()))
+}
+
+#[utoipa::path(post, path = "/photosets", tag = "photoset",
+    request_body(content = PhotosetCreateBody, description = "The set's description; nothing else is on a set"),
+    responses((status = 201, body = PhotosetResponse), (status = 400, body = ErrorBody)))]
+async fn create_photoset(State(d): State<Shared>, Json(body): Json<PhotosetCreateBody>) -> Result<(StatusCode, Json<PhotosetResponse>), ApiError> {
+    create_photoset_in(&d, None, body).await
+}
+
+#[utoipa::path(post, path = "/stores/{id}/photosets", tag = "photoset", params(("id" = String, Path, description = "Store id")),
+    request_body(content = PhotosetCreateBody),
+    responses((status = 201, body = PhotosetResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn create_store_photoset(State(d): State<Shared>, AxPath(store_id): AxPath<String>, Json(body): Json<PhotosetCreateBody>) -> Result<(StatusCode, Json<PhotosetResponse>), ApiError> {
+    create_photoset_in(&d, Some(&store_id), body).await
+}
+
+async fn create_photoset_in(d: &Daemon, store_id: Option<&str>, body: PhotosetCreateBody) -> Result<(StatusCode, Json<PhotosetResponse>), ApiError> {
+    let store = d.store_for(store_id).map_err(map_err)?;
+    let s2 = store.clone();
+    let p = tokio::task::spawn_blocking(move || s2.pan.photoset_create(body.description.as_deref()))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(map_err)?;
+    Ok((StatusCode::CREATED, Json(photoset_out(&store, p, Some(Vec::new())))))
+}
+
+fn locate_photoset(d: &Daemon, given: &str) -> Result<(Arc<super::StoreHandle>, String), ApiError> {
+    let id = bare_id(given);
+    let store = d.locate_photoset(&id).map_err(map_err)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("photoset not found: {given}")))?;
+    Ok((store, id))
+}
+
+fn photoset_response(store: &Arc<super::StoreHandle>, id: &str) -> Result<PhotosetResponse, ApiError> {
+    let p = store.pan.photoset_get(id).map_err(map_err)?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("photoset not found: {id}")))?;
+    let media = store.pan.photoset_members(id).map_err(map_err)?.iter().map(|iri| bracket_iri(iri)).collect();
+    Ok(photoset_out(store, p, Some(media)))
+}
+
+#[utoipa::path(get, path = "/photosets/{id}", tag = "photoset", params(("id" = String, Path, description = "<pan/Photoset/x>, full IRI, or bare id")),
+    responses((status = 200, body = PhotosetResponse), (status = 404, body = ErrorBody)))]
+async fn get_photoset(State(d): State<Shared>, AxPath(given): AxPath<String>) -> Result<Json<PhotosetResponse>, ApiError> {
+    let (store, id) = locate_photoset(&d, &given)?;
+    photoset_response(&store, &id).map(Json)
+}
+
+#[utoipa::path(post, path = "/photosets/{id}/add", tag = "photoset", params(("id" = String, Path)),
+    request_body(content = PhotosetMemberBody, description = "The media to put in the set"),
+    responses((status = 200, body = PhotosetResponse), (status = 404, body = ErrorBody)))]
+async fn photoset_add(State(d): State<Shared>, AxPath(given): AxPath<String>, Json(body): Json<PhotosetMemberBody>) -> Result<Json<PhotosetResponse>, ApiError> {
+    photoset_member(&d, &given, &body.media, true).await
+}
+
+#[utoipa::path(post, path = "/photosets/{id}/remove", tag = "photoset", params(("id" = String, Path)),
+    request_body(content = PhotosetMemberBody, description = "The media to take out of the set"),
+    responses((status = 200, body = PhotosetResponse), (status = 404, body = ErrorBody)))]
+async fn photoset_remove(State(d): State<Shared>, AxPath(given): AxPath<String>, Json(body): Json<PhotosetMemberBody>) -> Result<Json<PhotosetResponse>, ApiError> {
+    photoset_member(&d, &given, &body.media, false).await
+}
+
+async fn photoset_member(d: &Daemon, given: &str, media: &str, add: bool) -> Result<Json<PhotosetResponse>, ApiError> {
+    let (store, set_id) = locate_photoset(d, given)?;
+    let media_id = bare_id(media);
+    // The image must be in the SAME store as the set: a set never reaches
+    // across stores.
+    if store.pan.subject_for(&media_id).map_err(map_err)?.is_none() {
+        return Err(ApiError(StatusCode::NOT_FOUND, format!("id not found in store {}: {media}", store.entry.id)));
+    }
+    let s2 = store.clone();
+    let sid = set_id.clone();
+    tokio::task::spawn_blocking(move || if add { s2.pan.photoset_add(&sid, &media_id) } else { s2.pan.photoset_remove(&sid, &media_id) })
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(map_err)?;
+    photoset_response(&store, &set_id).map(Json)
+}
+
 // ── Router ──────────────────────────────────────────────────────────────────
 
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
-    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_sparql_get, store_sparql_post),
-    components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody)),
+    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_sparql_get, store_sparql_post,
+          photosets, store_photosets, create_photoset, create_store_photoset, get_photoset, photoset_add, photoset_remove),
+    components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody,
+                       PhotosetResponse, PhotosetCreateBody, PhotosetMemberBody)),
     tags(
         (name = "meta", description = "Daemon + store status"),
         (name = "media", description = "Deliver, read, describe, delete"),
+        (name = "photoset", description = "Sets a person curates; membership is pan:relatedToId on the image"),
         (name = "query", description = "SPARQL and SPARQL+vector fusion, per store")
     )
 )]
@@ -654,6 +791,11 @@ pub fn router(d: Shared) -> Router {
         .route("/media/{id}/unset", post(unset_fields))
         .route("/query", post(query))
         .route("/search", post(search))
+        .route("/photosets", get(photosets).post(create_photoset))
+        .route("/photosets/{id}", get(get_photoset))
+        .route("/photosets/{id}/add", post(photoset_add))
+        .route("/photosets/{id}/remove", post(photoset_remove))
+        .route("/stores/{id}/photosets", get(store_photosets).post(create_store_photoset))
         .route("/stores/{id}/media", post(deliver_to))
         .route("/stores/{id}/sparql", get(store_sparql_get).post(store_sparql_post))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))

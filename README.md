@@ -28,14 +28,20 @@ pan info  '<https://repolex.ai/pan/Image/k7m2p9x4>'
 # 4. Rate it; the rating lands in the graph and in the file's XMP
 pan set '<https://repolex.ai/pan/Image/k7m2p9x4>' rating=4 isPicked=true
 
-# 5. Query the knowledge graph via SPARQL
+# 5. Curate a set; membership is written on the image, in the graph and its XMP
+pan photoset create "portraits"
+# → <pan/Photoset/abcd2345>
+pan photoset add '<pan/Photoset/abcd2345>' '<pan/Image/k7m2p9x4>'
+pan photoset show '<pan/Photoset/abcd2345>'
+
+# 6. Query the knowledge graph via SPARQL
 pan query 'SELECT ?s ?r WHERE { ?s pan:rating ?r . FILTER(?r >= 4) }'
 
-# 6. Check daemon health and registered stores
+# 7. Check daemon health and registered stores
 pand status
 pan stores
 
-# 7. Open interactive API docs
+# 8. Open interactive API docs
 open http://127.0.0.1:7401/swagger-ui
 ```
 

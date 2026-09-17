@@ -8,6 +8,11 @@
 //!   pan stores                       → the stores this machine's pand manages
 //!   pan set   <pan/Image/id> key=value … → write facts a person owns (rating=4 isPicked=true)
 //!   pan unset <pan/Image/id> key …       → remove them
+//!   pan photoset create [<user-id>] "<description>" → <pan/Photoset/id>
+//!   pan photoset list   [<user-id>]                 → every set in the store
+//!   pan photoset show   <pan/Photoset/id>           → its facts and its media
+//!   pan photoset add    <pan/Photoset/id> <pan/Image/id>
+//!   pan photoset remove <pan/Photoset/id> <pan/Image/id>
 //!
 //! `<user-id>` names a store (a soul's genesis SHA or a bare store id);
 //! absent = pand's configured default. No flags.
@@ -25,7 +30,12 @@ fn usage() -> ! {
            pan query [<user-id>] \"<sparql>\"\n  \
            pan stores\n  \
            pan set   <pan/Image/id> rating=4 isPicked=true isRejected=false\n  \
-           pan unset <pan/Image/id> rating\n\n\
+           pan unset <pan/Image/id> rating\n  \
+           pan photoset create [<user-id>] \"<description>\"\n  \
+           pan photoset list   [<user-id>]\n  \
+           pan photoset show   <pan/Photoset/id>\n  \
+           pan photoset add    <pan/Photoset/id> <pan/Image/id>\n  \
+           pan photoset remove <pan/Photoset/id> <pan/Image/id>\n\n\
          pand must be running (start it with: pand). Config: {}",
         env!("CARGO_PKG_VERSION"),
         pan::daemon::config::config_dir().join("config.yml").display()
@@ -176,6 +186,58 @@ fn main() -> Result<()> {
             let v = check(c.post(format!("{base}/media/{}/unset", encode_id(id))).json(&keys).send().map_err(not_running)?)?;
             println!("{}", serde_json::to_string_pretty(&v)?);
             Ok(())
+        }
+        "photoset" => {
+            let Some((sub, args)) = rest.split_first() else { usage() };
+            match (sub.as_str(), args) {
+                ("create", args) => {
+                    let (user, description) = match args {
+                        [d] => (None, d.clone()),
+                        [user, d] => (Some(user.clone()), d.clone()),
+                        _ => usage(),
+                    };
+                    let url = match &user {
+                        Some(u) => format!("{base}/stores/{u}/photosets"),
+                        None => format!("{base}/photosets"),
+                    };
+                    let v = check(c.post(url).json(&serde_json::json!({ "description": description })).send().map_err(not_running)?)?;
+                    println!("{}", v.get("id").and_then(|i| i.as_str()).unwrap_or("?"));
+                    Ok(())
+                }
+                ("list", args) => {
+                    let url = match args {
+                        [] => format!("{base}/photosets"),
+                        [user] => format!("{base}/stores/{user}/photosets"),
+                        _ => usage(),
+                    };
+                    let v = check(c.get(url).send().map_err(not_running)?)?;
+                    for s in v.as_array().into_iter().flatten() {
+                        println!(
+                            "{}  {}  {}",
+                            s.get("id").and_then(|x| x.as_str()).unwrap_or("?"),
+                            s.get("created_date").and_then(|x| x.as_str()).unwrap_or("?"),
+                            s.get("description").and_then(|x| x.as_str()).unwrap_or(""),
+                        );
+                    }
+                    Ok(())
+                }
+                ("show", [id]) => {
+                    let v = check(c.get(format!("{base}/photosets/{}", encode_id(id))).send().map_err(not_running)?)?;
+                    println!("{}", serde_json::to_string_pretty(&v)?);
+                    Ok(())
+                }
+                ("add" | "remove", [set, media]) => {
+                    let v = check(
+                        c.post(format!("{base}/photosets/{}/{sub}", encode_id(set)))
+                            .json(&serde_json::json!({ "media": media }))
+                            .send()
+                            .map_err(not_running)?,
+                    )?;
+                    println!("{}", serde_json::to_string_pretty(&v)?);
+                    Ok(())
+                }
+                _ => usage(),
+            }
         }
         "stores" => {
             let v = check(c.get(format!("{base}/stores")).send().map_err(not_running)?)?;

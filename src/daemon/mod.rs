@@ -228,6 +228,22 @@ impl Daemon {
         }
     }
 
+    /// Find which store holds a photoset id — the same rule as `locate`:
+    /// one hit, or an error naming how many.
+    pub fn locate_photoset(&self, set_id: &str) -> Result<Option<Arc<StoreHandle>>> {
+        let mut found: Vec<Arc<StoreHandle>> = Vec::new();
+        for s in &self.stores {
+            if s.pan.photoset_subject(set_id)?.is_some() {
+                found.push(s.clone());
+            }
+        }
+        match found.len() {
+            0 => Ok(None),
+            1 => Ok(found.pop()),
+            n => Err(anyhow!("photoset {set_id} exists in {n} stores — ambiguous")),
+        }
+    }
+
     /// Find which store holds a media id (ids are random per store; a hit in
     /// more than one store is reported, not silently first-wins).
     pub fn locate(&self, media_id: &str) -> Result<Option<Arc<StoreHandle>>> {

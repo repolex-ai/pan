@@ -6,7 +6,21 @@ migrated.
 
 ## The tree
 
+Two roots. The **store root** (`<repo>/.pan`, or the bare store directory)
+is committed with the soul, all but its `_ignore/` pocket; the **media root**
+holds the pictures and the records, off the system drive when a volume is
+configured.
+
 ```
+<store root>/                       <repo>/.pan, or the bare store directory
+├── pan.yml                         config (optional)
+├── photosets/                      one file per curated set; committed
+│   └── abcd2345.xml
+└── _ignore/                        machine-local, never committed
+    ├── oxigraph/                   the graph
+    ├── hnsw/<model>/               the vector index per embedding model
+    └── media/                      the media root, when no volume is configured
+
 <media root>/                       one per store; <volume>/_pan/<6-char id>/pan, or <store>/_ignore/media
 └── image/                          one folder per media kind (image, video, audio)
     ├── img/                        PIXELS: the pictures and their renditions
@@ -37,6 +51,12 @@ finds all of either, and neither side needs to know the other's folder names.
 
 ## Each folder
 
+- **`photosets/`** — one XMP-style file per set a person curates, named by
+  the set's id. A set carries exactly its id, its description and its
+  created date; it keeps no member list. Membership is `pan:relatedToId`
+  on the image, written into the image's XMP and the graph. On every open
+  the store reads these files and rewrites the set nodes in the graph from
+  them, so the graph is rebuilt from files alone (issue #4; pan.ttl 0.4.2).
 - **`img/original/`** — the file exactly as it arrived, when it was not a
   PNG (JPEG, WebP, GIF, TIFF). Kept for the record. Nothing reads it again.
   A PNG arrival has no entry here.

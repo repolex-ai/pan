@@ -7,6 +7,7 @@
 //! ```text
 //! <root>/                          soul repo: <repo>/.pan   bare store: the dir itself
 //!   pan.yml                        committable config (optional)
+//!   photosets/<id>.xml             one file per curated set; committed, the graph is rebuilt from them
 //!   _ignore/                       machine-local pocket
 //!     oxigraph/                    the graph — always here, never relocated
 //!     hnsw/<model>/                vector index per embedding model — always here

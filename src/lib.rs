@@ -37,6 +37,7 @@ pub mod enrich;
 pub mod facts;
 pub mod layout;
 pub mod npy;
+pub mod photoset;
 pub mod pngchunk;
 pub mod thumbnail;
 pub mod wire;
@@ -45,6 +46,7 @@ pub mod xmp;
 pub use config::{now_local, PanConfig, GIT_LEX_NS, PAN_MEDIA_NS, PAN_NS};
 pub use facts::Facts;
 pub use layout::PanLayout;
+pub use photoset::Photoset;
 
 /// The Pan base ontology, shipped with the binary; NOT loaded into the media graph.
 pub const PAN_ONTOLOGY_TTL: &str = include_str!("../ontology/pan.ttl");
@@ -171,7 +173,7 @@ pub(crate) fn git_lex_iri(local: &str) -> NamedNode {
     NamedNode::new(format!("{GIT_LEX_NS}{local}")).expect("valid git-lex IRI")
 }
 
-fn rdf_type() -> NamedNode {
+pub(crate) fn rdf_type() -> NamedNode {
     NamedNode::new(RDF_TYPE).expect("rdf:type")
 }
 
@@ -648,6 +650,12 @@ impl Pan {
             .with_context(|| format!("open oxigraph at {}", layout.oxigraph_root.display()))?;
         let pan = Pan { cfg, layout, store_id: store_id.to_string(), store, indexes: Mutex::new(HashMap::new()) };
         pan.declare_store()?;
+        // The sets a person curated live in photosets/*.xml; the graph is
+        // rebuilt from them on every open, so the files are the truth.
+        let sets = pan.load_photosets()?;
+        if sets > 0 {
+            tracing::info!(store = %store_id, photosets = sets, "photosets loaded from files");
+        }
         Ok(pan)
     }
 
@@ -1656,6 +1664,22 @@ impl Pan {
             scene_objects: facts.iter().find(|(p, _)| p == &format!("{PAN_NS}sceneObjects")).map(|(_, v)| v.clone()).unwrap_or_default(),
             scene: SCENE_FIELDS.iter().filter_map(|l| pan_field(l).map(|v| (l.to_string(), v))).collect(),
             curation: settable_fields().iter().filter_map(|f| pan_field(&f.local).map(|v| (f.local.clone(), v))).collect(),
+            // The references Pan itself put on the image — photoset
+            // membership, `<pan/Photoset/id>` (goodlux, 2026-09-16). A
+            // producer's relatedToId (Horae's `<copia/Moment/id>`) stays in
+            // the producer's own block, so only pan Things are written here.
+            related_to: {
+                let mut v: Vec<String> = facts
+                    .iter()
+                    .filter(|(p, _)| p == &format!("{PAN_NS}relatedToId"))
+                    .flat_map(|(_, vals)| vals.iter())
+                    .filter(|iri| iri.starts_with(PAN_MEDIA_NS))
+                    .map(|iri| xmp::bracket_of_iri(iri))
+                    .collect();
+                v.sort();
+                v.dedup();
+                v
+            },
             ready_date: pan_field("readyDate"),
             thumbnail,
             enrichment,
