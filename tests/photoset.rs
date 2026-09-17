@@ -63,14 +63,14 @@ fn a_set_is_a_file_and_a_node_and_membership_is_an_edge_from_the_image() {
     assert_eq!(store.photoset_get(&set.id).unwrap(), Some(set.clone()));
     let mut typed = 0;
     if let pan::QueryResults::Solutions(sols) =
-        store.query(&format!("SELECT ?d WHERE {{ <{}> a pan:Photoset ; git-lex:description ?d ; git-lex:createdDate ?c }}", set.iri)).unwrap()
+        store.query(&format!("SELECT ?d WHERE {{ <{}> a pan:Photoset ; pan:description ?d ; pan:createdDate ?c }}", set.iri)).unwrap()
     {
         for s in sols {
             s.unwrap();
             typed += 1;
         }
     }
-    assert_eq!(typed, 1, "the set is a pan:Photoset with git-lex:description and git-lex:createdDate in the graph");
+    assert_eq!(typed, 1, "the set is a pan:Photoset with pan:description and pan:createdDate in the graph");
 
     // Membership: relatedToId from the image, in the graph and in its XMP.
     let a = store.put(&make_png(8, 8, 1), Some("image/png")).unwrap().id;

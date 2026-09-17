@@ -8,7 +8,8 @@
 //! Rules the code lives by (Rob, 2026-09-03), in the order they bite:
 //! - Everything Pan says is declared in ontology/pan.ttl FIRST. No predicate
 //!   is emitted that the ontology does not declare.
-//! - Identity is the universal `git-lex:id`: the Thing's IRI
+//! - Identity is `pan:id`, the Thing's IRI, spelled pan: in the graph as in
+//!   the file (the universal id by owl:equivalentProperty; goodlux, 2026-09-17)
 //!   `https://repolex.ai/pan/Image/<id>`, assigned once, never content-derived.
 //! - Facts live in the DEFAULT graph. No graph names.
 //! - Ingest order: bytes on disk (with Pan's XMP written into them) → thumbnail
@@ -169,10 +170,6 @@ pub(crate) fn pan_iri(local: &str) -> NamedNode {
     NamedNode::new(format!("{PAN_NS}{local}")).expect("valid pan IRI")
 }
 
-pub(crate) fn git_lex_iri(local: &str) -> NamedNode {
-    NamedNode::new(format!("{GIT_LEX_NS}{local}")).expect("valid git-lex IRI")
-}
-
 pub(crate) fn rdf_type() -> NamedNode {
     NamedNode::new(RDF_TYPE).expect("rdf:type")
 }
@@ -283,7 +280,7 @@ pub struct IndexStats {
 pub struct PutResult {
     /// The assigned identity, bare — new on EVERY put.
     pub id: String,
-    /// The full IRI written for this object (`git-lex:id`).
+    /// The full IRI written for this object (`pan:id`).
     pub iri: String,
     pub media_path: String,
     /// Where the bytes as delivered were kept, when the arrival was not PNG
@@ -729,7 +726,7 @@ impl Pan {
     }
 
     /// Resolve a bare id to the media object's IRI. Identity is the IRI
-    /// itself (`git-lex:id`), so the lookup is: does `<pan/Image/id>` (or
+    /// itself (`pan:id`), so the lookup is: does `<pan/Image/id>` (or
     /// `<pan/Media/id>`) have a type in this store.
     pub fn subject_for(&self, id: &str) -> Result<Option<NamedNode>> {
         if validate_pan_id(id).is_err() {
@@ -809,9 +806,9 @@ impl Pan {
             Quad::new(subject.clone(), rdf_type(), pan_iri(media_class(&media_type)), GraphName::DefaultGraph),
             enrich::self_id_quad(&subject)?,
             self.quad(&subject, "mediaPath", &rel_path),
-            // The Image is a git-lex Thing: when it came to be is the universal
-            // git-lex:createdDate, the universal (goodlux, 2026-09-05; renamed with base kit 0.18.0, 2026-09-16).
-            Quad::new(subject.clone(), git_lex_iri("createdDate"), Literal::new_simple_literal(&created_date), GraphName::DefaultGraph),
+            // When it came to be: pan:createdDate, the same spelling the file
+            // carries (goodlux, 2026-09-17: the graph stores pan:, never git-lex:).
+            self.quad(&subject, "createdDate", &created_date),
             self.quad(&subject, "mediaType", &media_type),
             self.quad(&subject, "sourceFile", &source_file),
         ];
@@ -1007,7 +1004,7 @@ impl Pan {
             media_type: one("mediaType").unwrap_or_default(),
             created_date: facts
                 .iter()
-                .find(|(p, _)| p == &format!("{GIT_LEX_NS}createdDate"))
+                .find(|(p, _)| p == &format!("{PAN_NS}createdDate"))
                 .and_then(|(_, v)| v.first().cloned())
                 .unwrap_or_default(),
             ready_date: one("readyDate"),
@@ -1029,7 +1026,7 @@ impl Pan {
     /// the old. No second queue, no second process.
     ///
     /// `since` is the backfill floor: an RFC 3339 local-offset date-time, the
-    /// same shape `git-lex:createdDate` is written in, so a plain string compare
+    /// same shape `pan:createdDate` is written in, so a plain string compare
     /// is a time compare. Images created before it are not pending.
     pub fn pending_for(&self, ref_local: &str, model: &str, limit: usize, since: Option<&str>) -> Result<Vec<PendingItem>> {
         // What a stage needs before it can run (goodlux, 2026-09-08):
@@ -1048,7 +1045,7 @@ impl Pan {
         };
         let q = format!(
             "SELECT ?s ?path ?type ?d WHERE {{
-               ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; git-lex:createdDate ?d .
+               ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; pan:createdDate ?d .
                {needs}
                FILTER NOT EXISTS {{ ?s pan:{ref_local} ?e . ?e pan:model \"{model_lit}\" }}
                {floor}
@@ -1168,7 +1165,7 @@ impl Pan {
         Ok(self
             .facts_for(id)?
             .iter()
-            .find(|(p, _)| p == &format!("{GIT_LEX_NS}createdDate"))
+            .find(|(p, _)| p == &format!("{PAN_NS}createdDate"))
             .and_then(|(_, v)| v.first().cloned())
             .unwrap_or_default())
     }
@@ -1601,9 +1598,6 @@ impl Pan {
         let pan_field = |local: &str| -> Option<String> {
             facts.iter().find(|(p, _)| p == &format!("{PAN_NS}{local}")).and_then(|(_, v)| v.first().cloned())
         };
-        let git_lex_field = |local: &str| -> Option<String> {
-            facts.iter().find(|(p, _)| p == &format!("{GIT_LEX_NS}{local}")).and_then(|(_, v)| v.first().cloned())
-        };
         let node_fields = |node_iri: &str| -> Result<HashMap<String, String>> {
             let node = NamedNode::new(node_iri).map_err(|e| anyhow!("node IRI: {e}"))?;
             let mut m = HashMap::new();
@@ -1654,7 +1648,7 @@ impl Pan {
         Ok(xmp::ImagePacket {
             iri: subject.as_str().to_string(),
             media_path: pan_field("mediaPath").unwrap_or_default(),
-            created_date: git_lex_field("createdDate").unwrap_or_default(),
+            created_date: pan_field("createdDate").unwrap_or_default(),
             media_type: pan_field("mediaType").unwrap_or_default(),
             source_file: pan_field("sourceFile").unwrap_or_default(),
             width: pan_field("width").and_then(|v| v.parse().ok()),

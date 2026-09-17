@@ -26,8 +26,10 @@ pub const PAN_MEDIA_NS: &str = "https://repolex.ai/pan/";
 
 pub const COPIA_NS: &str = "https://repolex.ai/ontology/copia/";
 
-/// The base kit's namespace: every pan class is a `git-lex:Thing`, identified
-/// by the universal `git-lex:id` (an IRI pointing at the Thing itself).
+/// The base kit's namespace. Pan WRITES nothing under it (goodlux, 2026-09-17:
+/// every fact Pan records is spelled pan:, in the file and in the graph);
+/// it is here for the SPARQL prefix and to recognise a git-lex:id arriving
+/// in a producer's file as another store's identity, which stays out.
 pub const GIT_LEX_NS: &str = "https://repolex.ai/ontology/git-lex/";
 
 /// RFC3339 in SYSTEM LOCAL time, to the second — the one timestamp format

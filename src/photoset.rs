@@ -21,8 +21,8 @@ use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::config::{GIT_LEX_NS, PAN_MEDIA_NS, PAN_NS};
-use crate::{bare_id, enrich, gen_pan_id, git_lex_iri, now_local, pan_iri, validate_pan_id, write_atomic, xmp, Pan, PanLayout};
+use crate::config::{PAN_MEDIA_NS, PAN_NS};
+use crate::{bare_id, enrich, gen_pan_id, now_local, pan_iri, validate_pan_id, write_atomic, xmp, Pan, PanLayout};
 
 /// The ontology class and the IRI path segment: `<pan/Photoset/id>`.
 pub const PHOTOSET_CLASS: &str = "Photoset";
@@ -32,12 +32,12 @@ pub const PHOTOSET_CLASS: &str = "Photoset";
 pub struct Photoset {
     /// The bare id, the same token the file name and the IRI carry.
     pub id: String,
-    /// `https://repolex.ai/pan/Photoset/<id>` — the identity (`git-lex:id`).
+    /// `https://repolex.ai/pan/Photoset/<id>` — the identity (`pan:id`).
     pub iri: String,
-    /// `pan:description` in the file, `git-lex:description` in the graph.
+    /// `pan:description`, in the file and in the graph alike.
     /// At most one.
     pub description: Option<String>,
-    /// `pan:createdDate` in the file, `git-lex:createdDate` in the graph.
+    /// `pan:createdDate`, in the file and in the graph alike.
     pub created_date: String,
 }
 
@@ -115,17 +115,17 @@ impl Pan {
     }
 
     /// The three facts of a set as graph quads: type, identity, creation
-    /// time, description. In the graph the universals wear their git-lex
-    /// names; the file spells them pan: (the same boundary the image keeps).
+    /// time, description — spelled pan: in the graph exactly as in the file
+    /// (goodlux, 2026-09-17).
     fn photoset_quads(p: &Photoset) -> Result<Vec<Quad>> {
         let node = photoset_iri(&p.id)?;
         let mut quads = vec![
             Quad::new(node.clone(), crate::rdf_type(), pan_iri(PHOTOSET_CLASS), GraphName::DefaultGraph),
             enrich::self_id_quad(&node)?,
-            Quad::new(node.clone(), git_lex_iri("createdDate"), Literal::new_simple_literal(&p.created_date), GraphName::DefaultGraph),
+            Quad::new(node.clone(), pan_iri("createdDate"), Literal::new_simple_literal(&p.created_date), GraphName::DefaultGraph),
         ];
         if let Some(d) = &p.description {
-            quads.push(Quad::new(node, git_lex_iri("description"), Literal::new_simple_literal(d), GraphName::DefaultGraph));
+            quads.push(Quad::new(node, pan_iri("description"), Literal::new_simple_literal(d), GraphName::DefaultGraph));
         }
         Ok(quads)
     }
@@ -204,7 +204,7 @@ impl Pan {
                 Term::Literal(l) => l.value().to_string(),
                 _ => continue,
             };
-            match q.predicate.as_str().strip_prefix(GIT_LEX_NS) {
+            match q.predicate.as_str().strip_prefix(PAN_NS) {
                 Some("createdDate") => created_date = Some(value),
                 Some("description") => description = Some(value),
                 _ => {}
