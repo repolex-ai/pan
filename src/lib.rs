@@ -39,6 +39,7 @@ pub mod depth;
 pub mod enrich;
 pub mod facts;
 pub mod imageset;
+pub mod instance;
 pub mod layout;
 pub mod npy;
 pub mod pngchunk;

@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
+use crate::instance::{self, InstanceFacts};
 use crate::Pan;
 use config::DaemonConfig;
 use registry::StoreEntry;
@@ -171,6 +172,11 @@ pub struct Counters {
 impl Daemon {
     pub fn open(cfg: DaemonConfig) -> Result<Self> {
         let entries = registry::resolve_all(&cfg.stores)?;
+        let instance = InstanceFacts {
+            id: instance::local_instance_id(),
+            base_url: cfg.base_url(),
+            listen_port: cfg.port,
+        };
         let mut stores = Vec::with_capacity(entries.len());
         for e in entries {
             if e.is_repo {
@@ -179,7 +185,12 @@ impl Daemon {
             let media_root = cfg.media_root_for(&e.id);
             let pan = Pan::open_with(&e.root, &e.id, media_root.as_deref())
                 .with_context(|| format!("open store {} at {}", e.id, e.root.display()))?;
-            tracing::info!(id = %e.id, root = %e.root.display(), media = %pan.layout.media_root.display(), "store open");
+            // The Instance is whatever pand is running over: every store it
+            // opens carries this daemon's pan:Instance node (goodlux,
+            // 2026-09-17; pan issue #28).
+            pan.declare_instance(&instance)
+                .with_context(|| format!("declare instance in store {}", e.id))?;
+            tracing::info!(id = %e.id, root = %e.root.display(), media = %pan.layout.media_root.display(), instance = %instance.id, "store open");
             stores.push(Arc::new(StoreHandle { entry: e, pan }));
         }
         let default_id = match &cfg.default {
