@@ -24,8 +24,8 @@ fn graph_spells_identity_and_creation_pan_and_nothing_git_lex_or_subtexture() {
     let dir = tempfile::tempdir().unwrap();
     let store = Pan::open(dir.path()).unwrap();
     let put = store.put(&make_png(8, 8, 3), Some("image/png")).unwrap();
-    let set = store.photoset_create(Some("spelling")).unwrap();
-    store.photoset_add(&set.id, &put.id).unwrap();
+    let set = store.imageset_create(Some("spelling")).unwrap();
+    store.imageset_add(&set.id, &put.id).unwrap();
 
     let facts: std::collections::HashMap<String, Vec<String>> = store.facts_for(&put.id).unwrap().into_iter().collect();
     assert_eq!(facts["https://repolex.ai/ontology/pan/id"], vec![put.iri.clone()], "pan:id is the Image's identity in the graph");

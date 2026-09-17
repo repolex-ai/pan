@@ -101,8 +101,8 @@ pub struct ImagePacket {
     /// Facts a person set with `pan set`, `(local name, value)`, e.g.
     /// `("rating", "4")` — the settable fields of pan.ttl.
     pub curation: Vec<(String, String)>,
-    /// References Pan itself put on the image, in bracket form — photoset
-    /// membership, `<pan/Photoset/id>`, one `pan:relatedToId` element each
+    /// References Pan itself put on the image, in bracket form — imageset
+    /// membership, `<pan/ImageSet/id>`, one `pan:relatedToId` element each
     /// (pan.ttl 0.4.2). A producer's relatedToId is not here: it stays in
     /// the producer's own Description.
     pub related_to: Vec<String>,

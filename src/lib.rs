@@ -38,7 +38,7 @@ pub mod enrich;
 pub mod facts;
 pub mod layout;
 pub mod npy;
-pub mod photoset;
+pub mod imageset;
 pub mod pngchunk;
 pub mod thumbnail;
 pub mod wire;
@@ -47,7 +47,7 @@ pub mod xmp;
 pub use config::{now_local, PanConfig, GIT_LEX_NS, PAN_MEDIA_NS, PAN_NS};
 pub use facts::Facts;
 pub use layout::PanLayout;
-pub use photoset::Photoset;
+pub use imageset::ImageSet;
 
 /// The Pan base ontology, shipped with the binary; NOT loaded into the media graph.
 pub const PAN_ONTOLOGY_TTL: &str = include_str!("../ontology/pan.ttl");
@@ -521,12 +521,15 @@ mod perception_tests {
     }
 
     #[test]
-    fn photoset_vocabulary_is_declared_in_the_ontology() {
+    fn imageset_vocabulary_is_declared_in_the_ontology() {
         // pan.ttl 0.4.2 (goodlux, 2026-09-16): the set class under
         // subtexture:Set and its description. pan:member and pan:inPhotoset
         // are gone: membership is pan:relatedToId from the image to the set.
+        // pan.ttl 0.4.7 (goodlux, 2026-09-17): Photoset is renamed ImageSet,
+        // under a pan:MediaSet parent that has no instances yet.
         for decl in [
-            "\npan:Photoset a owl:Class ;\n    rdfs:subClassOf subtexture:Set",
+            "\npan:MediaSet a owl:Class",
+            "\npan:ImageSet a owl:Class",
             "\npan:description a owl:DatatypeProperty",
         ] {
             assert!(PAN_ONTOLOGY_TTL.contains(decl), "missing in pan.ttl: {decl}");
@@ -647,11 +650,11 @@ impl Pan {
             .with_context(|| format!("open oxigraph at {}", layout.oxigraph_root.display()))?;
         let pan = Pan { cfg, layout, store_id: store_id.to_string(), store, indexes: Mutex::new(HashMap::new()) };
         pan.declare_store()?;
-        // The sets a person curated live in photosets/*.xml; the graph is
+        // The sets a person curated live in imagesets/*.xml; the graph is
         // rebuilt from them on every open, so the files are the truth.
-        let sets = pan.load_photosets()?;
+        let sets = pan.load_imagesets()?;
         if sets > 0 {
-            tracing::info!(store = %store_id, photosets = sets, "photosets loaded from files");
+            tracing::info!(store = %store_id, imagesets = sets, "imagesets loaded from files");
         }
         Ok(pan)
     }
@@ -1658,8 +1661,8 @@ impl Pan {
             scene_objects: facts.iter().find(|(p, _)| p == &format!("{PAN_NS}sceneObjects")).map(|(_, v)| v.clone()).unwrap_or_default(),
             scene: SCENE_FIELDS.iter().filter_map(|l| pan_field(l).map(|v| (l.to_string(), v))).collect(),
             curation: settable_fields().iter().filter_map(|f| pan_field(&f.local).map(|v| (f.local.clone(), v))).collect(),
-            // The references Pan itself put on the image — photoset
-            // membership, `<pan/Photoset/id>` (goodlux, 2026-09-16). A
+            // The references Pan itself put on the image — imageset
+            // membership, `<pan/ImageSet/id>` (goodlux, 2026-09-16). A
             // producer's relatedToId (Horae's `<copia/Moment/id>`) stays in
             // the producer's own block, so only pan Things are written here.
             related_to: {
