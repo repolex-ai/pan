@@ -4,20 +4,27 @@
 # show as "pan:Image properties" and "copia:Moment properties" beside
 # "XMP properties". Every tag is declared by name: a viewer shows a declared
 # namespace's fields only when the tag itself is declared. A file carries only
-# these two namespaces (goodlux, 2026-09-07). Install:
+# these two namespaces (goodlux, 2026-09-07). The nested shapes (structs and
+# reference bags) are derived from pan.ttl's cardinality blocks. Install:
 #   cp exiftool/ExifTool_config ~/.ExifTool_config
 # then RESTART the viewer (ExifTool reads this once per process).
 
-%panRef = (
+%panEnrichment = (
     NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
-    STRUCT_NAME => 'PanRef',
+    STRUCT_NAME => 'PanEnrichment',
     id => { }, model => { }, path => { }, producedDate => { },
 );
 
-%panRegionRef = (
+%panRegionData = (
     NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
-    STRUCT_NAME => 'PanRegionRef',
-    id => { }, model => { }, path => { }, count => { }, producedDate => { },
+    STRUCT_NAME => 'PanRegionData',
+    id => { }, model => { }, path => { }, producedDate => { }, count => { },
+);
+
+%panThumbnail = (
+    NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
+    STRUCT_NAME => 'PanThumbnail',
+    id => { }, path => { }, producedDate => { }, width => { }, height => { },
 );
 
 %Image::ExifTool::UserDefined::pan = (
@@ -27,7 +34,6 @@
     bbox => { },
     count => { },
     createdDate => { },
-    depthData => { },
     depthMapPath => { },
     depthMax => { },
     depthMin => { },
@@ -80,17 +86,12 @@
     text => { },
     vectorPath => { },
     width => { },
-    thumbnail => {
-        Struct => {
-            NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
-            STRUCT_NAME => 'PanThumb',
-            id => { }, path => { }, width => { }, height => { },
-        },
-    },
-    captionData => { List => 'Bag', Struct => \%panRef },
-    poseData => { List => 'Bag', Struct => \%panRef },
-    vectorData => { List => 'Bag', Struct => \%panRef },
-    regionData => { List => 'Bag', Struct => \%panRegionRef },
+    captionData => { List => 'Bag', Struct => \%panEnrichment },
+    depthData => { List => 'Bag', Struct => \%panEnrichment },
+    poseData => { List => 'Bag', Struct => \%panEnrichment },
+    regionData => { List => 'Bag', Struct => \%panRegionData },
+    thumbnail => { Struct => \%panThumbnail },
+    vectorData => { List => 'Bag', Struct => \%panEnrichment },
 );
 
 %Image::ExifTool::UserDefined::copia = (
