@@ -8,16 +8,23 @@
 //! the daemon opens carries the daemon's Instance node, and the store answers
 //! on its own.
 //!
-//! IDENTITY. One machine runs one daemon (the config is per machine), so the
-//! Instance's id is the machine's name: `<pan/Instance/<hostname>>`, the
-//! host name lowercased and cut at its first dot. Not the port — a port is a
-//! setting on the instance (`pan:listenPort`), not what the instance IS —
-//! and not the store id, which would say a store has an instance rather than
-//! an instance has stores. The same discipline as the Store node, whose id is
-//! the soul's genesis SHA: an identity the world already uses.
+//! IDENTITY. The Instance's id is the filepath to the instance: the absolute
+//! storage root the daemon runs over (the configured `media_volume`, e.g.
+//! `/Volumes/f00/_pan`), percent-encoded into one IRI segment —
+//! `<pan/Instance/%2FVolumes%2Ff00%2F_pan>`. Ruled by goodlux, 2026-09-17.
+//! One daemon, one root, one id, the same in every store it opens; and
+//! `pan:fsRoot` is that same path in the clear. The encoding is lossless and
+//! never decoded on read: the segment IS the id, the path is the fact. (The
+//! first landing derived the id from the machine's hostname; that was the
+//! fork's guess and was wrong.) Not the port — a port is a setting on the
+//! instance (`pan:listenPort`), not what the instance IS — and not the store
+//! id, which would say a store has an instance rather than an instance has
+//! stores.
 //!
 //! The bare `pan` command opens stores without a daemon and writes no
 //! Instance: there is none to describe.
+
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use oxigraph::model::{GraphName, Literal, NamedNode, Quad, Term};
@@ -28,8 +35,9 @@ use crate::{enrich, pan_iri, rdf_type, term_str, Pan, QueryResults};
 /// What the daemon knows about itself that the store cannot derive.
 #[derive(Debug, Clone)]
 pub struct InstanceFacts {
-    /// The instance id (`instance_id_from_hostname`).
-    pub id: String,
+    /// The absolute storage root the daemon runs over: the instance's
+    /// identity (`instance_id_from_root`) and its `pan:fsRoot`.
+    pub root: PathBuf,
     /// The daemon's HTTP base, `http://<bind>:<port>`; the store's SPARQL
     /// endpoint under it is what `pan:primaryGraph` names.
     pub base_url: String,
@@ -42,32 +50,41 @@ pub const INSTANCE_MODE_MANAGED: &str = "managed";
 /// `pan:sourceFormat` of a managed store: PNG only (pan.ttl 0.4.3).
 pub const SOURCE_FORMAT_PNG: &str = "image/png";
 
-/// The machine's name as an id: lowercased, cut at the first dot, every
-/// character outside `[a-z0-9-]` replaced by `-`. `mac-studio.local` and
-/// `Mac-Studio` both become `mac-studio`.
-pub fn instance_id_from_hostname(hostname: &str) -> String {
-    let head = hostname.split('.').next().unwrap_or("").trim();
-    let id: String = head
-        .to_ascii_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    if id.is_empty() {
-        "localhost".to_string()
-    } else {
-        id
+/// The storage root as one IRI segment: every byte outside the RFC 3986
+/// unreserved set `[A-Za-z0-9._~-]` is percent-encoded, uppercase hex, so
+/// `/Volumes/f00/_pan` becomes `%2FVolumes%2Ff00%2F_pan`. Lossless; never
+/// decoded on read.
+pub fn instance_id_from_root(root: &Path) -> String {
+    let bytes = root.as_os_str().as_encoded_bytes();
+    let mut id = String::with_capacity(bytes.len() * 3);
+    for &b in bytes {
+        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-') {
+            id.push(b as char);
+        } else {
+            id.push_str(&format!("%{b:02X}"));
+        }
+    }
+    id
+}
+
+/// The root this daemon runs over: the configured media volume, else the
+/// daemon's own directory (the config file's parent).
+pub fn instance_root(cfg: &crate::daemon::config::DaemonConfig) -> PathBuf {
+    match &cfg.media_volume {
+        Some(v) => v.clone(),
+        None => cfg
+            .path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| cfg.path.clone()),
     }
 }
 
-/// This machine's Instance id.
-pub fn local_instance_id() -> String {
-    instance_id_from_hostname(&gethostname::gethostname().to_string_lossy())
+impl InstanceFacts {
+    /// `<pan/Instance/<encoded root>>`'s last segment.
+    pub fn id(&self) -> String {
+        instance_id_from_root(&self.root)
+    }
 }
 
 pub fn instance_iri(id: &str) -> Result<NamedNode> {
@@ -76,17 +93,18 @@ pub fn instance_iri(id: &str) -> Result<NamedNode> {
 
 impl Pan {
     /// Put the daemon's Instance node in this store: type, `pan:id`,
-    /// `pan:createdDate`, and the declared fields — `pan:fsRoot` (the media
-    /// root, absolute), `pan:instanceMode`, `pan:sourceFormat`,
+    /// `pan:createdDate`, and the declared fields — `pan:fsRoot` (the
+    /// instance's storage root, absolute, the same in every store),
+    /// `pan:instanceMode`, `pan:sourceFormat`,
     /// `pan:listenPort`, `pan:primaryGraph` (the store's SPARQL endpoint).
     /// `pan:localGraph` is not written: pand keeps no cache graph.
     ///
     /// Exactly one Instance per store, always: every node typed
-    /// `pan:Instance` is removed first, so a machine renamed or a port moved
+    /// `pan:Instance` is removed first, so a root moved or a port moved
     /// leaves no second node behind. The creation date survives a rewrite of
     /// the same id, since the record is the same record.
     pub fn declare_instance(&self, facts: &InstanceFacts) -> Result<()> {
-        let node = instance_iri(&facts.id)?;
+        let node = instance_iri(&facts.id())?;
         let existing: Vec<NamedNode> = match self.query("SELECT ?s WHERE { ?s a pan:Instance }")? {
             QueryResults::Solutions(sols) => sols
                 .filter_map(|r| r.ok())
@@ -118,7 +136,7 @@ impl Pan {
             .map(|q| term_str(&q.object.clone()))
             .unwrap_or_else(now_local);
 
-        let media_root = self.layout.media_root.to_string_lossy().to_string();
+        let fs_root = facts.root.to_string_lossy().to_string();
         let endpoint = format!(
             "{}/stores/{}/sparql",
             facts.base_url.trim_end_matches('/'),
@@ -142,7 +160,7 @@ impl Pan {
         );
         t.insert(enrich::self_id_quad(&node)?.as_ref());
         t.insert(self.quad(&node, "createdDate", &created_date).as_ref());
-        t.insert(self.quad(&node, "fsRoot", &media_root).as_ref());
+        t.insert(self.quad(&node, "fsRoot", &fs_root).as_ref());
         t.insert(
             self.quad(&node, "instanceMode", INSTANCE_MODE_MANAGED)
                 .as_ref(),
@@ -168,13 +186,33 @@ impl Pan {
 
 #[cfg(test)]
 mod tests {
-    use super::instance_id_from_hostname;
+    use super::instance_id_from_root;
+    use std::path::Path;
 
     #[test]
-    fn a_hostname_becomes_a_lowercase_id_cut_at_the_first_dot() {
-        assert_eq!(instance_id_from_hostname("Mac-Studio.local"), "mac-studio");
-        assert_eq!(instance_id_from_hostname("robs mac"), "robs-mac");
-        assert_eq!(instance_id_from_hostname(""), "localhost");
-        assert_eq!(instance_id_from_hostname(".local"), "localhost");
+    fn a_root_becomes_one_percent_encoded_segment() {
+        assert_eq!(
+            instance_id_from_root(Path::new("/Volumes/f00/_pan")),
+            "%2FVolumes%2Ff00%2F_pan"
+        );
+        // A space and a non-ASCII character: every byte outside the
+        // unreserved set is encoded, nothing is lost.
+        assert_eq!(
+            instance_id_from_root(Path::new("/Volumes/my disk/pän")),
+            "%2FVolumes%2Fmy%20disk%2Fp%C3%A4n"
+        );
+        assert_eq!(instance_id_from_root(Path::new("a.b~c-d_e")), "a.b~c-d_e");
+    }
+
+    #[test]
+    fn the_encoded_segment_survives_the_bracket_and_iri_forms_unchanged() {
+        let id = instance_id_from_root(Path::new("/Volumes/my disk/pän"));
+        let iri = format!("https://repolex.ai/pan/Instance/{id}");
+        let bracket = crate::xmp::bracket_of_iri(&iri);
+        assert_eq!(bracket, format!("<pan/Instance/{id}>"));
+        assert_eq!(
+            crate::iri_from_bracket(&bracket).as_deref(),
+            Some(iri.as_str())
+        );
     }
 }

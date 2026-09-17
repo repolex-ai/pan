@@ -172,8 +172,12 @@ pub struct Counters {
 impl Daemon {
     pub fn open(cfg: DaemonConfig) -> Result<Self> {
         let entries = registry::resolve_all(&cfg.stores)?;
+        // The Instance's id is the filepath to the instance: the storage
+        // root the daemon runs over (goodlux, 2026-09-17). With no
+        // media_volume there is no single media root, so the daemon's own
+        // directory (where its config, logs and ontology live) is the root.
         let instance = InstanceFacts {
-            id: instance::local_instance_id(),
+            root: instance::instance_root(&cfg),
             base_url: cfg.base_url(),
             listen_port: cfg.port,
         };
@@ -190,7 +194,7 @@ impl Daemon {
             // 2026-09-17; pan issue #28).
             pan.declare_instance(&instance)
                 .with_context(|| format!("declare instance in store {}", e.id))?;
-            tracing::info!(id = %e.id, root = %e.root.display(), media = %pan.layout.media_root.display(), instance = %instance.id, "store open");
+            tracing::info!(id = %e.id, root = %e.root.display(), media = %pan.layout.media_root.display(), instance = %instance.id(), "store open");
             stores.push(Arc::new(StoreHandle { entry: e, pan }));
         }
         let default_id = match &cfg.default {

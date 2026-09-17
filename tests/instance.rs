@@ -1,12 +1,18 @@
 //! One `pan:Instance` per store, written by the daemon at open (pan issue
-//! #28; goodlux, 2026-09-17: the Instance is whatever pand is running over).
+//! #28; goodlux, 2026-09-17: the Instance is whatever pand is running over,
+//! and its id is the filepath to the instance — the storage root).
+
+use std::path::{Path, PathBuf};
 
 use pan::instance::InstanceFacts;
 use pan::{Pan, QueryResults};
 
-fn facts(id: &str, port: u16) -> InstanceFacts {
+const ROOT: &str = "/Volumes/f00/_pan";
+const ROOT_ID: &str = "%2FVolumes%2Ff00%2F_pan";
+
+fn facts(root: &str, port: u16) -> InstanceFacts {
     InstanceFacts {
-        id: id.to_string(),
+        root: PathBuf::from(root),
         base_url: format!("http://127.0.0.1:{port}"),
         listen_port: port,
     }
@@ -50,12 +56,11 @@ fn a_store_carries_exactly_one_instance_with_the_declared_fields_spelled_pan() {
         "a bare open writes no Instance"
     );
 
-    store.declare_instance(&facts("mac-studio", 7401)).unwrap();
-    let found = instances(&store);
-    assert_eq!(found, vec!["<https://repolex.ai/pan/Instance/mac-studio>"]);
+    store.declare_instance(&facts(ROOT, 7401)).unwrap();
+    let iri = format!("https://repolex.ai/pan/Instance/{ROOT_ID}");
+    assert_eq!(instances(&store), vec![format!("<{iri}>")]);
 
-    let iri = "https://repolex.ai/pan/Instance/mac-studio";
-    let f = fields(&store, iri);
+    let f = fields(&store, &iri);
     let pan = "https://repolex.ai/ontology/pan/";
     let get = |local: &str| -> Vec<String> {
         f.iter()
@@ -71,7 +76,8 @@ fn a_store_carries_exactly_one_instance_with_the_declared_fields_spelled_pan() {
     assert_eq!(get("createdDate").len(), 1);
     assert_eq!(
         get("fsRoot"),
-        vec![format!("\"{}\"", store.layout.media_root.display())]
+        vec![format!("\"{ROOT}\"")],
+        "fsRoot is the instance's root in the clear, not this store's media root"
     );
     assert_eq!(get("instanceMode"), vec!["\"managed\""]);
     assert_eq!(get("sourceFormat"), vec!["\"image/png\""]);
@@ -96,32 +102,53 @@ fn a_store_carries_exactly_one_instance_with_the_declared_fields_spelled_pan() {
 }
 
 #[test]
+fn two_stores_of_one_daemon_carry_the_same_instance_id() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let sa = Pan::open(a.path()).unwrap();
+    let sb = Pan::open(b.path()).unwrap();
+    let f = facts(ROOT, 7401);
+    sa.declare_instance(&f).unwrap();
+    sb.declare_instance(&f).unwrap();
+    assert_eq!(instances(&sa), instances(&sb));
+    assert_eq!(
+        instances(&sa),
+        vec![format!("<https://repolex.ai/pan/Instance/{ROOT_ID}>")]
+    );
+}
+
+#[test]
 fn a_second_open_leaves_exactly_one_instance_and_keeps_its_creation_date() {
     let dir = tempfile::tempdir().unwrap();
+    let iri = format!("https://repolex.ai/pan/Instance/{ROOT_ID}");
     let created = {
         let store = Pan::open(dir.path()).unwrap();
-        store.declare_instance(&facts("mac-studio", 7401)).unwrap();
-        fields(&store, "https://repolex.ai/pan/Instance/mac-studio")
+        store.declare_instance(&facts(ROOT, 7401)).unwrap();
+        fields(&store, &iri)
             .into_iter()
             .find(|(p, _)| p.ends_with("/createdDate>"))
             .map(|(_, o)| o)
             .unwrap()
     };
     let store = Pan::open(dir.path()).unwrap();
-    // Same machine, the port moved: the record is rewritten, not doubled.
-    store.declare_instance(&facts("mac-studio", 7402)).unwrap();
+    // Same root, the port moved: the record is rewritten, not doubled.
+    store.declare_instance(&facts(ROOT, 7402)).unwrap();
     assert_eq!(instances(&store).len(), 1);
-    let f = fields(&store, "https://repolex.ai/pan/Instance/mac-studio");
+    let f = fields(&store, &iri);
     assert!(f
         .iter()
         .any(|(p, o)| p.ends_with("/listenPort>") && o.starts_with("\"7402\"")));
     assert!(f
         .iter()
         .any(|(p, o)| p.ends_with("/createdDate>") && o == &created));
-    // The machine renamed: the old node goes, still exactly one.
-    store.declare_instance(&facts("new-name", 7402)).unwrap();
+    // The root moved: the old node goes, still exactly one, and a path with
+    // a space and a non-ASCII byte is carried whole.
+    let moved = Path::new("/Volumes/my disk/pän");
+    store
+        .declare_instance(&facts(moved.to_str().unwrap(), 7402))
+        .unwrap();
     assert_eq!(
         instances(&store),
-        vec!["<https://repolex.ai/pan/Instance/new-name>"]
+        vec!["<https://repolex.ai/pan/Instance/%2FVolumes%2Fmy%20disk%2Fp%C3%A4n>"]
     );
 }
