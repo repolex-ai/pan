@@ -430,7 +430,7 @@ async fn run_one(
                 .iris
                 .vlm(
                     t,
-                    &ep.model,
+                    ep.api_id(),
                     &wire.bytes,
                     wire.media_type,
                     prompt,
@@ -456,11 +456,16 @@ async fn run_one(
             })?;
             let s = store.clone();
             let id = item.id.clone();
-            let model = r
-                .model
-                .clone()
-                .filter(|m| !m.trim().is_empty())
-                .unwrap_or_else(|| ep.model.clone());
+            // The name is what gets recorded. The server answers with its own
+            // string (`qwen/qwen3.8-27b`); that is the request's business, not
+            // a second name for the model (goodlux, 2026-09-18). A mismatch is
+            // worth knowing about, so it is logged, not written down.
+            if let Some(served) = r.model.as_deref().filter(|m| !m.trim().is_empty()) {
+                if served != ep.api_id() {
+                    tracing::warn!(model = %ep.model, asked = %ep.api_id(), served = %served, "caption: the node answered as a different model than the request asked for");
+                }
+            }
+            let model = ep.model.clone();
             let text = r.text.clone();
             tokio::task::spawn_blocking(move || {
                 write_perception(&s, &id, &model, &text, &perception)
@@ -605,8 +610,8 @@ async fn run_one(
                 );
             }
             if let Some(m) = answer.model.as_deref() {
-                if m != ep.model {
-                    tracing::warn!(configured = %ep.model, served = %m, "depth: the node names a different model than config; recording the configured name");
+                if m != ep.api_id() {
+                    tracing::warn!(model = %ep.model, asked = %ep.api_id(), served = %m, "depth: the node names a different model than the request asked for; recording the name from config");
                 }
             }
             let s = store.clone();

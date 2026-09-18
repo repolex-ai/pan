@@ -25,15 +25,17 @@ pub const DEFAULT_BIND: &str = "127.0.0.1";
 #[serde(deny_unknown_fields)]
 pub struct ModelEndpoint {
     pub url: String,
+    /// THE MODEL'S NAME — one name, written by a person, used everywhere Pan
+    /// says which model did something: `pan:model` in the graph and in the
+    /// file, the file name, the log line (goodlux, 2026-09-18). Lowercase
+    /// letters, digits and single dashes; no periods, no spaces, no slashes.
     pub model: String,
-    /// The model's SHORT NAME: what this model is called in a file name
-    /// (goodlux, 2026-09-18). `model` above is the wire string the endpoint
-    /// wants — `qwen/qwen3.8-27b` — and it has slashes and periods in it; a
-    /// file name may have neither. So the name is written here, by a person,
-    /// once: lowercase letters, digits and single dashes, nothing else.
-    /// Required on every stage: a name pand invented from the wire string is
-    /// how `cljuqhqf.depth-anything-Depth-Anything-V2-Base-hf.png` happened.
-    pub name: String,
+    /// What the request has to say to reach that model, when the endpoint
+    /// insists on a string of its own: `qwen/qwen3.8-27b` for the caption node,
+    /// `depth-anything/Depth-Anything-V2-Base-hf` for depth. It is not a name
+    /// and it is never written down as one — it goes in the request body and
+    /// nowhere else. Absent when the endpoint is happy with the name.
+    pub api_id: Option<String>,
     /// The instruction sent with the image to a captioning endpoint. In the
     /// config file this is the NAME of a plain-text file under
     /// `~/.config/pan/prompts/` (goodlux, 2026-09-08: the prompt text lives
@@ -70,6 +72,15 @@ pub struct ModelEndpoint {
     /// it balances the two nodes; the direct node is what Pan runs on when
     /// the door is down.
     pub fallback: Option<Fallback>,
+}
+
+impl ModelEndpoint {
+    /// What the request body says. The endpoint's own string when it insists
+    /// on one, the model's name otherwise. Never recorded: `pan:model` is the
+    /// name (goodlux, 2026-09-18).
+    pub fn api_id(&self) -> &str {
+        self.api_id.as_deref().unwrap_or(&self.model)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -194,7 +205,7 @@ fn expand_home(p: &Path) -> PathBuf {
 /// drive should see it (Rob, 2026-09-05).
 pub const MEDIA_DIR_ON_VOLUME: &str = "pan";
 
-/// A model's short name, as it may appear in a file name: lowercase letters,
+/// A model's name, which has to survive being a file name: lowercase letters,
 /// digits and single dashes between them. No periods, no spaces, no slashes,
 /// no underscores, and never empty (goodlux, 2026-09-18).
 pub fn check_model_name(name: &str) -> std::result::Result<(), String> {
@@ -265,17 +276,14 @@ impl DaemonConfig {
         }
         let mut models = yml.models;
         for (stage, m) in models.iter_mut() {
-            if m.url.is_empty() || m.model.is_empty() {
-                return Err(anyhow!(
-                    "{}: every model needs both url and model",
-                    path.display()
-                ));
+            if m.url.is_empty() {
+                return Err(anyhow!("{}: every model needs a url", path.display()));
             }
-            check_model_name(&m.name).map_err(|e| {
+            check_model_name(&m.model).map_err(|e| {
                 anyhow!(
-                    "{}: stage {stage} has name: {:?} — {e}",
+                    "{}: stage {stage} has model: {:?} — {e}",
                     path.display(),
-                    m.name
+                    m.model
                 )
             })?;
             if m.concurrency == 0 {
@@ -353,7 +361,7 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "stores:\n  - /souls/a\n  - ~/.pan\ndefault: /souls/a\nport: 7402\nmodels:\n  embed:\n    url: http://127.0.0.1:1215/see_embed\n    model: qwen-vl-2b\n    name: qwen-vl-2b\n    concurrency: 2\n",
+            "stores:\n  - /souls/a\n  - ~/.pan\ndefault: /souls/a\nport: 7402\nmodels:\n  embed:\n    url: http://127.0.0.1:1215/see_embed\n    model: qwen-vl-2b\n    concurrency: 2\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
@@ -374,7 +382,7 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  pose:\n    url: http://x/see_pose\n    model: rtmw\n    name: rtmw\n    enabled: false\n",
+            "models:\n  pose:\n    url: http://x/see_pose\n    model: rtmw\n    enabled: false\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
@@ -433,7 +441,7 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n    name: rtmw\n    fallback:\n      url: https://node.example/pose\n      auth: Bearer abc\n",
+            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n    fallback:\n      url: https://node.example/pose\n      auth: Bearer abc\n",
         )
         .unwrap();
         let c = DaemonConfig::load_from(&p).unwrap();
@@ -451,7 +459,7 @@ mod tests {
         // Without a fallback there is no fallback target — the stage waits.
         std::fs::write(
             &p,
-            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n    name: rtmw\n",
+            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n",
         )
         .unwrap();
         assert!(DaemonConfig::load_from(&p).unwrap().models["pose"]
@@ -482,28 +490,36 @@ mod tests {
         }
     }
 
+    /// The old shape put the endpoint's string in `model:` and pand wrote it
+    /// down as the model's name. That string is now refused outright.
     #[test]
-    fn a_stage_without_a_name_is_refused_at_load() {
+    fn the_endpoints_own_string_is_not_a_name() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  pose:\n    url: http://x/percept/pose\n    model: rtmw\n",
-        )
-        .unwrap();
-        assert!(DaemonConfig::load_from(&p).is_err());
-    }
-
-    #[test]
-    fn a_name_with_a_period_is_refused_at_load() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("config.yml");
-        std::fs::write(
-            &p,
-            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen/qwen3.8-27b\n    name: qwen3.8-27b\n",
+            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen/qwen3.8-27b\n",
         )
         .unwrap();
         let e = DaemonConfig::load_from(&p).unwrap_err().to_string();
         assert!(e.contains("caption"), "{e}");
+    }
+
+    /// One name, and the request value only when the endpoint insists on one.
+    #[test]
+    fn the_request_says_api_id_when_given_and_the_name_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        std::fs::write(
+            &p,
+            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n    api_id: qwen/qwen3.8-27b\n  pose:\n    url: http://x/percept/pose\n    model: rtmw-x-l\n",
+        )
+        .unwrap();
+        let cfg = DaemonConfig::load_from(&p).unwrap();
+        let cap = &cfg.models["caption"];
+        assert_eq!(cap.model, "qwen3-8-27b");
+        assert_eq!(cap.api_id(), "qwen/qwen3.8-27b");
+        let pose = &cfg.models["pose"];
+        assert_eq!(pose.api_id(), "rtmw-x-l");
     }
 }
