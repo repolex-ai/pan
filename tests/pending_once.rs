@@ -25,7 +25,7 @@ fn make_png(seed: u8) -> Vec<u8> {
 fn captioned(store: &Pan, seed: u8, objects: &str) -> String {
     let put = store.put(&make_png(seed), Some("image/png")).unwrap();
     let json = format!(
-        "{{\"shortDescription\": \"s\", \"longDescription\": \"a long description\", \"sceneObjects\": {objects}, \"sceneMood\": \"still\"}}"
+        "{{\"shortCaption\": \"s\", \"longCaption\": \"a long description\", \"sceneObjects\": {objects}, \"sceneMood\": \"still\"}}"
     );
     let p = Perception::parse(&json).unwrap();
     store.set_perception(&put.id, &p).unwrap();

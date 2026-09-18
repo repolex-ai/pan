@@ -93,10 +93,10 @@ pub struct ImagePacket {
     pub source_file: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    /// One sentence (pan:shortDescription) and the detailed description
-    /// (pan:longDescription) the caption stage wrote.
-    pub short_description: Option<String>,
-    pub long_description: Option<String>,
+    /// One sentence (pan:shortCaption) and the detailed caption
+    /// (pan:longCaption) the caption stage wrote.
+    pub short_caption: Option<String>,
+    pub long_caption: Option<String>,
     /// Every physical thing the caption model named (pan:sceneObjects), one
     /// value each — an rdf:Bag in the file.
     pub scene_objects: Vec<String>,
@@ -223,11 +223,11 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
     if let Some(h) = p.height {
         ident.push(("height".into(), FieldValue::Scalar(h.to_string())));
     }
-    if let Some(c) = &p.short_description {
-        ident.push(("shortDescription".into(), FieldValue::Scalar(c.clone())));
+    if let Some(c) = &p.short_caption {
+        ident.push(("shortCaption".into(), FieldValue::Scalar(c.clone())));
     }
-    if let Some(c) = &p.long_description {
-        ident.push(("longDescription".into(), FieldValue::Scalar(c.clone())));
+    if let Some(c) = &p.long_caption {
+        ident.push(("longCaption".into(), FieldValue::Scalar(c.clone())));
     }
     if !p.scene_objects.is_empty() {
         ident.push((
@@ -1427,8 +1427,8 @@ mod flat_block_tests {
             media_path: "image/2026/09/05/20260905-000009-altocnif.png".into(),
             source_file: String::new(),
             created_date: "2026-09-05T00:00:09-07:00".into(),
-            short_description: Some("A wolf on a ridge at dusk.".into()),
-            long_description: Some(
+            short_caption: Some("A wolf on a ridge at dusk.".into()),
+            long_caption: Some(
                 "A grey wolf stands on a rocky ridge, lit from the left by a low sun.".into(),
             ),
             scene_objects: vec!["wolf".into(), "rock".into(), "sky".into()],
@@ -1497,12 +1497,10 @@ mod flat_block_tests {
             "creation time under pan:, not git-lex: {desc}"
         );
         assert!(
-            desc.contains(
-                "<pan:shortDescription>A wolf on a ridge at dusk.</pan:shortDescription>"
-            ),
+            desc.contains("<pan:shortCaption>A wolf on a ridge at dusk.</pan:shortCaption>"),
             "{desc}"
         );
-        assert!(desc.contains("<pan:longDescription>"), "{desc}");
+        assert!(desc.contains("<pan:longCaption>"), "{desc}");
         assert!(desc.contains("<pan:sceneObjects><rdf:Bag><rdf:li>wolf</rdf:li><rdf:li>rock</rdf:li><rdf:li>sky</rdf:li></rdf:Bag></pan:sceneObjects>"), "scene objects as a bag: {desc}");
         assert!(
             desc.contains("<pan:sceneMood>still</pan:sceneMood>"),
@@ -1567,8 +1565,8 @@ mod flat_block_tests {
             media_type: "image/png".into(),
             width: Some(1280),
             height: Some(1920),
-            short_description: Some("A sample caption.".into()),
-            long_description: Some("A sample caption, at length.".into()),
+            short_caption: Some("A sample caption.".into()),
+            long_caption: Some("A sample caption, at length.".into()),
             scene_objects: vec!["wolf".into()],
             curation: vec![],
             thumbnail: Some(ThumbRef {

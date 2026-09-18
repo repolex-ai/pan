@@ -372,7 +372,7 @@ pub struct PutResult {
 /// number of images, and for each derived kind the number of images that
 /// have at least one record of it. `pending_*` is images minus that.
 /// The scene fields of pan.ttl 0.3.4, in the order the file writes them.
-/// A JSON key from the caption model must be one of these, a description, or
+/// A JSON key from the caption model must be one of these, a caption, or
 /// sceneObjects; anything else is refused (the ontology is the whole of what
 /// Pan may say). The test below checks every name here against pan.ttl.
 pub const SCENE_FIELDS: [&str; 12] = [
@@ -392,8 +392,8 @@ pub const SCENE_FIELDS: [&str; 12] = [
 
 /// Every property the caption stage writes on the object.
 pub const PERCEPTION_FIELDS: [&str; 15] = [
-    "shortDescription",
-    "longDescription",
+    "shortCaption",
+    "longCaption",
     "sceneObjects",
     "sceneCamera",
     "sceneFraming",
@@ -579,8 +579,8 @@ fn not_settable(local: &str) -> anyhow::Error {
 /// checked against the vocabulary.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Perception {
-    pub short_description: String,
-    pub long_description: String,
+    pub short_caption: String,
+    pub long_caption: String,
     pub scene_objects: Vec<String>,
     pub scene: Vec<(String, String)>,
 }
@@ -605,11 +605,11 @@ impl Perception {
         let mut out = Perception::default();
         for (k, v) in &m {
             match k.as_str() {
-                "shortDescription" => {
-                    out.short_description = v.as_str().unwrap_or_default().trim().to_string()
+                "shortCaption" => {
+                    out.short_caption = v.as_str().unwrap_or_default().trim().to_string()
                 }
-                "longDescription" => {
-                    out.long_description = v.as_str().unwrap_or_default().trim().to_string()
+                "longCaption" => {
+                    out.long_caption = v.as_str().unwrap_or_default().trim().to_string()
                 }
                 "sceneObjects" => {
                     let items: Vec<String> = match v {
@@ -649,8 +649,8 @@ impl Perception {
                 }
             }
         }
-        if out.short_description.is_empty() || out.long_description.is_empty() {
-            return Err("answer is missing shortDescription or longDescription".into());
+        if out.short_caption.is_empty() || out.long_caption.is_empty() {
+            return Err("answer is missing shortCaption or longCaption".into());
         }
         Ok(out)
     }
@@ -777,15 +777,14 @@ mod perception_tests {
 
     #[test]
     fn parses_the_answer_and_refuses_undeclared_keys() {
-        let p = Perception::parse("```json\n{\"shortDescription\": \"A wolf.\", \"longDescription\": \"A grey wolf on a ridge.\", \"sceneObjects\": [\"Wolf\", \"rock\", \"wolf\", \"\"], \"sceneMood\": \"still\", \"sceneGaze\": null}\n```").unwrap();
+        let p = Perception::parse("```json\n{\"shortCaption\": \"A wolf.\", \"longCaption\": \"A grey wolf on a ridge.\", \"sceneObjects\": [\"Wolf\", \"rock\", \"wolf\", \"\"], \"sceneMood\": \"still\", \"sceneGaze\": null}\n```").unwrap();
         assert_eq!(p.scene_objects, ["wolf", "rock"]);
         assert_eq!(p.scene, [("sceneMood".to_string(), "still".to_string())]);
-        let e = Perception::parse(
-            "{\"shortDescription\": \"x\", \"longDescription\": \"y\", \"vibe\": \"z\"}",
-        )
-        .unwrap_err();
+        let e =
+            Perception::parse("{\"shortCaption\": \"x\", \"longCaption\": \"y\", \"vibe\": \"z\"}")
+                .unwrap_err();
         assert!(e.contains("vibe"), "{e}");
-        assert!(Perception::parse("{\"shortDescription\": \"x\"}").is_err());
+        assert!(Perception::parse("{\"shortCaption\": \"x\"}").is_err());
     }
 }
 
@@ -1385,7 +1384,7 @@ impl Pan {
         // lock on the same door.
         let needs = match ref_local {
             "regionData" => "FILTER EXISTS { ?s pan:sceneObjects ?obj }",
-            "vectorData" => "FILTER EXISTS { ?s pan:longDescription ?ld }",
+            "vectorData" => "FILTER EXISTS { ?s pan:longCaption ?ld }",
             _ => "",
         };
         let model_lit = model.replace('\\', "\\\\").replace('"', "\\\"");
@@ -1687,13 +1686,10 @@ impl Pan {
             }
         }
         t.insert(
-            self.quad(&subject, "shortDescription", &p.short_description)
+            self.quad(&subject, "shortCaption", &p.short_caption)
                 .as_ref(),
         );
-        t.insert(
-            self.quad(&subject, "longDescription", &p.long_description)
-                .as_ref(),
-        );
+        t.insert(self.quad(&subject, "longCaption", &p.long_caption).as_ref());
         for o in &p.scene_objects {
             t.insert(self.quad(&subject, "sceneObjects", o).as_ref());
         }
@@ -2235,8 +2231,8 @@ impl Pan {
             source_file: pan_field("sourceFile").unwrap_or_default(),
             width: pan_field("width").and_then(|v| v.parse().ok()),
             height: pan_field("height").and_then(|v| v.parse().ok()),
-            short_description: pan_field("shortDescription"),
-            long_description: pan_field("longDescription"),
+            short_caption: pan_field("shortCaption"),
+            long_caption: pan_field("longCaption"),
             scene_objects: facts
                 .iter()
                 .find(|(p, _)| p == &format!("{PAN_NS}sceneObjects"))

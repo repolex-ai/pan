@@ -125,14 +125,11 @@ fn refusals_name_the_problem_and_write_nothing() {
     assert!(e.contains("0 to 5"), "{e}");
 
     let e = store
-        .set_fields(
-            &id,
-            &[("shortDescription".into(), serde_json::json!("mine"))],
-        )
+        .set_fields(&id, &[("shortCaption".into(), serde_json::json!("mine"))])
         .unwrap_err()
         .to_string();
     assert!(
-        e.contains("shortDescription") && e.contains("not a property a person may set"),
+        e.contains("shortCaption") && e.contains("not a property a person may set"),
         "{e}"
     );
 
@@ -154,8 +151,8 @@ fn refusals_name_the_problem_and_write_nothing() {
     );
 
     let e = store
-        .unset_fields(&id, &["longDescription".into()])
+        .unset_fields(&id, &["longCaption".into()])
         .unwrap_err()
         .to_string();
-    assert!(e.contains("longDescription"), "{e}");
+    assert!(e.contains("longCaption"), "{e}");
 }

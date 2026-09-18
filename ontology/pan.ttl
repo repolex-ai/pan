@@ -44,11 +44,22 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.7" .
+    owl:versionInfo "0.4.8" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.8 (2026-09-18, ruled by goodlux): CAPTIONS ARE CAPTIONS.
+#   (1) pan:shortDescription RENAMED pan:shortCaption; pan:longDescription
+#       RENAMED pan:longCaption. A text the caption stage makes by captioning
+#       is a caption, not a description. "description" is git-lex's word
+#       (git-lex:description, a summary a person writes) and pan:description
+#       is its file spelling; the two names were colliding in meaning.
+#   Deliberately not done: pan:description is untouched; stored triples under
+#   the old names are not migrated (the stores were wiped on 2026-09-17 and
+#   the caption stage rewrites its facts on the next run). The caption prompt
+#   (~/.config/pan/prompts/caption.md) keys its JSON by these names and was
+#   changed with them.
 # v0.4.7 (2026-09-17, ruled by goodlux): MEDIASET AND IMAGESET REFACTOR.
 #   (1) + pan:MediaSet a owl:Class ; rdfs:subClassOf subtexture:Set , pan:Node —
 #       an unordered set of Pan media of any kind (image, audio, video) a person
@@ -443,15 +454,15 @@ pan:height a owl:DatatypeProperty ;
     rdfs:domain pan:Node ;
     rdfs:range xsd:integer .
 
-pan:shortDescription a owl:DatatypeProperty ;
-    rdfs:label "short description" ;
+pan:shortCaption a owl:DatatypeProperty ;
+    rdfs:label "short caption" ;
     rdfs:comment "One sentence saying what this media shows. Written by the caption stage; do not write it by hand." ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:string .
 
-pan:longDescription a owl:DatatypeProperty ;
-    rdfs:label "long description" ;
-    rdfs:comment "A detailed, literal description of everything the media shows. The embedding is built from the image and this text together. Written by the caption stage." ;
+pan:longCaption a owl:DatatypeProperty ;
+    rdfs:label "long caption" ;
+    rdfs:comment "A detailed, literal caption of everything the media shows. The embedding is built from the image and this text together. Written by the caption stage." ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:string .
 

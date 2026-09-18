@@ -230,7 +230,7 @@ command reads the list from the ontology.
 ### How a model answer becomes metadata
 
 The caption prompt asks the model for one JSON object whose keys are Pan
-property names: `shortDescription`, `longDescription`, `sceneObjects` (a
+property names: `shortCaption`, `longCaption`, `sceneObjects` (a
 list), and the twelve scene fields (`sceneCamera` … `sceneLocation`). Pan
 writes them onto the image, in the graph and in the XMP, and refuses the
 whole answer if a key is not declared in pan.ttl. The prompt is the schema.
