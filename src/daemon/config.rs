@@ -346,7 +346,7 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "stores:\n  - /souls/a\n  - ~/.pan\ndefault: /souls/a\nport: 7402\nmodels:\n  embed:\n    url: http://127.0.0.1:1215/see_embed\n    model: qwen-vl-2b\n    concurrency: 2\n",
+            "stores:\n  - /souls/a\n  - ~/.pan\ndefault: /souls/a\nport: 7402\nmodels:\n  embed:\n    url: http://127.0.0.1:1215/percept/embed\n    model: qwen-vl-2b\n    concurrency: 2\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
@@ -367,7 +367,7 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  pose:\n    url: http://x/see_pose\n    model: rtmw\n    enabled: false\n",
+            "models:\n  pose:\n    url: http://x/percept/pose\n    model: rtmw\n    enabled: false\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();

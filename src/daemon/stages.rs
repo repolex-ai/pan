@@ -8,19 +8,19 @@
 //! "These 500 images have no caption, cycle captioning" is literally one
 //! stage's query.
 //!
-//! Stages (config key → what it records):
-//!   embed   `/see_embed`  → pan:Embedding (+ vector index) AND, when the
-//!                           endpoint config names a `caption_model`, a
-//!                           pan:Caption from the same image load
-//!   caption `/see`        → pan:Caption only (a second captioning model)
-//!   pose    `/see_pose`   → one pan:Pose per detected person + skeleton overlay
-//!   sam3    `/percept/segment` → pan:Region per grounded prompt. The prompts
-//!                           are the caption's OBJECTS line (the segmentable
-//!                           nouns the caption model listed), so this stage
-//!                           waits for a caption. The whole server answer is
-//!                           kept as a .json beside the record.
-//!   depth   `/percept/depth` → one pan:Depth per image: the map PNG and the
-//!                           node's sidecar beside the record (issue #24).
+//! Stages are addressed only by the url in the config. The five Pan uses
+//! today are Iris's, 2026-09-18: POST /percept/vlm (OpenAI chat completions),
+//! and POST /percept/embed, /percept/pose, /percept/depth and
+//! /percept/segment (an image upload, JSON back).
+//!
+//!   embed   → pan:Embedding and the vector index
+//!   caption → pan:Caption, and the facts its JSON answer declares
+//!   pose    → one pan:Pose per detected person + skeleton overlay
+//!   sam3    → pan:Region per grounded prompt. The prompts are the nouns the
+//!             caption model listed, so this stage waits for a caption. The
+//!             whole server answer is kept as a .json beside the record.
+//!   depth   → one pan:Depth per image: the map PNG and the node's sidecar
+//!             beside the record.
 
 use anyhow::{anyhow, Context, Result};
 use std::sync::Arc;
@@ -471,7 +471,7 @@ async fn run_one(
             d.counters
                 .model_calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.see_pose(t, &bytes, media_type, meter).await?;
+            let r = d.iris.pose(t, &bytes, media_type, meter).await?;
             if r.keypoints.is_empty() {
                 // The eye reports "no people" and "I failed" the same way (200
                 // {}). Record a zero-count run so the image is not asked

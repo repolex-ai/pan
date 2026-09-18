@@ -5,7 +5,7 @@
 //! Outcomes are three-valued, because the eye is: a real result, a TERMINAL
 //! refusal (422 — these bytes will never caption; stop asking), or a
 //! TRANSIENT failure (5xx / unreachable / timeout — ask again later). A 200
-//! with an empty body is how `/see_pose` and `/segment` report internal
+//! with an empty body is how `POST /percept/pose` and `POST /percept/segment` report internal
 //! failure, so "200" is never read as "worked" — the fields are.
 
 use anyhow::{anyhow, Context, Result};
@@ -42,7 +42,7 @@ impl std::fmt::Display for CallError {
 
 impl std::error::Error for CallError {}
 
-/// `/see_embed`: caption + vector from one image load.
+/// `POST /percept/embed`: the image's vector, and the caption fields when the node returns them.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SeeEmbed {
     #[serde(default)]
@@ -82,7 +82,7 @@ pub struct Vlm {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// `/see_pose`: one skeleton per detected person, 133 COCO-WholeBody
+/// `POST /percept/pose`: one skeleton per detected person, 133 COCO-WholeBody
 /// keypoints each as `[x, y, confidence]`, plus the drawn skeleton as PNG.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SeePose {
@@ -314,38 +314,18 @@ impl Iris {
             .post(t, form, (bytes.len() + text.len()) as u64, meter)
             .await?;
         let out: SeeEmbed = serde_json::from_value(v)
-            .map_err(|e| CallError::Transient(format!("see_embed shape: {e}")))?;
+            .map_err(|e| CallError::Transient(format!("embed shape: {e}")))?;
         if out.vector.is_empty() {
-            return Err(CallError::Transient("see_embed returned no vector".into()));
+            return Err(CallError::Transient("embed returned no vector".into()));
         }
         if out.dim != 0 && out.dim != out.vector.len() {
             return Err(CallError::Transient(format!(
-                "see_embed dim {} != vector length {}",
+                "embed dim {} != vector length {}",
                 out.dim,
                 out.vector.len()
             )));
         }
         Ok(out)
-    }
-
-    /// `/see` (or `/see_embed` — the caption fields are the same): caption
-    /// only, no vector required.
-    pub async fn see(
-        &self,
-        t: &Target,
-        bytes: &[u8],
-        media_type: &str,
-        meter: &Meter,
-    ) -> std::result::Result<SeeEmbed, CallError> {
-        let form = Form::new()
-            .part(
-                "image",
-                Self::image_part(bytes, media_type)
-                    .map_err(|e| CallError::Terminal(e.to_string()))?,
-            )
-            .text("resident", "true");
-        let v = self.post(t, form, bytes.len() as u64, meter).await?;
-        serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see shape: {e}")))
     }
 
     /// `POST /percept/vlm` (m3rc's door, 2026-09-05, third and final shape —
@@ -403,7 +383,7 @@ impl Iris {
         })
     }
 
-    pub async fn see_pose(
+    pub async fn pose(
         &self,
         t: &Target,
         bytes: &[u8],
@@ -418,7 +398,7 @@ impl Iris {
             )
             .text("with_keypoints", "true");
         let v = self.post(t, form, bytes.len() as u64, meter).await?;
-        serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see_pose shape: {e}")))
+        serde_json::from_value(v).map_err(|e| CallError::Transient(format!("pose shape: {e}")))
     }
 
     /// `/percept/depth` (m3rc's Iris → Depth Anything V2 on Salad, percept-v1.7,
@@ -534,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn see_embed_keeps_unknown_fields() {
+    fn embed_answer_keeps_unknown_fields() {
         let v: SeeEmbed = serde_json::from_str(
             r#"{"caption":"a cat","qwen35vl9bCaption":"a cat","sceneMood":"calm","sceneObjects":["cat"],"vector":[0.1,0.2],"dim":2}"#,
         )
