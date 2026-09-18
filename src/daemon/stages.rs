@@ -609,11 +609,6 @@ async fn run_one(
                     CallError::Transient("depth: node answered without a map".into()).into(),
                 );
             }
-            if let Some(m) = answer.model.as_deref() {
-                if m != ep.api_id() {
-                    tracing::warn!(model = %ep.model, asked = %ep.api_id(), served = %m, "depth: the node names a different model than the request asked for; recording the name from config");
-                }
-            }
             let s = store.clone();
             let id = item.id.clone();
             let model = ep.model.clone();
