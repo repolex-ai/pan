@@ -280,6 +280,9 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                     response_bytes: m.response_bytes,
                     outcome,
                     error,
+                    finish_reason: m.finish_reason.as_deref(),
+                    prompt_tokens: m.prompt_tokens,
+                    completion_tokens: m.completion_tokens,
                 });
             }
         };
@@ -442,8 +445,15 @@ async fn run_one(
             // 0.3.4). A key the ontology does not declare fails this image
             // for good: the prompt is the schema, and a wrong prompt is a
             // config error, not something to retry.
-            let perception = crate::Perception::parse(&r.text)
-                .map_err(|e| CallError::Terminal(format!("caption answer: {e}")))?;
+            let perception = crate::Perception::parse(&r.text).map_err(|e| {
+                CallError::Terminal(caption_failure_message(
+                    &e,
+                    r.finish_reason.as_deref(),
+                    r.prompt_tokens,
+                    r.completion_tokens,
+                    &r.text,
+                ))
+            })?;
             let s = store.clone();
             let id = item.id.clone();
             let model = r
@@ -631,4 +641,62 @@ fn write_perception(
         Some(model),
     )?;
     s.pan.set_perception(id, p)
+}
+
+/// The `stage failed: caption answer: …` text when the model's reply did not
+/// parse: the parser's own words, then what the server said about the reply
+/// (why it stopped, how many tokens in and out) and the first 200 characters
+/// of the content. Asked for by m3rc (2026-09-18): `length` means the 2048
+/// token window ran out; `stop` with prose means sampling wandered.
+fn caption_failure_message(
+    parse_error: &str,
+    finish_reason: Option<&str>,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    content: &str,
+) -> String {
+    let opt_s = |v: Option<&str>| v.unwrap_or("none").to_string();
+    let opt_n = |v: Option<u64>| v.map_or_else(|| "none".to_string(), |n| n.to_string());
+    let head: String = content.chars().take(200).collect();
+    format!(
+        "caption answer: {parse_error} (finish_reason={}, prompt_tokens={}, completion_tokens={}, content[..200]={head:?})",
+        opt_s(finish_reason),
+        opt_n(prompt_tokens),
+        opt_n(completion_tokens),
+    )
+}
+
+#[cfg(test)]
+mod caption_failure_tests {
+    use super::caption_failure_message;
+
+    #[test]
+    fn a_cut_off_answer_names_the_window_and_shows_the_head() {
+        let prose = "The image shows a woman standing on a cliff at dusk, her coat ".repeat(6);
+        let e = crate::Perception::parse(&prose).unwrap_err();
+        assert_eq!(e, "answer has no JSON object");
+        let msg = caption_failure_message(&e, Some("length"), Some(1811), Some(237), &prose);
+        assert!(
+            msg.starts_with("caption answer: answer has no JSON object ("),
+            "{msg}"
+        );
+        assert!(msg.contains("finish_reason=length"), "{msg}");
+        assert!(msg.contains("prompt_tokens=1811"), "{msg}");
+        assert!(msg.contains("completion_tokens=237"), "{msg}");
+        let head: String = prose.chars().take(200).collect();
+        assert!(msg.contains(&format!("content[..200]={head:?}")), "{msg}");
+        assert!(
+            !msg.contains(&prose),
+            "only the first 200 characters ride in the message"
+        );
+    }
+
+    #[test]
+    fn missing_usage_says_none_not_zero() {
+        let msg = caption_failure_message("answer is not a JSON object", None, None, None, "[]");
+        assert!(
+            msg.contains("finish_reason=none, prompt_tokens=none, completion_tokens=none"),
+            "{msg}"
+        );
+    }
 }

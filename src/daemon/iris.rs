@@ -69,6 +69,15 @@ pub struct Vlm {
     pub model: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
+    /// `choices[0].finish_reason` and `usage.*` as the server reported
+    /// them; None when absent. Carried so a parse failure can say whether
+    /// the answer was cut off (`length`) or complete (`stop`).
+    #[serde(default)]
+    pub finish_reason: Option<String>,
+    #[serde(default)]
+    pub prompt_tokens: Option<u64>,
+    #[serde(default)]
+    pub completion_tokens: Option<u64>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -157,6 +166,7 @@ impl Iris {
                 latency_ms: ms(start),
                 request_bytes,
                 response_bytes: 0,
+                ..Default::default()
             });
             CallError::Transient(format!("{url}: {e}"))
         })?;
@@ -183,6 +193,7 @@ impl Iris {
                 latency_ms: ms(start),
                 request_bytes,
                 response_bytes: 0,
+                ..Default::default()
             });
             CallError::Transient(format!("{url}: {e}"))
         })?;
@@ -207,6 +218,7 @@ impl Iris {
                     latency_ms: ms(start),
                     request_bytes,
                     response_bytes: 0,
+                    ..Default::default()
                 });
                 return Err(CallError::Transient(format!("{url}: read body: {e}")));
             }
@@ -217,6 +229,7 @@ impl Iris {
             latency_ms: ms(start),
             request_bytes,
             response_bytes: body.len() as u64,
+            ..Default::default()
         });
         if status.as_u16() == 422 {
             return Err(CallError::Terminal(format!(
@@ -356,6 +369,15 @@ impl Iris {
             ))
         })?;
         let model = v.get("model").and_then(|m| m.as_str()).map(str::to_owned);
+        let (finish_reason, prompt_tokens, completion_tokens) = chat_diagnostics(&v);
+        // Put them on the call-log line too: the meter already holds this
+        // call's measurements from `post_json`.
+        if let Some(mut m) = meter.take() {
+            m.finish_reason = finish_reason.clone();
+            m.prompt_tokens = prompt_tokens;
+            m.completion_tokens = completion_tokens;
+            meter.set(m);
+        }
         let extra = match v {
             serde_json::Value::Object(m) => m,
             _ => serde_json::Map::new(),
@@ -364,6 +386,9 @@ impl Iris {
             text,
             model,
             provider: None,
+            finish_reason,
+            prompt_tokens,
+            completion_tokens,
             extra,
         })
     }
@@ -562,6 +587,20 @@ pub fn build_chat_request(
 
 /// `choices[0].message.content` from a chat-completions response. Content is
 /// a string, or (some servers) a list of parts whose `text` fields are joined.
+/// `choices[0].finish_reason`, `usage.prompt_tokens`, `usage.completion_tokens`
+/// from a chat-completions reply; None for whatever the server left out.
+pub fn chat_diagnostics(v: &serde_json::Value) -> (Option<String>, Option<u64>, Option<u64>) {
+    let finish = v
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("finish_reason"))
+        .and_then(|f| f.as_str())
+        .map(str::to_owned);
+    let usage = v.get("usage");
+    let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(|n| n.as_u64());
+    (finish, tok("prompt_tokens"), tok("completion_tokens"))
+}
+
 pub fn text_from_chat_response(v: &serde_json::Value) -> Option<String> {
     let content = v.get("choices")?.get(0)?.get("message")?.get("content")?;
     match content {
@@ -584,6 +623,20 @@ pub fn text_from_chat_response(v: &serde_json::Value) -> Option<String> {
 #[cfg(test)]
 mod chat_tests {
     use super::*;
+
+    #[test]
+    fn chat_diagnostics_reads_finish_reason_and_usage_and_tolerates_their_absence() {
+        let full = serde_json::json!({
+            "choices": [{"finish_reason": "length", "message": {"role": "assistant", "content": "The image shows"}}],
+            "usage": {"prompt_tokens": 1811, "completion_tokens": 237, "total_tokens": 2048}
+        });
+        assert_eq!(
+            chat_diagnostics(&full),
+            (Some("length".to_string()), Some(1811), Some(237))
+        );
+        let bare = serde_json::json!({"choices": [{"message": {"content": "{}"}}]});
+        assert_eq!(chat_diagnostics(&bare), (None, None, None));
+    }
 
     #[test]
     fn request_is_the_openai_shape_with_extra_body_at_top_level() {

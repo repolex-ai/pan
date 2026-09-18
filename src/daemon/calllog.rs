@@ -40,6 +40,14 @@ pub struct CallMeta {
     /// wire size (multipart framing is not counted).
     pub request_bytes: u64,
     pub response_bytes: u64,
+    /// Chat-completions replies only (the caption stage): why the model
+    /// stopped (`stop`, `length`, …) and the token counts the server
+    /// reported. None on every other route and when the server sent no
+    /// `usage`. Asked for by m3rc (2026-09-18) to tell a cut-off answer
+    /// (`length`) from a wandering one (`stop` with prose).
+    pub finish_reason: Option<String>,
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
 }
 
 /// One call's measurements, handed to the client empty and read back after.
@@ -77,6 +85,11 @@ pub struct CallLine<'a> {
     /// `recorded`, `busy`, `backend_down`, `quota`, `transient`, `terminal`.
     pub outcome: &'a str,
     pub error: Option<&'a str>,
+    /// Chat-completions replies only; null elsewhere and when the server
+    /// sent no `usage` (see `CallMeta`).
+    pub finish_reason: Option<&'a str>,
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
 }
 
 impl CallLine<'_> {
@@ -217,6 +230,9 @@ mod tests {
             response_bytes: 3_120,
             outcome: "recorded",
             error: None,
+            finish_reason: Some("stop"),
+            prompt_tokens: Some(1_402),
+            completion_tokens: Some(388),
         };
         log.record(&line);
         log.record(&CallLine {
@@ -249,6 +265,9 @@ mod tests {
             "\"response_bytes\"",
             "\"outcome\"",
             "\"error\"",
+            "\"finish_reason\"",
+            "\"prompt_tokens\"",
+            "\"completion_tokens\"",
         ];
         let positions: Vec<usize> = order
             .iter()
@@ -266,6 +285,9 @@ mod tests {
         assert_eq!(lines[0]["status"], 200);
         assert_eq!(lines[0]["outcome"], "recorded");
         assert!(lines[0]["error"].is_null());
+        assert_eq!(lines[0]["finish_reason"], "stop");
+        assert_eq!(lines[0]["prompt_tokens"], 1_402);
+        assert_eq!(lines[0]["completion_tokens"], 388);
         assert!(
             lines[1]["status"].is_null(),
             "no answer = null status, not 0"
@@ -319,6 +341,7 @@ mod tests {
             latency_ms: 5,
             request_bytes: 1,
             response_bytes: 2,
+            ..Default::default()
         });
         assert_eq!(m.take().unwrap().status, Some(200));
         assert!(m.take().is_none());
