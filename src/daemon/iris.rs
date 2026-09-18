@@ -237,22 +237,32 @@ impl Iris {
                 body.chars().take(300).collect::<String>()
             )));
         }
+        // TOO MANY REQUESTS: the server is up and saying slow down. Pan
+        // narrows this stage's window and asks for the same image again. That
+        // is what 429 means anywhere, so any endpoint gets the behaviour with
+        // nothing agreed in advance.
+        if status.as_u16() == 429 {
+            let short = body.chars().take(300).collect::<String>();
+            return Err(CallError::Busy(format!("{url}: 429: {short}")));
+        }
         if status.as_u16() == 503 {
-            // m3rc's door says WHY in the body: `busy` = every node's queue is
-            // full (retry in seconds); `backend_down` = no node is up at all
-            // (a fact about Iris, not the image — the stage holds).
-            let reason = serde_json::from_str::<serde_json::Value>(&body)
+            let short = body.chars().take(300).collect::<String>();
+            // A plain 503 says the server cannot take the request at all: hold
+            // the address and come back later. Nothing in the body is needed.
+            //
+            // Iris is the exception, and only until it answers 429: it returns
+            // 503 for a full queue too, and tells the two apart with
+            // `{"reason": "busy"}` in the body. Read while it is there. An
+            // endpoint that sends no such field loses nothing but the
+            // narrowing.
+            let queue_full = serde_json::from_str::<serde_json::Value>(&body)
                 .ok()
                 .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(str::to_owned))
-                .unwrap_or_default();
-            let short = body.chars().take(300).collect::<String>();
-            return Err(match reason.as_str() {
-                "busy" => CallError::Busy(format!("{url}: 503 busy: {short}")),
-                "backend_down" => {
-                    CallError::Transient(format!("{url}: 503 backend_down (no node up): {short}"))
-                }
-                _ => CallError::Transient(format!("{url}: {status}: {short}")),
-            });
+                .is_some_and(|r| r == "busy");
+            if queue_full {
+                return Err(CallError::Busy(format!("{url}: 503 busy: {short}")));
+            }
+            return Err(CallError::Transient(format!("{url}: {status}: {short}")));
         }
         if status.as_u16() == 402 {
             // The provider's account is out of credit. A fact about the
