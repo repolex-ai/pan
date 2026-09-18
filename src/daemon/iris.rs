@@ -24,7 +24,7 @@ pub enum CallError {
     Transient(String),
     /// Retry in SECONDS, not minutes: every node's queue is full right now
     /// (m3rc's door, 2026-09-05: `503 {"reason":"busy"}` — max_queue 2 per
-    /// node per model). Nothing is wrong with the image or the door.
+    /// node per model). Nothing is wrong with the image or Iris.
     Busy(String),
     /// Never retry these bytes with this stage: the eye said no for cause.
     Terminal(String),
@@ -173,7 +173,7 @@ impl Iris {
         self.finish(url, resp, start, request_bytes, meter).await
     }
 
-    /// `POST` a JSON body. Used where the door forwards Pan's bytes to a
+    /// `POST` a JSON body. Used where Iris forwards Pan's bytes to a
     /// provider untouched and hands back the provider's own status + body.
     async fn post_json(
         &self,
@@ -240,7 +240,7 @@ impl Iris {
         if status.as_u16() == 503 {
             // m3rc's door says WHY in the body: `busy` = every node's queue is
             // full (retry in seconds); `backend_down` = no node is up at all
-            // (a fact about the door, not the image — the stage holds).
+            // (a fact about Iris, not the image — the stage holds).
             let reason = serde_json::from_str::<serde_json::Value>(&body)
                 .ok()
                 .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(str::to_owned))
@@ -339,14 +339,14 @@ impl Iris {
     }
 
     /// `POST /percept/vlm` (m3rc's door, 2026-09-05, third and final shape —
-    /// Rob: the door must not massage anything): the body IS the OpenAI
+    /// Rob: Iris must not massage anything): the body IS the OpenAI
     /// chat-completions request the provider should see. Pan builds it, the
     /// door adds the Authorization header, forwards the bytes, and returns
     /// the provider's response body and status as-is. Pan reads
     /// `choices[0].message.content` itself. `extra_body` (config) is merged
     /// into the top level verbatim — that is where `provider`,
     /// `chat_template_kwargs.enable_thinking`, `max_tokens` live.
-    // Eight inputs because that is the chat request's contract with the door;
+    // Eight inputs because that is the chat request's contract with Iris;
     // a struct would only rename them.
     #[allow(clippy::too_many_arguments)]
     pub async fn vlm(
@@ -411,7 +411,7 @@ impl Iris {
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("see_pose shape: {e}")))
     }
 
-    /// `/percept/depth` (m3rc's door → Depth Anything V2 on Salad, percept-v1.7,
+    /// `/percept/depth` (m3rc's Iris → Depth Anything V2 on Salad, percept-v1.7,
     /// 2026-09-16): image → one normalized 8-bit map plus its raw range. The
     /// answer is handed back whole; `crate::depth` reads it.
     pub async fn depth(
@@ -429,7 +429,7 @@ impl Iris {
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("depth shape: {e}")))
     }
 
-    /// `/percept/segment` (m3rc's door → SAM3 on Salad): `prompts` is one
+    /// `/percept/segment` (m3rc's Iris → SAM3 on Salad): `prompts` is one
     /// comma-separated string of nouns. Returns the parsed regions AND the
     /// whole response as it came, so the caller can keep everything the
     /// server said (area, verts, provenance) beside the record.
@@ -544,7 +544,7 @@ mod tests {
 }
 
 /// The OpenAI chat-completions request a caption provider sees, built by Pan
-/// and forwarded by the door byte for byte. One user message: the image as a
+/// and forwarded by Iris byte for byte. One user message: the image as a
 /// data URL, then the prompt. `extra_body` keys land at the top level as
 /// given; they may not override `model` or `messages`.
 pub fn build_chat_request(

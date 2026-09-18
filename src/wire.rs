@@ -9,7 +9,7 @@
 //! re-encoded as a same-size, high-quality JPEG. No metadata survives a
 //! decode-to-pixels round trip — there is no "strip" step to get wrong.
 //!
-//! This is Pan's job, not the door's (Rob, 2026-09-05): the only way to
+//! This is Pan's job, not Iris's (Rob, 2026-09-05): the only way to
 //! guarantee one standard and no leak is for the producer of the wire bytes
 //! to be the one that makes them. Nothing en route may massage the data.
 //!

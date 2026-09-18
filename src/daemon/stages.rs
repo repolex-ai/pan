@@ -198,7 +198,7 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
         .ok_or_else(|| anyhow!("stage {stage} not configured"))?;
     // Which address this pass calls. A hold on the primary sends the stage to
     // its fallback (if it has one); a hold on both means wait. The primary is
-    // probed again the moment its hold expires, so the door gets the traffic
+    // probed again the moment its hold expires, so Iris gets the traffic
     // back as soon as it is up.
     let held = |key: &str| -> bool {
         crate::locked(&d.stage_hold)
@@ -405,7 +405,7 @@ async fn run_one(
         }
         STAGE_CAPTION => {
             // `/percept/vlm` (m3rc, 2026-09-05): image + prompt → text. The
-            // prompt is config and required — Pan supplies it, the door never
+            // prompt is config and required — Pan supplies it, Iris never
             // does (Rob, 2026-09-05); the model recorded is the one the SERVER
             // names in its answer, falling back to config only if it is silent.
             let Some(prompt) = ep.prompt.as_deref().filter(|p| !p.trim().is_empty()) else {
@@ -418,7 +418,7 @@ async fn run_one(
             // The caption provider gets PIXELS ONLY: a same-size, high-quality
             // JPEG re-encoded from the stored image, so neither Horae's copia
             // block nor Pan's own XMP reaches a third-party model (Rob,
-            // 2026-09-05; see `wire.rs`). This is Pan's job, not the door's.
+            // 2026-09-05; see `wire.rs`). This is Pan's job, not Iris's.
             let wire = {
                 let b = bytes.clone();
                 tokio::task::spawn_blocking(move || crate::wire::caption_copy(&b)).await??
@@ -430,7 +430,7 @@ async fn run_one(
                 .iris
                 .vlm(
                     t,
-                    ep.api_id(),
+                    &ep.model,
                     &wire.bytes,
                     wire.media_type,
                     prompt,
@@ -460,11 +460,6 @@ async fn run_one(
             // string (`qwen/qwen3.8-27b`); that is the request's business, not
             // a second name for the model (goodlux, 2026-09-18). A mismatch is
             // worth knowing about, so it is logged, not written down.
-            if let Some(served) = r.model.as_deref().filter(|m| !m.trim().is_empty()) {
-                if served != ep.api_id() {
-                    tracing::warn!(model = %ep.model, asked = %ep.api_id(), served = %served, "caption: the node answered as a different model than the request asked for");
-                }
-            }
             let model = ep.model.clone();
             let text = r.text.clone();
             tokio::task::spawn_blocking(move || {

@@ -30,12 +30,6 @@ pub struct ModelEndpoint {
     /// file, the file name, the log line (goodlux, 2026-09-18). Lowercase
     /// letters, digits and single dashes; no periods, no spaces, no slashes.
     pub model: String,
-    /// What the request has to say to reach that model, when the endpoint
-    /// insists on a string of its own: `qwen/qwen3.8-27b` for the caption node,
-    /// `depth-anything/Depth-Anything-V2-Base-hf` for depth. It is not a name
-    /// and it is never written down as one — it goes in the request body and
-    /// nowhere else. Absent when the endpoint is happy with the name.
-    pub api_id: Option<String>,
     /// The instruction sent with the image to a captioning endpoint. In the
     /// config file this is the NAME of a plain-text file under
     /// `~/.config/pan/prompts/` (goodlux, 2026-09-08: the prompt text lives
@@ -44,11 +38,11 @@ pub struct ModelEndpoint {
     /// schema: the model answers with the property names it names.
     pub prompt: Option<String>,
     /// Provider-side request fields for a captioning endpoint, sent VERBATIM
-    /// as the `extra_body` form field; the door merges them into the
+    /// as the `extra_body` form field; Iris merges them into the
     /// provider's request body untouched (m3rc, 2026-09-05). Qwen's thinking
     /// switch lives here — `chat_template_kwargs: {enable_thinking: false}` —
     /// and so do `max_tokens` / `temperature`. Pan has no opinion about the
-    /// contents and the door has none either. Absent = nothing sent.
+    /// contents and Iris has none either. Absent = nothing sent.
     pub extra_body: Option<serde_json::Value>,
     /// Test mode (Rob, 2026-09-03): `enabled: false` keeps the stage declared
     /// but pand never calls it — ingest still lands, `pan state` says "off",
@@ -61,26 +55,17 @@ pub struct ModelEndpoint {
     #[serde(default = "default_concurrency")]
     pub concurrency: usize,
     /// `Authorization` header value for `url` (e.g. `Bearer …`), when the
-    /// endpoint is a node reached directly rather than the door. Absent =
+    /// endpoint is a node reached directly rather than Iris. Absent =
     /// no header.
     pub auth: Option<String>,
     /// Where this stage goes while its primary is unreachable (connection
     /// refused / reset / timeout / `503 backend_down`): the same model behind
-    /// a different address — a Salad node called directly when the Iris door
+    /// a different address — a Salad node called directly when Iris
     /// is down. Used ONLY during a primary hold; the primary is probed again
-    /// when the hold expires. Rob, 2026-09-05: the door stays primary because
+    /// when the hold expires. Rob, 2026-09-05: Iris stays primary because
     /// it balances the two nodes; the direct node is what Pan runs on when
-    /// the door is down.
+    /// Iris is down.
     pub fallback: Option<Fallback>,
-}
-
-impl ModelEndpoint {
-    /// What the request body says. The endpoint's own string when it insists
-    /// on one, the model's name otherwise. Never recorded: `pan:model` is the
-    /// name (goodlux, 2026-09-18).
-    pub fn api_id(&self) -> &str {
-        self.api_id.as_deref().unwrap_or(&self.model)
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -505,21 +490,17 @@ mod tests {
         assert!(e.contains("caption"), "{e}");
     }
 
-    /// One name, and the request value only when the endpoint insists on one.
+    /// One name per stage, and it is what the request says.
     #[test]
-    fn the_request_says_api_id_when_given_and_the_name_otherwise() {
+    fn the_name_is_what_the_request_says() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n    api_id: qwen/qwen3.8-27b\n  pose:\n    url: http://x/percept/pose\n    model: rtmw-x-l\n",
+            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
-        let cap = &cfg.models["caption"];
-        assert_eq!(cap.model, "qwen3-8-27b");
-        assert_eq!(cap.api_id(), "qwen/qwen3.8-27b");
-        let pose = &cfg.models["pose"];
-        assert_eq!(pose.api_id(), "rtmw-x-l");
+        assert_eq!(cfg.models["caption"].model, "qwen3-8-27b");
     }
 }
