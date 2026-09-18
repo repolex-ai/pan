@@ -44,11 +44,29 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.8" .
+    owl:versionInfo "0.4.9" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.9 (2026-09-18, ruled by goodlux): A STORE ID IS SIX CHARACTERS.
+#   (1) The pan:Store section comment said the store's id is "the soul's
+#       genesis SHA". It is the FIRST SIX CHARACTERS of that SHA: 700c5b.
+#       That sentence is where a forty-character identifier got its authority,
+#       and pand wrote the whole hash into <pan/Store/...>, into the Instance's
+#       pan:primaryGraph endpoint, into every /stores/<id>/ route and into the
+#       log lines, while the media folder on disk was six characters all along.
+#       Long identifiers everywhere are the fault Pan was rewritten to undo.
+#   (2) A bare store's configured storage_id is cut the same way, so ~/.pan's
+#       forty zeros are the id 000000.
+#   Comment only: no class, property, domain, range or cardinality changes.
+#   Deliberately not done: no rule about which characters an id may contain
+#   (hex or otherwise) and no rejection of an id that is not a genesis hash —
+#   nobody has ruled on that, so the first six characters are taken as given.
+#   Code: pand cuts the id once, where a store is resolved, so nothing
+#   downstream can lengthen it; a caller naming a store by the whole SHA is
+#   still answered. A store node left behind under a long id is removed when
+#   the store is opened.
 # v0.4.8 (2026-09-18, ruled by goodlux): CAPTIONS ARE CAPTIONS.
 #   (1) pan:shortDescription RENAMED pan:shortCaption; pan:longDescription
 #       RENAMED pan:longCaption. A text the caption stage makes by captioning
@@ -385,9 +403,13 @@ pan:Node a owl:Class ;
 # -----------------------------------------------------------------------------
 # THE STORE
 # -----------------------------------------------------------------------------
-# One per .pan directory. IRI <pan/Store/<id>> where <id> is the soul's
-# genesis SHA (a repo store) or the configured store id (a bare store) — the
-# same identity git-lex, Horae and Syrinx already use for the soul.
+# One per .pan directory. IRI <pan/Store/<id>> where <id> is the FIRST SIX
+# CHARACTERS of the soul's genesis SHA (a repo store) or of the configured
+# store id (a bare store) — the same identity git-lex, Horae and Syrinx
+# already use for the soul, cut to six: 700c5b. Six characters everywhere
+# (goodlux, 2026-09-18): the IRI, the daemon's routes, the log lines and the
+# media folder on the volume are one value, and the whole hash appears
+# nowhere.
 # -----------------------------------------------------------------------------
 
 pan:Store a owl:Class ;

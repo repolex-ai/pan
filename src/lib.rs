@@ -22,7 +22,7 @@
 
 use anyhow::{anyhow, Context, Result};
 pub use oxigraph::model::Term;
-use oxigraph::model::{GraphName, Literal, NamedNode, Quad};
+use oxigraph::model::{GraphName, Literal, NamedNode, NamedOrBlankNode, Quad};
 use oxigraph::sparql::SparqlEvaluator;
 pub use oxigraph::sparql::{QueryResults, QuerySolution};
 use oxigraph::store::Store;
@@ -830,7 +830,8 @@ pub struct PendingItem {
 pub struct Pan {
     pub cfg: PanConfig,
     pub layout: PanLayout,
-    /// The store's own identity (a soul's genesis SHA, or a bare store id).
+    /// The store's own identity: six characters, the start of a soul's genesis
+    /// SHA or of a bare store id (goodlux, 2026-09-18).
     pub store_id: String,
     store: Store,
     indexes: Mutex<HashMap<String, VectorIndex>>,
@@ -954,6 +955,27 @@ impl Pan {
             })
             .collect();
         for q in &old {
+            t.remove(q.as_ref());
+        }
+        // Exactly one store node, always. A store opened by a binary that used
+        // the whole forty-character genesis hash left
+        // `<pan/Store/700c5bd4a9…>` behind; the id is six characters now
+        // (goodlux, 2026-09-18) and every store node that is not this one is
+        // removed whole, not left as a second answer to "where is the media".
+        let stale: Vec<Quad> = self
+            .store
+            .quads_for_pattern(None, None, None, Some(GraphName::DefaultGraph.as_ref()))
+            .filter_map(|q| q.ok())
+            .filter(|q| match &q.subject {
+                NamedOrBlankNode::NamedNode(n) => {
+                    n.as_str().starts_with(&format!("{PAN_MEDIA_NS}Store/"))
+                        && n.as_str() != node.as_str()
+                }
+                _ => false,
+            })
+            .collect();
+        for q in &stale {
+            tracing::warn!(store = %self.store_id, subject = %q.subject, "store node from an older id removed");
             t.remove(q.as_ref());
         }
         t.insert(

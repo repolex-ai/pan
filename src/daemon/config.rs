@@ -178,12 +178,6 @@ fn expand_home(p: &Path) -> PathBuf {
     p.to_path_buf()
 }
 
-/// How many leading characters of the store id name its folder on the media
-/// volume. The id itself (graph, wire, `pan:Store`) is always the full hash;
-/// only the folder is short, because a person reads it in `ls`. 6, Rob's pick
-/// (2026-09-04).
-pub const MEDIA_FOLDER_CHARS: usize = 6;
-
 /// Pan's folder inside a soul's directory on the media volume:
 /// `<volume>/<6-char id>/pan/`. The soul comes first — that directory is
 /// everything the soul keeps on the drive, the way its repo root is everything
@@ -192,14 +186,20 @@ pub const MEDIA_FOLDER_CHARS: usize = 6;
 /// drive should see it (Rob, 2026-09-05).
 pub const MEDIA_DIR_ON_VOLUME: &str = "pan";
 
-/// The folder name on the media volume for one store id.
+/// The folder name on the media volume for one store id — the id itself.
+/// The id is six characters everywhere (goodlux, 2026-09-18; see
+/// `registry::STORE_ID_LEN`), so the folder a person reads in `ls` and the id
+/// in the routes and in `<pan/Store/…>` are the same six characters. This
+/// function used to cut a long id down to six for the folder alone, which is
+/// how a forty-character identifier lived in the graph while the disk looked
+/// right.
 pub fn media_folder_name(store_id: &str) -> String {
-    store_id.chars().take(MEDIA_FOLDER_CHARS).collect()
+    store_id.to_string()
 }
 
 impl DaemonConfig {
     /// The media root for one store under this config, or None for the pocket
-    /// default: `<media_volume>/<first 6 chars of the id>/pan`. The full path
+    /// default: `<media_volume>/<id>/pan`. The full path
     /// is declared in the store's graph as `pan:mediaRoot`; nothing reads it by
     /// convention.
     pub fn media_root_for(&self, store_id: &str) -> Option<PathBuf> {
@@ -349,15 +349,11 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(&p, "media_volume: /Volumes/p02\n").unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
-        let root = cfg
-            .media_root_for("700c5bd4a969723107c1b92b83c0f1ec1497d9d4")
-            .unwrap();
+        // The id arrives already six characters (registry::store_id cuts it
+        // once, at the edge), and the folder is that id unchanged.
+        let root = cfg.media_root_for("700c5b").unwrap();
         assert_eq!(root, PathBuf::from("/Volumes/p02/700c5b/pan"));
-        // The all-zeros bare store id shortens the same way.
-        assert_eq!(
-            media_folder_name("0000000000000000000000000000000000000000"),
-            "000000"
-        );
+        assert_eq!(media_folder_name("000000"), "000000");
     }
 
     #[test]

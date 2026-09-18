@@ -2,7 +2,8 @@
 //!
 //! Every media call is a GRAPH call: nothing here reads the filesystem
 //! except through the store, and `GET /media/{id}` serves bytes at the path
-//! the graph declares. A store is named by its id (the soul's genesis SHA, or
+//! the graph declares. A store is named by its id (six characters: the start
+//! of the soul's genesis SHA, or
 //! a bare store's `storage_id`); no name = the configured default; an unknown
 //! name = 404, never a fallback.
 //!
@@ -339,7 +340,8 @@ async fn deliver(
     ingest(&d, None, &headers, body).await
 }
 
-/// Store a media file in one named store (a soul's genesis SHA or a bare
+/// Store a media file in one named store (six characters of a soul's genesis
+/// SHA, or a bare
 /// store id). Same body as `POST /media`.
 #[utoipa::path(post, path = "/stores/{id}/media", tag = "media", params(("id" = String, Path, description = "store id")),
     request_body(content = Vec<u8>, content_type = "image/png", description = "The media file, raw bytes. Content-Type names the media type."),
@@ -672,7 +674,7 @@ async fn query(State(d): State<Shared>, Json(body): Json<QueryBody>) -> Result<R
 /// POST `application/x-www-form-urlencoded` (`query=`). Results as
 /// `application/sparql-results+json` (SELECT/ASK) or N-Triples.
 #[utoipa::path(post, path = "/stores/{id}/sparql", tag = "query",
-    params(("id" = String, Path, description = "store id: a soul's genesis SHA or a bare store id")),
+    params(("id" = String, Path, description = "store id: six characters, the start of a soul's genesis SHA or of a bare store id")),
     request_body(content = String, content_type = "application/sparql-query"),
     responses((status = 200, description = "W3C sparql-results+json or N-Triples"), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
 async fn store_sparql_post(

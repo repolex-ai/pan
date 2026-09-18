@@ -14,7 +14,8 @@
 //!   pan imageset add    <pan/ImageSet/id> <pan/Image/id>
 //!   pan imageset remove <pan/ImageSet/id> <pan/Image/id>
 //!
-//! `<user-id>` names a store (a soul's genesis SHA or a bare store id);
+//! `<user-id>` names a store by its six-character id (the start of a soul's
+//! genesis SHA, or of a bare store id);
 //! absent = pand's configured default. No flags.
 
 use anyhow::{anyhow, Context, Result};

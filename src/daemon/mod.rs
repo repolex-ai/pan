@@ -241,7 +241,13 @@ impl Daemon {
         })
     }
 
+    /// The store with this id. The id is six characters (goodlux,
+    /// 2026-09-18), and a caller that still names a store by the whole genesis
+    /// SHA — Horae sends the soul's identity as git-lex wrote it — is cut to
+    /// the same six and lands in the same store. Pan never writes the long
+    /// form anywhere; it only answers to it.
     pub fn store(&self, id: &str) -> Option<Arc<StoreHandle>> {
+        let id = crate::daemon::registry::store_id(id).ok()?;
         self.stores.iter().find(|s| s.entry.id == id).cloned()
     }
 
