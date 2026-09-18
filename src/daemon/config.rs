@@ -26,6 +26,14 @@ pub const DEFAULT_BIND: &str = "127.0.0.1";
 pub struct ModelEndpoint {
     pub url: String,
     pub model: String,
+    /// The model's SHORT NAME: what this model is called in a file name
+    /// (goodlux, 2026-09-18). `model` above is the wire string the endpoint
+    /// wants — `qwen/qwen3.8-27b` — and it has slashes and periods in it; a
+    /// file name may have neither. So the name is written here, by a person,
+    /// once: lowercase letters, digits and single dashes, nothing else.
+    /// Required on every stage: a name pand invented from the wire string is
+    /// how `cljuqhqf.depth-anything-Depth-Anything-V2-Base-hf.png` happened.
+    pub name: String,
     /// The instruction sent with the image to a captioning endpoint. In the
     /// config file this is the NAME of a plain-text file under
     /// `~/.config/pan/prompts/` (goodlux, 2026-09-08: the prompt text lives
@@ -186,6 +194,30 @@ fn expand_home(p: &Path) -> PathBuf {
 /// drive should see it (Rob, 2026-09-05).
 pub const MEDIA_DIR_ON_VOLUME: &str = "pan";
 
+/// A model's short name, as it may appear in a file name: lowercase letters,
+/// digits and single dashes between them. No periods, no spaces, no slashes,
+/// no underscores, and never empty (goodlux, 2026-09-18).
+pub fn check_model_name(name: &str) -> std::result::Result<(), String> {
+    if name.is_empty() {
+        return Err("a model name cannot be empty".to_string());
+    }
+    if name.starts_with('-') || name.ends_with('-') {
+        return Err("a model name cannot start or end with a dash".to_string());
+    }
+    if name.contains("--") {
+        return Err("a model name has one dash at a time, not two".to_string());
+    }
+    for c in name.chars() {
+        let ok = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+        if !ok {
+            return Err(format!(
+                "{c:?} is not allowed: lowercase letters, digits and dashes only"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The folder name on the media volume for one store id — the id itself.
 /// The id is six characters everywhere (goodlux, 2026-09-18; see
 /// `registry::STORE_ID_LEN`), so the folder a person reads in `ls` and the id
@@ -239,6 +271,13 @@ impl DaemonConfig {
                     path.display()
                 ));
             }
+            check_model_name(&m.name).map_err(|e| {
+                anyhow!(
+                    "{}: stage {stage} has name: {:?} — {e}",
+                    path.display(),
+                    m.name
+                )
+            })?;
             if m.concurrency == 0 {
                 return Err(anyhow!(
                     "{}: model concurrency must be at least 1",
@@ -314,7 +353,7 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "stores:\n  - /souls/a\n  - ~/.pan\ndefault: /souls/a\nport: 7402\nmodels:\n  embed:\n    url: http://127.0.0.1:1215/see_embed\n    model: qwen-vl-2b\n    concurrency: 2\n",
+            "stores:\n  - /souls/a\n  - ~/.pan\ndefault: /souls/a\nport: 7402\nmodels:\n  embed:\n    url: http://127.0.0.1:1215/see_embed\n    model: qwen-vl-2b\n    name: qwen-vl-2b\n    concurrency: 2\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
@@ -335,7 +374,7 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  pose:\n    url: http://x/see_pose\n    model: rtmw\n    enabled: false\n",
+            "models:\n  pose:\n    url: http://x/see_pose\n    model: rtmw\n    name: rtmw\n    enabled: false\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
@@ -394,7 +433,7 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n    fallback:\n      url: https://node.example/pose\n      auth: Bearer abc\n",
+            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n    name: rtmw\n    fallback:\n      url: https://node.example/pose\n      auth: Bearer abc\n",
         )
         .unwrap();
         let c = DaemonConfig::load_from(&p).unwrap();
@@ -412,11 +451,59 @@ mod tests {
         // Without a fallback there is no fallback target — the stage waits.
         std::fs::write(
             &p,
-            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n",
+            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n    name: rtmw\n",
         )
         .unwrap();
         assert!(DaemonConfig::load_from(&p).unwrap().models["pose"]
             .fallback_target()
             .is_none());
+    }
+
+    /// The name is what lands in a file name, so it may hold only what a file
+    /// name may hold. The wire string `qwen/qwen3.8-27b` is exactly what must
+    /// never reach one (goodlux, 2026-09-18).
+    #[test]
+    fn a_model_name_is_lowercase_digits_and_dashes() {
+        for good in ["qwen3-8-27b", "sam3", "rtmw-x-l", "depth-anything-v2-base"] {
+            assert!(check_model_name(good).is_ok(), "{good} should be allowed");
+        }
+        for bad in [
+            "qwen3.8-27b",
+            "qwen/qwen3.8-27b",
+            "depth anything",
+            "Depth-Anything",
+            "depth_anything",
+            "-sam3",
+            "sam3-",
+            "sam--3",
+            "",
+        ] {
+            assert!(check_model_name(bad).is_err(), "{bad:?} should be refused");
+        }
+    }
+
+    #[test]
+    fn a_stage_without_a_name_is_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        std::fs::write(
+            &p,
+            "models:\n  pose:\n    url: http://x/percept/pose\n    model: rtmw\n",
+        )
+        .unwrap();
+        assert!(DaemonConfig::load_from(&p).is_err());
+    }
+
+    #[test]
+    fn a_name_with_a_period_is_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        std::fs::write(
+            &p,
+            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen/qwen3.8-27b\n    name: qwen3.8-27b\n",
+        )
+        .unwrap();
+        let e = DaemonConfig::load_from(&p).unwrap_err().to_string();
+        assert!(e.contains("caption"), "{e}");
     }
 }
