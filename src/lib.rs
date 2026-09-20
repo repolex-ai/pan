@@ -411,7 +411,7 @@ pub const PERCEPTION_FIELDS: [&str; 17] = [
     "sceneSubjectOrientation",
     // The prompt that produced the captions riding on this object
     // (goodlux, 2026-09-19). Written by the caption stage, not by the model.
-    "promptPath",
+    "modelPromptPath",
 ];
 
 /// Fields Pan itself writes about a media object at ingest or at stage
@@ -1589,20 +1589,20 @@ pub struct RecordFile<'a> {
     /// overwrite each other. None for a stage that runs once per image.
     pub variant: Option<&'a str>,
     /// Media-root-relative path of the server's own answer, when the stage
-    /// saved one. Becomes pan:modelAnswerPath on the reference.
-    pub model_answer: Option<&'a str>,
+    /// saved one. Becomes pan:modelReplyPath on the reference.
+    pub model_reply: Option<&'a str>,
 }
 
 impl<'a> RecordFile<'a> {
     pub fn variant(variant: &'a str) -> Self {
         Self {
             variant: Some(variant),
-            model_answer: None,
+            model_reply: None,
         }
     }
 
-    pub fn with_model_answer(mut self, rel: &'a str) -> Self {
-        self.model_answer = Some(rel);
+    pub fn with_model_reply(mut self, rel: &'a str) -> Self {
+        self.model_reply = Some(rel);
         self
     }
 }
@@ -1642,7 +1642,7 @@ impl Pan {
     ) -> Result<String> {
         let RecordFile {
             variant,
-            model_answer,
+            model_reply,
         } = file;
         let Some(subject) = self.subject_for(id)? else {
             return Err(anyhow!("id not found: {id}"));
@@ -1662,8 +1662,8 @@ impl Pan {
         // The reference comes first: its IRI is the subject the data file
         // opens with and the node the records hang off.
         let mut r = enrich::EnrichmentRef::new(model, &rel, count);
-        if let Some(answer) = model_answer {
-            r = r.with_model_answer(answer);
+        if let Some(answer) = model_reply {
+            r = r.with_model_reply(answer);
         }
         write_atomic(&abs, enrich::build_data_file(&r.iri(), records).as_bytes())
             .with_context(|| format!("write {}", abs.display()))?;
@@ -1709,7 +1709,7 @@ impl Pan {
         let media_kind = self.media_kind_of(id)?;
         let npy_rel = PanLayout::vector_rel_path(&media_kind, index_name, id);
         // Everything the server said besides the vector, whole, beside the
-        // .npy, and named on the reference as pan:modelAnswerPath (goodlux,
+        // .npy, and named on the reference as pan:modelReplyPath (goodlux,
         // 2026-09-19).
         let mut answer_rel: Option<String> = None;
         if !details.is_empty() {
@@ -1738,7 +1738,7 @@ impl Pan {
         let abs = self.layout.abs(&rel);
         let mut r = enrich::EnrichmentRef::new(model, &rel, None);
         if let Some(reply) = &answer_rel {
-            r = r.with_model_answer(reply);
+            r = r.with_model_reply(reply);
         }
         write_atomic(
             &abs,
@@ -1788,7 +1788,10 @@ impl Pan {
         );
         t.insert(self.quad(&subject, "longCaption", &p.long_caption).as_ref());
         if !p.prompt_path.trim().is_empty() {
-            t.insert(self.quad(&subject, "promptPath", &p.prompt_path).as_ref());
+            t.insert(
+                self.quad(&subject, "modelPromptPath", &p.prompt_path)
+                    .as_ref(),
+            );
         }
         for o in &p.scene_objects {
             t.insert(self.quad(&subject, "sceneObjects", o).as_ref());
@@ -2292,7 +2295,7 @@ impl Pan {
                             path: path.clone(),
                             count: f.get("count").and_then(|c| c.parse().ok()),
                             produced_date: f.get("producedDate").cloned().unwrap_or_default(),
-                            model_answer_path: f.get("modelAnswerPath").cloned(),
+                            model_reply_path: f.get("modelReplyPath").cloned(),
                         });
                     }
                 }

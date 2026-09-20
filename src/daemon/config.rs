@@ -38,18 +38,27 @@ pub struct ModelEndpoint {
     /// names it names.
     ///
     /// Two folders hold prompts (goodlux, 2026-09-19):
-    /// `~/.config/pan/prompts/default/`, written from this binary at every
-    /// start, and `~/.config/pan/prompts/custom/`, which Pan never writes. A
-    /// name resolves to the custom copy when one exists, otherwise the shipped
-    /// one, so an edited prompt survives an upgrade.
+    /// `~/.config/pan/prompts/default/`, which pand rewrites when the prompt
+    /// it ships differs from what is on disk, and
+    /// `~/.config/pan/prompts/custom/`, which Pan never writes. The config
+    /// names one of them in full — `default/caption.md`, `custom/mine.md` —
+    /// and pand reads that file and no other.
     pub prompt: Option<String>,
-    /// Which prompt file was read, as `custom/caption.md` or
-    /// `default/caption.md`. Not config: `load` fills it in, and the caption
-    /// stage records it on the object and on the Caption record, so an image
-    /// says which prompt described it. A prompt that changes gets a new file
-    /// name; Pan does not read the old one back.
+    /// Which prompt file was read, exactly as the config named it. Not
+    /// config: `load` fills it in, and the caption stage records it on the
+    /// object and on the Caption record, so an image says which prompt
+    /// described it. A prompt that changes gets a new file name; Pan does not
+    /// read the old one back.
     #[serde(skip)]
     pub prompt_path: Option<String>,
+    /// Nouns this stage always asks for, whatever the caption model said
+    /// (goodlux, 2026-09-19). The segmentation stage grounds the nouns the
+    /// caption listed; a caption that never says "person" left a photograph of
+    /// people with no person region. These are added to every call, so person
+    /// and face are found because Pan asked, not because a caption happened to
+    /// mention them. Comma-separated in the config: `always: person, face`.
+    #[serde(default, deserialize_with = "comma_or_list")]
+    pub always: Vec<String>,
     /// Provider-side request fields for a captioning endpoint, sent VERBATIM
     /// as the `extra_body` form field; Iris merges them into the
     /// provider's request body untouched (m3rc, 2026-09-05). Qwen's thinking
@@ -203,6 +212,31 @@ fn expand_home(p: &Path) -> PathBuf {
 /// drive should see it (Rob, 2026-09-05).
 pub const MEDIA_DIR_ON_VOLUME: &str = "pan";
 
+/// `always: person, face` and `always: [person, face]` both mean the same two
+/// nouns. One line of YAML either way; nobody should have to remember which.
+fn comma_or_list<'de, D>(d: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    let raw = Option::<OneOrMany>::deserialize(d)?;
+    let items = match raw {
+        None => Vec::new(),
+        Some(OneOrMany::One(s)) => s.split(',').map(str::to_string).collect(),
+        Some(OneOrMany::Many(v)) => v,
+    };
+    Ok(items
+        .into_iter()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect())
+}
+
 /// The shipped prompts, rewritten from this binary at every start of pand.
 /// Never edit one in place: an upgrade overwrites the folder.
 pub const PROMPTS_DEFAULT: &str = "default";
@@ -238,25 +272,14 @@ pub fn install_default_prompts(prompts_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Where a named prompt actually lives, and the name Pan records for it.
+/// The file a `prompt:` line names, resolved against the prompts directory.
 ///
-/// The config says which prompt a stage uses. Name the folder — `custom/mine.md`
-/// or `default/caption.md` — and that file is the one, said plainly. Name a
-/// bare file and the custom copy wins when a person has made one, else the
-/// shipped copy. Returns the shipped path when neither exists, so the error
-/// names a real file.
+/// The config says which prompt a stage uses, in full: `default/caption.md`
+/// or `custom/mine.md`. There is no searching and no preference order — the
+/// line names the file, the file is read, and a line that names nothing
+/// readable stops pand (goodlux, 2026-09-19).
 pub fn resolve_prompt(prompts_dir: &Path, name: &str) -> (String, PathBuf) {
-    if name.contains('/') {
-        return (name.to_string(), prompts_dir.join(name));
-    }
-    let custom = prompts_dir.join(PROMPTS_CUSTOM).join(name);
-    if custom.is_file() {
-        return (format!("{PROMPTS_CUSTOM}/{name}"), custom);
-    }
-    (
-        format!("{PROMPTS_DEFAULT}/{name}"),
-        prompts_dir.join(PROMPTS_DEFAULT).join(name),
-    )
+    (name.to_string(), prompts_dir.join(name))
 }
 
 /// A model's name, which has to survive being a file name: lowercase letters,
@@ -337,6 +360,16 @@ impl DaemonConfig {
             if m.url.is_empty() {
                 return Err(anyhow!("{}: every model needs a url", path.display()));
             }
+            // A captioning stage without a prompt is a config that cannot
+            // work, and pand says so at start rather than failing one image
+            // at a time (goodlux, 2026-09-19). No default is substituted.
+            if stage == "caption" && m.prompt.as_deref().is_none_or(|p| p.trim().is_empty()) {
+                return Err(anyhow!(
+                    "{}: the caption stage needs a `prompt:` naming a file under {}, for example `prompt: {PROMPTS_DEFAULT}/caption.md`",
+                    path.display(),
+                    prompts_dir.display(),
+                ));
+            }
             check_model_name(&m.model).map_err(|e| {
                 anyhow!(
                     "{}: stage {stage} has model: {:?} — {e}",
@@ -355,11 +388,10 @@ impl DaemonConfig {
                 let (rel, file) = resolve_prompt(&prompts, name.trim());
                 let text = std::fs::read_to_string(&file).with_context(|| {
                     format!(
-                        "{}: stage {stage} names prompt file {} which is in neither {} nor {}",
+                        "{}: stage {stage} names prompt {}, which is not readable at {}",
                         path.display(),
                         name.trim(),
-                        prompts.join(PROMPTS_CUSTOM).display(),
-                        prompts.join(PROMPTS_DEFAULT).display(),
+                        file.display(),
                     )
                 })?;
                 m.prompt_path = Some(rel);
@@ -563,6 +595,73 @@ mod tests {
         assert!(e.contains("caption"), "{e}");
     }
 
+    /// The prompt is named in full and nothing is searched for.
+    #[test]
+    fn a_caption_stage_without_a_prompt_refuses_to_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        std::fs::write(
+            &p,
+            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n",
+        )
+        .unwrap();
+        let e = DaemonConfig::load_from(&p).unwrap_err().to_string();
+        assert!(e.contains("prompt"), "{e}");
+    }
+
+    #[test]
+    fn a_prompt_that_is_not_there_names_the_file_it_looked_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        std::fs::write(
+            &p,
+            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n    prompt: custom/nope.md\n",
+        )
+        .unwrap();
+        let e = format!("{:#}", DaemonConfig::load_from(&p).unwrap_err());
+        assert!(e.contains("custom/nope.md"), "{e}");
+    }
+
+    /// The shipped prompt lands, and the config's own name is what gets
+    /// recorded on the caption.
+    #[test]
+    fn the_shipped_prompt_is_installed_and_named_as_config_names_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        std::fs::write(
+            &p,
+            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n    prompt: default/caption.md\n",
+        )
+        .unwrap();
+        let cfg = DaemonConfig::load_from(&p).unwrap();
+        assert!(dir.path().join("prompts/default/caption.md").is_file());
+        assert!(dir.path().join("prompts/custom").is_dir());
+        assert_eq!(
+            cfg.models["caption"].prompt_path.as_deref(),
+            Some("default/caption.md")
+        );
+        assert!(cfg.models["caption"]
+            .prompt
+            .as_deref()
+            .unwrap()
+            .contains("shortCaption"));
+    }
+
+    /// The nouns segmentation always asks for, written either way.
+    #[test]
+    fn always_reads_as_a_line_or_a_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        std::fs::write(
+            &p,
+            "models:\n  sam3:\n    url: http://x/percept/segment\n    model: sam3\n    always: Person, face\n  pose:\n    url: http://x/percept/pose\n    model: rtmw-x-l\n    always: [hand]\n",
+        )
+        .unwrap();
+        let cfg = DaemonConfig::load_from(&p).unwrap();
+        assert_eq!(cfg.models["sam3"].always, vec!["person", "face"]);
+        assert_eq!(cfg.models["pose"].always, vec!["hand"]);
+    }
+
     /// One name per stage, and it is what the request says.
     #[test]
     fn the_name_is_what_the_request_says() {
@@ -570,7 +669,7 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n",
+            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n    prompt: default/caption.md\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();

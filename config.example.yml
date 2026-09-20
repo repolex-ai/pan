@@ -1,0 +1,64 @@
+# pand — the Pan daemon. One per machine; this file is its whole configuration.
+# Copy to ~/.config/pan/config.yml and edit. Every line below is required
+# unless it says otherwise.
+
+# Stores. A soul repo keeps its store at <repo>/.pan and its id is the first
+# six characters of the repo's genesis SHA, e.g. 700c5b. A plain directory is
+# its own store and names itself in its pan.yml.
+stores:
+  - ~/.pan
+default: ~/.pan
+
+# Media lives off the system drive: <media_volume>/<id>/pan
+media_volume: /Volumes/f00/_pan
+
+port: 7401
+batch: 4
+interval_secs: 5
+
+models:
+  caption:
+    url: http://127.0.0.1:1215/percept/vlm
+    # THE NAME. One name for this model, everywhere Pan says which model did
+    # something: the graph, the file, the file name, the log line. Lowercase
+    # letters, digits and single dashes — no periods, no spaces, no slashes.
+    model: qwen3-8-27b
+    # THE PROMPT. REQUIRED, and it names the file in full. pand ships its own
+    # prompts in prompts/default/ and rewrites them when it ships a new one;
+    # prompts/custom/ is yours and Pan never writes there. Copy a shipped
+    # prompt into custom/ under a new name to change it, and name that file
+    # here. pand refuses to start if this line is missing.
+    prompt: default/caption.md
+    # Sent verbatim in the provider's request body; Pan has no opinion about
+    # what is in here. Optional.
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: false
+      max_tokens: 1024
+    concurrency: 2
+    enabled: true
+  embed:
+    url: http://127.0.0.1:1215/percept/embed
+    model: qwen3-vl-embedding-2b
+    concurrency: 2
+    enabled: true
+  pose:
+    url: http://127.0.0.1:1215/percept/pose
+    model: rtmw-x-l
+    concurrency: 2
+    enabled: true
+  depth:
+    url: http://127.0.0.1:1215/percept/depth
+    model: depth-anything-v2-base
+    concurrency: 2
+    enabled: true
+  sam3:
+    url: http://127.0.0.1:1215/percept/segment
+    model: sam3
+    # Nouns this stage asks for on EVERY image, on top of whatever the caption
+    # model listed. Without them, a photograph of people whose caption never
+    # said "person" comes back with no person region. Optional; omit for the
+    # caption's nouns alone.
+    always: person, face
+    concurrency: 2
+    enabled: true

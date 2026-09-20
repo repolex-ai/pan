@@ -545,11 +545,17 @@ async fn run_one(
             .await??;
         }
         STAGE_SAM3 => {
-            // Prompts are the image's pan:sceneObjects. pending_for only
-            // hands over images that have them, so an empty list here means
-            // the caption named nothing segmentable: record a zero-region
-            // run so the image is not asked forever.
-            let prompts = store.pan.scene_objects_of(&item.id)?;
+            // What this stage grounds: the nouns the caption model listed,
+            // plus the nouns the config says to ask for every time (goodlux,
+            // 2026-09-19). A caption that never says "person" used to leave a
+            // photograph of people with no person region; now person and face
+            // are found because Pan asked for them.
+            let mut prompts = store.pan.scene_objects_of(&item.id)?;
+            for noun in &ep.always {
+                if !prompts.iter().any(|p| p == noun) {
+                    prompts.push(noun.clone());
+                }
+            }
             let s = store.clone();
             let id = item.id.clone();
             let model = ep.model.clone();
@@ -598,7 +604,7 @@ async fn run_one(
                     })
                     .collect();
                 // Everything the server said, verbatim, beside the record,
-                // and named on the reference as pan:modelAnswerPath (goodlux,
+                // and named on the reference as pan:modelReplyPath (goodlux,
                 // 2026-09-19) so the graph knows the file exists.
                 let record_rel = s.pan.enrichment_rel(&id, "sam3", None)?;
                 let answer_rel = format!("{record_rel}.json");
@@ -613,7 +619,7 @@ async fn run_one(
                     "regionData",
                     &model,
                     &records,
-                    crate::RecordFile::default().with_model_answer(&answer_rel),
+                    crate::RecordFile::default().with_model_reply(&answer_rel),
                 )?;
                 Ok(())
             })
@@ -659,7 +665,7 @@ fn write_perception(
     // one with a different prompt, is a second record naming its own prompt.
     let mut rec = EnrichmentRecord::new(gen_pan_id(), "Caption", model).field("text", raw);
     if !p.prompt_path.trim().is_empty() {
-        rec = rec.field("promptPath", &p.prompt_path);
+        rec = rec.field("modelPromptPath", &p.prompt_path);
     }
     s.pan.write_enrichment(
         id,

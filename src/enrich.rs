@@ -85,10 +85,10 @@ pub struct EnrichmentRef {
     pub count: Option<usize>,
     /// `pan:producedDate` — RFC3339, system local time.
     pub produced_date: String,
-    /// `pan:modelAnswerPath` — the model server's own answer, saved whole beside
+    /// `pan:modelReplyPath` — the model server's own answer, saved whole beside
     /// the record, relative to the store's media root (goodlux, 2026-09-19).
     /// Absent when the stage saves no such file.
-    pub model_answer_path: Option<String>,
+    pub model_reply_path: Option<String>,
 }
 
 impl EnrichmentRef {
@@ -99,15 +99,15 @@ impl EnrichmentRef {
             path: path.to_string(),
             count,
             produced_date: now_local(),
-            model_answer_path: None,
+            model_reply_path: None,
         }
     }
 
     /// Name the server's own answer file that sits beside the record.
-    pub fn with_model_answer(mut self, rel: impl Into<String>) -> Self {
+    pub fn with_model_reply(mut self, rel: impl Into<String>) -> Self {
         let rel = rel.into();
         if !rel.trim().is_empty() {
-            self.model_answer_path = Some(rel);
+            self.model_reply_path = Some(rel);
         }
         self
     }
@@ -259,8 +259,8 @@ pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<
             quads.push(pan_quad(&node, "count", &count.to_string())?);
         }
     }
-    if let Some(reply) = &r.model_answer_path {
-        quads.push(pan_quad(&node, "modelAnswerPath", reply)?);
+    if let Some(reply) = &r.model_reply_path {
+        quads.push(pan_quad(&node, "modelReplyPath", reply)?);
     }
     quads.push(pan_quad(&node, "producedDate", &r.produced_date)?);
     Ok(quads)

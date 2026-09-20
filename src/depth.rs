@@ -134,7 +134,7 @@ impl Pan {
         }
         write_atomic(&map_abs, &png).with_context(|| format!("write {}", map_abs.display()))?;
         // The node's own answer, whole, beside the map. Named on the
-        // reference as pan:modelAnswerPath (goodlux, 2026-09-19).
+        // reference as pan:modelReplyPath (goodlux, 2026-09-19).
         let answer_rel = format!(
             "{}.json",
             map_rel.strip_suffix(".png").unwrap_or(map_rel.as_str())
@@ -168,7 +168,7 @@ impl Pan {
             REF_LOCAL,
             model,
             std::slice::from_ref(&rec),
-            crate::RecordFile::default().with_model_answer(&answer_rel),
+            crate::RecordFile::default().with_model_reply(&answer_rel),
         )
     }
 }

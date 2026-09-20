@@ -159,9 +159,9 @@ fn serialize_enrichment(
         if let Some(count) = r.count {
             out.push_str(&format!("{indent}   <pan:count>{count}</pan:count>\n"));
         }
-        if let Some(reply) = &r.model_answer_path {
+        if let Some(reply) = &r.model_reply_path {
             out.push_str(&format!(
-                "{indent}   <pan:modelAnswerPath>{}</pan:modelAnswerPath>\n",
+                "{indent}   <pan:modelReplyPath>{}</pan:modelReplyPath>\n",
                 xml_escape(reply)
             ));
         }
@@ -1455,7 +1455,7 @@ mod flat_block_tests {
                     path: "caption/2026/09/05/altocnif.xml".into(),
                     count: None,
                     produced_date: "2026-09-05T10:02:40-07:00".into(),
-                    model_answer_path: None,
+                    model_reply_path: None,
                 }],
             )],
             ..Default::default()
@@ -1591,7 +1591,7 @@ mod flat_block_tests {
                     path: "caption/2026/09/05/altocnif.xml".into(),
                     count: None,
                     produced_date: "2026-09-05T10:02:40-07:00".into(),
-                    model_answer_path: None,
+                    model_reply_path: None,
                 }],
             )],
             ..Default::default()
