@@ -133,7 +133,13 @@ impl Pan {
             std::fs::create_dir_all(p).context("create depth dir")?;
         }
         write_atomic(&map_abs, &png).with_context(|| format!("write {}", map_abs.display()))?;
-        let side = map_abs.with_extension("json");
+        // The node's own answer, whole, beside the map. Named on the
+        // reference as pan:modelAnswerPath (goodlux, 2026-09-19).
+        let answer_rel = format!(
+            "{}.json",
+            map_rel.strip_suffix(".png").unwrap_or(map_rel.as_str())
+        );
+        let side = self.layout.abs(&answer_rel);
         write_atomic(
             &side,
             serde_json::to_string_pretty(&answer.sidecar(&map_rel))?.as_bytes(),
@@ -162,7 +168,7 @@ impl Pan {
             REF_LOCAL,
             model,
             std::slice::from_ref(&rec),
-            None,
+            crate::RecordFile::default().with_model_answer(&answer_rel),
         )
     }
 }

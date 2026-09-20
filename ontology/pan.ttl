@@ -44,11 +44,39 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.9" .
+    owl:versionInfo "0.4.10" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.10 (2026-09-19, ruled by goodlux): WHICH WAY THE SUBJECT FACES, WHICH
+#   PROMPT ASKED, AND WHERE THE SERVER'S OWN ANSWER WENT.
+#   (1) + pan:sceneSubjectOrientation on pan:Image — which way the main
+#       subject's body faces the camera: front, back, side, side-front,
+#       side-back. A thirteenth scene field, asked of the caption model in the
+#       same call as the others.
+#   (2) + pan:promptPath on pan:Node — the prompt file that asked for an
+#       answer, as `custom/caption.md` or `default/caption.md`, relative to the
+#       prompts directory. Written on the media object AND on the pan:Caption
+#       record: the object says which prompt described it, and a second model
+#       or a second prompt is a second record naming its own. Prompts live in
+#       two folders from this version: `default/`, which pand rewrites only
+#       when the prompt it ships differs from what is on disk, and `custom/`,
+#       which Pan never writes. The config names which prompt a stage uses.
+#   (3) + pan:modelAnswerPath on pan:Enrichment — the model server's own answer,
+#       saved whole beside the record. Pan already wrote these files for
+#       segmentation, depth and embedding; nothing in the graph named them, so
+#       a reader could not find them and a sweep could not tell them from
+#       litter. The reference's pan:path names the record; pan:modelAnswerPath names
+#       the server's answer. At most one; absent when a stage saves none.
+#   Deliberately not done: no enumeration of the permitted scene values in
+#   OWL, and no validation in pand. The prompt lists the values the caption
+#   model may answer with (the coded gaze forms, gaze-looking-at-viewer and
+#   the rest, and the five orientations); Pan stores what comes back. Judging
+#   a model's answer is not the media store's job (goodlux, 2026-09-19).
+#   Also not done: storing the prompt TEXT, or a hash of it. The path is the
+#   pointer; versions are separate files. One name serves every stage's
+#   answer file, since a stage returns one.
 # v0.4.9 (2026-09-18, ruled by goodlux): A STORE ID IS SIX CHARACTERS.
 #   (1) The pan:Store section comment said the store's id is "the soul's
 #       genesis SHA". It is the FIRST SIX CHARACTERS of that SHA: 700c5b.
@@ -571,6 +599,15 @@ pan:sceneLocation a owl:DatatypeProperty ;
     rdfs:domain pan:Image ;
     rdfs:range xsd:string .
 
+# Which way the body faces, not where the eyes go — sceneGaze is the eyes.
+# The permitted values live in the caption prompt, not here: the prompt is
+# what the model reads (goodlux, 2026-09-19).
+pan:sceneSubjectOrientation a owl:DatatypeProperty ;
+    rdfs:label "scene subject orientation" ;
+    rdfs:comment "which way the main subject's body faces the camera: front, back, side, side-front, side-back. One of those five." ;
+    rdfs:domain pan:Image ;
+    rdfs:range xsd:string .
+
 # --- identity and time, as spelled inside a media file -------------------------
 # A media file carries only the pan and copia namespaces. The graph stores the
 # pan: spelling, same as the file, pan:id being the universal via
@@ -600,6 +637,17 @@ pan:description a owl:DatatypeProperty ;
     owl:equivalentProperty git-lex:description ;
     rdfs:label "description" ;
     rdfs:comment "A short deliberate summary a person writes; the file spelling of git-lex:description. One value; overwrite it, do not repeat the key." ;
+    rdfs:domain pan:Node ;
+    rdfs:range xsd:string .
+
+# The prompt that asked for an answer. On the media object (which prompt
+# described this image) and on the Caption record beside it (which prompt
+# produced THIS answer), so a second model or a second prompt is a second
+# record naming its own. Two folders hold prompts: `default/`, rewritten from
+# the pand binary at every start, and `custom/`, which Pan never writes.
+pan:promptPath a owl:DatatypeProperty ;
+    rdfs:label "prompt path" ;
+    rdfs:comment "The prompt file that asked for this answer, as custom/caption.md or default/caption.md, relative to the prompts directory. Written by pand; a changed prompt is a new file, never an edit." ;
     rdfs:domain pan:Node ;
     rdfs:range xsd:string .
 
@@ -865,6 +913,14 @@ pan:path a owl:DatatypeProperty ;
     rdfs:domain pan:Node ;
     rdfs:range xsd:string .
 
+# The server's own answer, kept whole beside the record. pan:path names the
+# record; this names the answer the record was made from.
+pan:modelAnswerPath a owl:DatatypeProperty ;
+    rdfs:label "model answer path" ;
+    rdfs:comment "Path to the model server's own answer, saved whole beside the record, relative to pan:mediaRoot. Absent when the stage saves no such file." ;
+    rdfs:domain pan:Enrichment ;
+    rdfs:range xsd:string .
+
 pan:count a owl:DatatypeProperty ;
     rdfs:label "count" ;
     rdfs:comment "How many regions the referenced segmentation file holds. Only on a RegionData reference; no other reference carries a count." ;
@@ -972,6 +1028,7 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:width      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:promptPath ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:rating     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:isPicked   ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:isRejected ; owl:maxCardinality 1 ] .
@@ -997,6 +1054,7 @@ pan:Enrichment rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:model      ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:path       ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:modelAnswerPath  ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:producedDate ; owl:cardinality 1 ] .
 
 # The segmentation reference alone carries a count (goodlux, 2026-09-16).
@@ -1024,6 +1082,7 @@ pan:Caption rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:model      ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:producedDate ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:promptPath ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:text       ; owl:cardinality 1 ] .
 
 pan:Embedding rdfs:subClassOf

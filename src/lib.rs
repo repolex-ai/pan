@@ -375,7 +375,7 @@ pub struct PutResult {
 /// A JSON key from the caption model must be one of these, a caption, or
 /// sceneObjects; anything else is refused (the ontology is the whole of what
 /// Pan may say). The test below checks every name here against pan.ttl.
-pub const SCENE_FIELDS: [&str; 12] = [
+pub const SCENE_FIELDS: [&str; 13] = [
     "sceneCamera",
     "sceneFraming",
     "scenePosture",
@@ -388,10 +388,11 @@ pub const SCENE_FIELDS: [&str; 12] = [
     "sceneStyle",
     "sceneMedium",
     "sceneLocation",
+    "sceneSubjectOrientation",
 ];
 
 /// Every property the caption stage writes on the object.
-pub const PERCEPTION_FIELDS: [&str; 15] = [
+pub const PERCEPTION_FIELDS: [&str; 17] = [
     "shortCaption",
     "longCaption",
     "sceneObjects",
@@ -407,6 +408,10 @@ pub const PERCEPTION_FIELDS: [&str; 15] = [
     "sceneStyle",
     "sceneMedium",
     "sceneLocation",
+    "sceneSubjectOrientation",
+    // The prompt that produced the captions riding on this object
+    // (goodlux, 2026-09-19). Written by the caption stage, not by the model.
+    "promptPath",
 ];
 
 /// Fields Pan itself writes about a media object at ingest or at stage
@@ -583,6 +588,11 @@ pub struct Perception {
     pub long_caption: String,
     pub scene_objects: Vec<String>,
     pub scene: Vec<(String, String)>,
+    /// The prompt file that asked for this answer, relative to the prompts
+    /// directory (goodlux, 2026-09-19). pand fills it in; the model never
+    /// sends it. Rides on the object so an image says which prompt described
+    /// it, and on the Caption record beside it.
+    pub prompt_path: String,
 }
 
 impl Perception {
@@ -1568,6 +1578,52 @@ impl Pan {
             .and_then(|(_, v)| v.first().cloned())
             .unwrap_or_default())
     }
+}
+
+/// The two things that vary about the file a stage writes: the variant that
+/// makes one model's record sit beside another's, and the server's own answer
+/// saved next to it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RecordFile<'a> {
+    /// Part of the record's file name, so two captioning models do not
+    /// overwrite each other. None for a stage that runs once per image.
+    pub variant: Option<&'a str>,
+    /// Media-root-relative path of the server's own answer, when the stage
+    /// saved one. Becomes pan:modelAnswerPath on the reference.
+    pub model_answer: Option<&'a str>,
+}
+
+impl<'a> RecordFile<'a> {
+    pub fn variant(variant: &'a str) -> Self {
+        Self {
+            variant: Some(variant),
+            model_answer: None,
+        }
+    }
+
+    pub fn with_model_answer(mut self, rel: &'a str) -> Self {
+        self.model_answer = Some(rel);
+        self
+    }
+}
+
+impl Pan {
+    /// Where this stage's record file for `id` will land, relative to the
+    /// store's media root. Deterministic: `write_enrichment` derives the same
+    /// path. A caller needs it to name the server's answer file beside the
+    /// record before the record exists.
+    pub fn enrichment_rel(&self, id: &str, kind: &str, variant: Option<&str>) -> Result<String> {
+        let created = self.created_date_of(id)?;
+        let shard = created.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
+        let media_kind = self.media_kind_of(id)?;
+        Ok(PanLayout::enrichment_rel_path(
+            &media_kind,
+            kind,
+            &shard,
+            id,
+            variant,
+        ))
+    }
 
     /// Record one model's output for an object as a data file beside the
     /// media plus the graph statements that describe it, then refresh the
@@ -1582,8 +1638,12 @@ impl Pan {
         ref_local: &str,
         model: &str,
         records: &[enrich::EnrichmentRecord],
-        variant: Option<&str>,
+        file: RecordFile<'_>,
     ) -> Result<String> {
+        let RecordFile {
+            variant,
+            model_answer,
+        } = file;
         let Some(subject) = self.subject_for(id)? else {
             return Err(anyhow!("id not found: {id}"));
         };
@@ -1601,7 +1661,10 @@ impl Pan {
         let count = (ref_local == "regionData").then_some(records.len());
         // The reference comes first: its IRI is the subject the data file
         // opens with and the node the records hang off.
-        let r = enrich::EnrichmentRef::new(model, &rel, count);
+        let mut r = enrich::EnrichmentRef::new(model, &rel, count);
+        if let Some(answer) = model_answer {
+            r = r.with_model_answer(answer);
+        }
         write_atomic(&abs, enrich::build_data_file(&r.iri(), records).as_bytes())
             .with_context(|| format!("write {}", abs.display()))?;
         let mut quads = enrich::ref_quads(subject.as_str(), ref_local, &r)?;
@@ -1645,10 +1708,19 @@ impl Pan {
         self.flush()?;
         let media_kind = self.media_kind_of(id)?;
         let npy_rel = PanLayout::vector_rel_path(&media_kind, index_name, id);
+        // Everything the server said besides the vector, whole, beside the
+        // .npy, and named on the reference as pan:modelAnswerPath (goodlux,
+        // 2026-09-19).
+        let mut answer_rel: Option<String> = None;
         if !details.is_empty() {
-            let side = self.layout.abs(&npy_rel).with_extension("json");
+            let rel = format!(
+                "{}.json",
+                npy_rel.strip_suffix(".npy").unwrap_or(npy_rel.as_str())
+            );
+            let side = self.layout.abs(&rel);
             write_atomic(&side, serde_json::to_string_pretty(details)?.as_bytes())
                 .with_context(|| format!("write {}", side.display()))?;
+            answer_rel = Some(rel);
         }
         let mut rec = enrich::EnrichmentRecord::new(gen_pan_id(), "Embedding", model)
             .field("dim", vec.len().to_string())
@@ -1664,7 +1736,10 @@ impl Pan {
         }
         let rel = PanLayout::vector_record_rel_path(&media_kind, index_name, id);
         let abs = self.layout.abs(&rel);
-        let r = enrich::EnrichmentRef::new(model, &rel, None);
+        let mut r = enrich::EnrichmentRef::new(model, &rel, None);
+        if let Some(reply) = &answer_rel {
+            r = r.with_model_answer(reply);
+        }
         write_atomic(
             &abs,
             enrich::build_data_file(&r.iri(), std::slice::from_ref(&rec)).as_bytes(),
@@ -1712,6 +1787,9 @@ impl Pan {
                 .as_ref(),
         );
         t.insert(self.quad(&subject, "longCaption", &p.long_caption).as_ref());
+        if !p.prompt_path.trim().is_empty() {
+            t.insert(self.quad(&subject, "promptPath", &p.prompt_path).as_ref());
+        }
         for o in &p.scene_objects {
             t.insert(self.quad(&subject, "sceneObjects", o).as_ref());
         }
@@ -2214,6 +2292,7 @@ impl Pan {
                             path: path.clone(),
                             count: f.get("count").and_then(|c| c.parse().ok()),
                             produced_date: f.get("producedDate").cloned().unwrap_or_default(),
+                            model_answer_path: f.get("modelAnswerPath").cloned(),
                         });
                     }
                 }

@@ -31,12 +31,25 @@ pub struct ModelEndpoint {
     /// letters, digits and single dashes; no periods, no spaces, no slashes.
     pub model: String,
     /// The instruction sent with the image to a captioning endpoint. In the
-    /// config file this is the NAME of a plain-text file under
-    /// `~/.config/pan/prompts/` (goodlux, 2026-09-08: the prompt text lives
-    /// somewhere a person edits, not inside YAML); after `load` it holds
-    /// the file's text. Required for the caption stage. The prompt is the
-    /// schema: the model answers with the property names it names.
+    /// config file this is the NAME of a plain-text file (goodlux,
+    /// 2026-09-08: the prompt text lives somewhere a person edits, not inside
+    /// YAML); after `load` it holds the file's text. Required for the caption
+    /// stage. The prompt is the schema: the model answers with the property
+    /// names it names.
+    ///
+    /// Two folders hold prompts (goodlux, 2026-09-19):
+    /// `~/.config/pan/prompts/default/`, written from this binary at every
+    /// start, and `~/.config/pan/prompts/custom/`, which Pan never writes. A
+    /// name resolves to the custom copy when one exists, otherwise the shipped
+    /// one, so an edited prompt survives an upgrade.
     pub prompt: Option<String>,
+    /// Which prompt file was read, as `custom/caption.md` or
+    /// `default/caption.md`. Not config: `load` fills it in, and the caption
+    /// stage records it on the object and on the Caption record, so an image
+    /// says which prompt described it. A prompt that changes gets a new file
+    /// name; Pan does not read the old one back.
+    #[serde(skip)]
+    pub prompt_path: Option<String>,
     /// Provider-side request fields for a captioning endpoint, sent VERBATIM
     /// as the `extra_body` form field; Iris merges them into the
     /// provider's request body untouched (m3rc, 2026-09-05). Qwen's thinking
@@ -190,6 +203,62 @@ fn expand_home(p: &Path) -> PathBuf {
 /// drive should see it (Rob, 2026-09-05).
 pub const MEDIA_DIR_ON_VOLUME: &str = "pan";
 
+/// The shipped prompts, rewritten from this binary at every start of pand.
+/// Never edit one in place: an upgrade overwrites the folder.
+pub const PROMPTS_DEFAULT: &str = "default";
+/// A person's own prompts. Pan never writes here. A file of the same name as
+/// a shipped one wins (goodlux, 2026-09-19).
+pub const PROMPTS_CUSTOM: &str = "custom";
+
+/// The prompts this binary ships. They land in `prompts/default/` and are
+/// rewritten only when the shipped text differs from what is on disk — so a
+/// new version of pand carrying a new prompt replaces it, and an ordinary
+/// start touches nothing (goodlux, 2026-09-19). The folder is Pan's, not a
+/// person's: an edited prompt belongs in `prompts/custom/`.
+pub const SHIPPED_PROMPTS: [(&str, &str); 1] = [(
+    "caption.md",
+    include_str!("../../prompts/default/caption.md"),
+)];
+
+/// Put the shipped prompts in `<prompts>/default/`, writing only the ones
+/// whose text has changed. Never touches `<prompts>/custom/`.
+pub fn install_default_prompts(prompts_dir: &Path) -> Result<()> {
+    let dir = prompts_dir.join(PROMPTS_DEFAULT);
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    std::fs::create_dir_all(prompts_dir.join(PROMPTS_CUSTOM))
+        .with_context(|| format!("create {}", prompts_dir.join(PROMPTS_CUSTOM).display()))?;
+    for (name, text) in SHIPPED_PROMPTS {
+        let file = dir.join(name);
+        let same = std::fs::read_to_string(&file).is_ok_and(|on_disk| on_disk == text);
+        if !same {
+            crate::write_atomic(&file, text.as_bytes())
+                .with_context(|| format!("write {}", file.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Where a named prompt actually lives, and the name Pan records for it.
+///
+/// The config says which prompt a stage uses. Name the folder — `custom/mine.md`
+/// or `default/caption.md` — and that file is the one, said plainly. Name a
+/// bare file and the custom copy wins when a person has made one, else the
+/// shipped copy. Returns the shipped path when neither exists, so the error
+/// names a real file.
+pub fn resolve_prompt(prompts_dir: &Path, name: &str) -> (String, PathBuf) {
+    if name.contains('/') {
+        return (name.to_string(), prompts_dir.join(name));
+    }
+    let custom = prompts_dir.join(PROMPTS_CUSTOM).join(name);
+    if custom.is_file() {
+        return (format!("{PROMPTS_CUSTOM}/{name}"), custom);
+    }
+    (
+        format!("{PROMPTS_DEFAULT}/{name}"),
+        prompts_dir.join(PROMPTS_DEFAULT).join(name),
+    )
+}
+
 /// A model's name, which has to survive being a file name: lowercase letters,
 /// digits and single dashes between them. No periods, no spaces, no slashes,
 /// no underscores, and never empty (goodlux, 2026-09-18).
@@ -260,6 +329,10 @@ impl DaemonConfig {
             stores.push(default_store_dir());
         }
         let mut models = yml.models;
+        // The shipped prompts land before anything reads one, so a fresh
+        // machine works with no setup. Unchanged ones are left alone.
+        let prompts_dir = path.parent().unwrap_or(Path::new(".")).join("prompts");
+        install_default_prompts(&prompts_dir)?;
         for (stage, m) in models.iter_mut() {
             if m.url.is_empty() {
                 return Err(anyhow!("{}: every model needs a url", path.display()));
@@ -278,18 +351,18 @@ impl DaemonConfig {
                 ));
             }
             if let Some(name) = m.prompt.take() {
-                let file = path
-                    .parent()
-                    .unwrap_or(Path::new("."))
-                    .join("prompts")
-                    .join(name.trim());
+                let prompts = path.parent().unwrap_or(Path::new(".")).join("prompts");
+                let (rel, file) = resolve_prompt(&prompts, name.trim());
                 let text = std::fs::read_to_string(&file).with_context(|| {
                     format!(
-                        "{}: stage {stage} names prompt file {} which cannot be read",
+                        "{}: stage {stage} names prompt file {} which is in neither {} nor {}",
                         path.display(),
-                        file.display()
+                        name.trim(),
+                        prompts.join(PROMPTS_CUSTOM).display(),
+                        prompts.join(PROMPTS_DEFAULT).display(),
                     )
                 })?;
+                m.prompt_path = Some(rel);
                 if text.trim().is_empty() {
                     return Err(anyhow!(
                         "{}: prompt file {} is empty",

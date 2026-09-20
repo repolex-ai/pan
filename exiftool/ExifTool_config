@@ -12,13 +12,13 @@
 %panEnrichment = (
     NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
     STRUCT_NAME => 'PanEnrichment',
-    id => { }, model => { }, path => { }, producedDate => { },
+    id => { }, model => { }, path => { }, modelAnswerPath => { }, producedDate => { },
 );
 
 %panRegionData = (
     NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
     STRUCT_NAME => 'PanRegionData',
-    id => { }, model => { }, path => { }, producedDate => { }, count => { },
+    id => { }, model => { }, path => { }, modelAnswerPath => { }, producedDate => { }, count => { },
 );
 
 %panThumbnail = (
@@ -56,12 +56,14 @@
     mediaRoot => { },
     mediaType => { },
     model => { },
+    modelAnswerPath => { },
     overlayPath => { },
     path => { },
     polygon => { },
     precision => { },
     primaryGraph => { },
     producedDate => { },
+    promptPath => { },
     provider => { },
     rating => { },
     readyDate => { },
@@ -79,6 +81,7 @@
     sceneObjects => { List => 'Bag' },
     scenePosture => { },
     sceneStyle => { },
+    sceneSubjectOrientation => { },
     score => { },
     shortCaption => { },
     sourceFile => { },

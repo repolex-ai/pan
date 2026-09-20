@@ -445,7 +445,7 @@ async fn run_one(
             // 0.3.4). A key the ontology does not declare fails this image
             // for good: the prompt is the schema, and a wrong prompt is a
             // config error, not something to retry.
-            let perception = crate::Perception::parse(&r.text).map_err(|e| {
+            let mut perception = crate::Perception::parse(&r.text).map_err(|e| {
                 CallError::Terminal(caption_failure_message(
                     &e,
                     r.finish_reason.as_deref(),
@@ -454,6 +454,9 @@ async fn run_one(
                     &r.text,
                 ))
             })?;
+            // Which prompt asked for this answer, recorded on the object and
+            // on the Caption record (goodlux, 2026-09-19).
+            perception.prompt_path = ep.prompt_path.clone().unwrap_or_default();
             let s = store.clone();
             let id = item.id.clone();
             // The name is what gets recorded. The server answers with its own
@@ -481,7 +484,7 @@ async fn run_one(
                 let model = ep.model.clone();
                 tokio::task::spawn_blocking(move || {
                     s.pan
-                        .write_enrichment(&id, "pose", "poseData", &model, &[], None)
+                        .write_enrichment(&id, "pose", "poseData", &model, &[], Default::default())
                         .map(|_| ())
                 })
                 .await??;
@@ -529,8 +532,14 @@ async fn run_one(
                         rec
                     })
                     .collect();
-                s.pan
-                    .write_enrichment(&id, "pose", "poseData", &model, &records, None)?;
+                s.pan.write_enrichment(
+                    &id,
+                    "pose",
+                    "poseData",
+                    &model,
+                    &records,
+                    Default::default(),
+                )?;
                 Ok(())
             })
             .await??;
@@ -547,7 +556,14 @@ async fn run_one(
             if prompts.is_empty() {
                 tokio::task::spawn_blocking(move || {
                     s.pan
-                        .write_enrichment(&id, "sam3", "regionData", &model, &[], None)
+                        .write_enrichment(
+                            &id,
+                            "sam3",
+                            "regionData",
+                            &model,
+                            &[],
+                            Default::default(),
+                        )
                         .map(|_| ())
                 })
                 .await??;
@@ -581,12 +597,24 @@ async fn run_one(
                         rec
                     })
                     .collect();
-                let rel =
-                    s.pan
-                        .write_enrichment(&id, "sam3", "regionData", &model, &records, None)?;
-                // Everything the server said, verbatim, beside the record.
-                let side = s.pan.layout.abs(&rel).with_extension("json");
+                // Everything the server said, verbatim, beside the record,
+                // and named on the reference as pan:modelAnswerPath (goodlux,
+                // 2026-09-19) so the graph knows the file exists.
+                let record_rel = s.pan.enrichment_rel(&id, "sam3", None)?;
+                let answer_rel = format!("{record_rel}.json");
+                let side = s.pan.layout.abs(&answer_rel);
+                if let Some(parent) = side.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
                 crate::write_atomic(&side, serde_json::to_string_pretty(&raw)?.as_bytes())?;
+                s.pan.write_enrichment(
+                    &id,
+                    "sam3",
+                    "regionData",
+                    &model,
+                    &records,
+                    crate::RecordFile::default().with_model_answer(&answer_rel),
+                )?;
                 Ok(())
             })
             .await??;
@@ -626,14 +654,20 @@ fn write_perception(
     raw: &str,
     p: &crate::Perception,
 ) -> Result<()> {
-    let rec = EnrichmentRecord::new(gen_pan_id(), "Caption", model).field("text", raw);
+    // The prompt that asked for this answer rides on the record as well as on
+    // the object (goodlux, 2026-09-19): a second captioning model, or the same
+    // one with a different prompt, is a second record naming its own prompt.
+    let mut rec = EnrichmentRecord::new(gen_pan_id(), "Caption", model).field("text", raw);
+    if !p.prompt_path.trim().is_empty() {
+        rec = rec.field("promptPath", &p.prompt_path);
+    }
     s.pan.write_enrichment(
         id,
         "caption",
         "captionData",
         model,
         std::slice::from_ref(&rec),
-        Some(model),
+        crate::RecordFile::variant(model),
     )?;
     s.pan.set_perception(id, p)
 }
