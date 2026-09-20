@@ -391,8 +391,19 @@ pub const SCENE_FIELDS: [&str; 13] = [
     "sceneSubjectOrientation",
 ];
 
+/// What the caption model says about how good the image IS, as opposed to
+/// what is in it: two scores from 0 to 100 and the sentence behind each
+/// (goodlux, 2026-09-19). Asked for in the same call as everything else,
+/// since the encoder has already turned the pixels into tokens.
+pub const JUDGEMENT_FIELDS: [&str; 4] = [
+    "imageTechnicalScore",
+    "imageTechnicalCritique",
+    "imageAestheticScore",
+    "imageAestheticCritique",
+];
+
 /// Every property the caption stage writes on the object.
-pub const PERCEPTION_FIELDS: [&str; 17] = [
+pub const PERCEPTION_FIELDS: [&str; 21] = [
     "shortCaption",
     "longCaption",
     "sceneObjects",
@@ -409,6 +420,10 @@ pub const PERCEPTION_FIELDS: [&str; 17] = [
     "sceneMedium",
     "sceneLocation",
     "sceneSubjectOrientation",
+    "imageTechnicalScore",
+    "imageTechnicalCritique",
+    "imageAestheticScore",
+    "imageAestheticCritique",
     // The prompt that produced the captions riding on this object
     // (goodlux, 2026-09-19). Written by the caption stage, not by the model.
     "modelPromptPath",
@@ -648,7 +663,30 @@ impl Perception {
                         }
                     }
                 }
-                other if SCENE_FIELDS.contains(&other) => {
+                // A score is a number in the answer and a number in the
+                // graph; the model sometimes writes it as a string, so both
+                // are read and anything outside 0 to 100 is refused rather
+                // than stored as a number nobody can compare.
+                other if other == "imageTechnicalScore" || other == "imageAestheticScore" => {
+                    let n = match v {
+                        serde_json::Value::Number(n) => n.as_f64(),
+                        serde_json::Value::String(s) => s.trim().parse::<f64>().ok(),
+                        serde_json::Value::Null => None,
+                        _ => return Err(format!("{other} must be a number from 0 to 100")),
+                    };
+                    if let Some(n) = n {
+                        if !(0.0..=100.0).contains(&n) {
+                            return Err(format!("{other} is {n}, outside 0 to 100"));
+                        }
+                        let text = if n.fract() == 0.0 {
+                            format!("{n:.0}")
+                        } else {
+                            format!("{n}")
+                        };
+                        out.scene.push((other.to_string(), text));
+                    }
+                }
+                other if SCENE_FIELDS.contains(&other) || JUDGEMENT_FIELDS.contains(&other) => {
                     let val = match v {
                         serde_json::Value::String(s) => s.trim().to_string(),
                         serde_json::Value::Null => String::new(),
@@ -691,6 +729,33 @@ mod ontology_copy_tests {
 #[cfg(test)]
 mod perception_tests {
     use super::*;
+
+    /// The two scores arrive as numbers or as strings and land as numbers;
+    /// anything outside 0 to 100 is refused rather than stored.
+    #[test]
+    fn the_image_scores_are_read_and_bounded() {
+        let ok = Perception::parse(
+            r#"{"shortCaption":"A wolf.","longCaption":"A grey wolf on a ridge.","imageTechnicalScore":88,"imageTechnicalCritique":"Sharp, slight highlight clipping.","imageAestheticScore":"82.5","imageAestheticCritique":"Strong diagonal, crowded left edge."}"#,
+        )
+        .unwrap();
+        let get = |k: &str| {
+            ok.scene
+                .iter()
+                .find(|(p, _)| p == k)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(get("imageTechnicalScore").as_deref(), Some("88"));
+        assert_eq!(get("imageAestheticScore").as_deref(), Some("82.5"));
+        assert_eq!(
+            get("imageTechnicalCritique").as_deref(),
+            Some("Sharp, slight highlight clipping.")
+        );
+
+        let over = Perception::parse(
+            r#"{"shortCaption":"A wolf.","longCaption":"A wolf.","imageAestheticScore":150}"#,
+        );
+        assert!(over.is_err(), "a score above 100 must be refused");
+    }
 
     #[test]
     fn every_perception_field_is_declared_in_the_ontology() {

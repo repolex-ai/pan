@@ -23,4 +23,9 @@ Answer with ONE JSON object and nothing else. Use exactly these keys:
 "sceneLocation": where (studio, cliffside, server room).
 "sceneSubjectOrientation": which way the main subject's body faces the camera, ONE of: front, back, side, side-front, side-back.
 
+"imageTechnicalScore": how well MADE this image is, a number from 0 to 100. Judge craft only: focus and sharpness, exposure, noise, banding, compression artefacts, blown highlights, crushed shadows. A technically flawless image of nothing scores high here.
+"imageTechnicalCritique": one sentence saying why that score, naming what you actually saw.
+"imageAestheticScore": how good this image is to LOOK AT, a number from 0 to 100. Judge composition, framing, light, colour, gesture, whether it holds attention. A blurry snapshot of a remarkable moment can score high here.
+"imageAestheticCritique": one sentence saying why that score, naming what you actually saw.
+
 Omit a scene key only if it truly does not apply. Do not add keys.

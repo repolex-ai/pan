@@ -44,11 +44,34 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.14" .
+    owl:versionInfo "0.4.15" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.15 (2026-09-19, ruled by goodlux): HOW GOOD IS THE IMAGE.
+#   The caption stage has described what is in an image since 0.3.4 and never
+#   said anything about how good it is. Specced on 2026-09-13 (Pan expanded
+#   scope, section 2.1) as part of the same single pass: the encoder has
+#   already turned the pixels into tokens, so four more fields cost about sixty
+#   output tokens instead of a second model run.
+#   (1) + pan:imageTechnicalScore, + pan:imageAestheticScore on pan:Image —
+#       0 to 100, declared as the bounded datatype pan:ScoreValue. Technical is
+#       the craft: focus, noise, blown highlights. Aesthetic is the appeal:
+#       composition, light, whether it is worth looking at.
+#   (2) + pan:imageTechnicalCritique, + pan:imageAestheticCritique — one
+#       sentence saying why each score is what it is. A number nobody can
+#       argue with is a number nobody can trust.
+#   (3) + pan:ScoreValue a rdfs:Datatype — xsd:decimal, 0 to 100 inclusive,
+#       the same shape pan:RatingValue already uses for a person's 0 to 5.
+#   The names are goodlux's, 2026-09-19: imageTechnicalScore,
+#   imageAestheticScore, imageTechnicalCritique, imageAestheticCritique, over
+#   the spec's aestheticTechnical / aestheticAppeal / technicalCritique /
+#   appealCritique, so the four line up with each other.
+#   Deliberately not done: a separate aesthetic model. Iris has one (ERNIE
+#   Image Aesthetics on the Mac) and it is not called: one pass, one model,
+#   four more keys in the prompt. Also not done: anything about anatomy — that
+#   is a separate question and is not ruled.
 # v0.4.14 (2026-09-19, ruled by goodlux): READY FOR WHAT?
 #   pan:readyDate RENAMED pan:enrichmentCompleteDate. The name said an object
 #   was "ready" without saying ready for what, and a reader had to find the
@@ -751,11 +774,48 @@ pan:modelPromptPath a owl:DatatypeProperty ;
     rdfs:domain pan:Node ;
     rdfs:range xsd:string .
 
+# --- how good the image is, as the caption model sees it (goodlux, 2026-09-19) --
+# Written by the caption stage in the same call as the captions and the scene
+# fields. Two numbers and the sentence behind each: a score with no reason
+# attached is a number nobody can argue with, and so a number nobody can
+# trust. These are the MODEL's judgement; pan:rating is a person's.
+
+pan:imageTechnicalScore a owl:DatatypeProperty ;
+    rdfs:label "image technical score" ;
+    rdfs:comment "How well made the image is, 0 to 100: focus, exposure, noise, artefacts. Written by the caption stage; do not set it by hand." ;
+    rdfs:domain pan:Image ;
+    rdfs:range pan:ScoreValue .
+
+pan:imageTechnicalCritique a owl:DatatypeProperty ;
+    rdfs:label "image technical critique" ;
+    rdfs:comment "One sentence saying why the technical score is what it is, naming what it saw." ;
+    rdfs:domain pan:Image ;
+    rdfs:range xsd:string .
+
+pan:imageAestheticScore a owl:DatatypeProperty ;
+    rdfs:label "image aesthetic score" ;
+    rdfs:comment "How good the image is to look at, 0 to 100: composition, light, whether it holds attention. Written by the caption stage; do not set it by hand." ;
+    rdfs:domain pan:Image ;
+    rdfs:range pan:ScoreValue .
+
+pan:imageAestheticCritique a owl:DatatypeProperty ;
+    rdfs:label "image aesthetic critique" ;
+    rdfs:comment "One sentence saying why the aesthetic score is what it is, naming what it saw." ;
+    rdfs:domain pan:Image ;
+    rdfs:range xsd:string .
+
 # --- curation: facts a person sets on the media (goodlux, 2026-09-16) ----------
 # Written by `pan set`, never by a model. They ride in the image's XMP so a
 # rating travels with the file; no second database. At most one value each.
 # Deliberately absent: a tag field — machine tags belong to git-lex or
 # subtexture, not to the media store.
+
+# 0 to 100, the scale the caption model is asked for. Same shape as
+# pan:RatingValue, different scale and different author: a score is the
+# model's judgement, a rating is a person's.
+pan:ScoreValue a rdfs:Datatype ;
+    owl:onDatatype xsd:decimal ;
+    owl:withRestrictions ( [ xsd:minInclusive 0 ] [ xsd:maxInclusive 100 ] ) .
 
 pan:RatingValue a rdfs:Datatype ;
     owl:onDatatype xsd:integer ;
@@ -1150,6 +1210,10 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:modelPromptPath ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:renderRequestInformation ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:imageTechnicalScore ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:imageTechnicalCritique ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:imageAestheticScore ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:imageAestheticCritique ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:rating     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:isPicked   ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:isRejected ; owl:maxCardinality 1 ] .
