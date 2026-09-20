@@ -140,11 +140,22 @@ pub fn replace_xmp(png: &[u8], packet: &str) -> Result<Vec<u8>> {
     Ok(write_chunks(&chunks))
 }
 
+/// The text of a PNG text chunk with this keyword, whichever of the three
+/// forms it was written in. `parameters` is the one a diffusion user interface
+/// writes the whole call into.
+pub fn read_text(png: &[u8], keyword: &str) -> Result<Option<String>> {
+    read_keyword(png, |c| c.text_keyword() == Some(keyword))
+}
+
 /// The XMP packet text, if the PNG carries one (tEXt / iTXt uncompressed;
 /// a zlib-compressed zTXt or compressed iTXt is decoded).
 pub fn read_xmp(png: &[u8]) -> Result<Option<String>> {
+    read_keyword(png, Chunk::is_xmp)
+}
+
+fn read_keyword(png: &[u8], want: impl Fn(&Chunk) -> bool) -> Result<Option<String>> {
     for c in read_chunks(png)? {
-        if !c.is_xmp() {
+        if !want(&c) {
             continue;
         }
         let kw_end = c.data.iter().position(|b| *b == 0).unwrap_or(0);

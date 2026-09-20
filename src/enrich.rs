@@ -89,6 +89,20 @@ pub struct EnrichmentRef {
     /// the record, relative to the store's media root (goodlux, 2026-09-19).
     /// Absent when the stage saves no such file.
     pub model_reply_path: Option<String>,
+    /// What Pan asked the segmentation node for. Only a regionData reference
+    /// has one: the other stages send the image and nothing to record.
+    pub request: Option<SegmentRequest>,
+}
+
+/// The segmentation call Pan made, kept with its answer (goodlux,
+/// 2026-09-19). A noun that found nothing leaves no region, so without this an
+/// image with no person region could not say whether Pan asked for one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SegmentRequest {
+    /// Comma-separated, exactly as sent.
+    pub nouns: String,
+    pub min_confidence: f32,
+    pub polygon_verts: u32,
 }
 
 impl EnrichmentRef {
@@ -100,7 +114,14 @@ impl EnrichmentRef {
             count,
             produced_date: now_local(),
             model_reply_path: None,
+            request: None,
         }
+    }
+
+    /// Record the segmentation call this reference's regions came from.
+    pub fn with_request(mut self, r: SegmentRequest) -> Self {
+        self.request = Some(r);
+        self
     }
 
     /// Name the server's own answer file that sits beside the record.
@@ -189,9 +210,7 @@ pub fn record_quads(ref_iri: &str, records: &[EnrichmentRecord]) -> Result<Vec<Q
     let reference =
         NamedNode::new(ref_iri).map_err(|e| anyhow!("bad reference IRI {ref_iri}: {e}"))?;
     let link = NamedNode::new(format!("{PAN_NS}item")).expect("pan:item");
-    let rdf_type = NamedNode::new(RDF_TYPE).expect("rdf:type");
     let mut quads = Vec::with_capacity(records.len() * 6);
-
     for r in records {
         let subj = NamedNode::new(r.iri()).map_err(|e| anyhow!("bad record IRI: {e}"))?;
         quads.push(Quad::new(
@@ -200,6 +219,21 @@ pub fn record_quads(ref_iri: &str, records: &[EnrichmentRecord]) -> Result<Vec<Q
             subj.clone(),
             GraphName::DefaultGraph,
         ));
+    }
+    quads.extend(record_facts(records)?);
+    Ok(quads)
+}
+
+/// What a record says about itself: its class, its identity, when it was
+/// written and its fields — with nothing linking it to anything. A record that
+/// hangs off an enrichment reference is reached through pan:item; the render
+/// request an image arrived with hangs off the image itself, and neither is a
+/// fact about the record.
+pub fn record_facts(records: &[EnrichmentRecord]) -> Result<Vec<Quad>> {
+    let rdf_type = NamedNode::new(RDF_TYPE).expect("rdf:type");
+    let mut quads = Vec::with_capacity(records.len() * 5);
+    for r in records {
+        let subj = NamedNode::new(r.iri()).map_err(|e| anyhow!("bad record IRI: {e}"))?;
         quads.push(Quad::new(
             subj.clone(),
             rdf_type.clone(),
@@ -261,6 +295,19 @@ pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<
     }
     if let Some(reply) = &r.model_reply_path {
         quads.push(pan_quad(&node, "modelReplyPath", reply)?);
+    }
+    if let Some(req) = &r.request {
+        quads.push(pan_quad(&node, "requestNouns", &req.nouns)?);
+        quads.push(pan_quad(
+            &node,
+            "requestMinConfidence",
+            &req.min_confidence.to_string(),
+        )?);
+        quads.push(pan_quad(
+            &node,
+            "requestPolygonVerts",
+            &req.polygon_verts.to_string(),
+        )?);
     }
     quads.push(pan_quad(&node, "producedDate", &r.produced_date)?);
     Ok(quads)

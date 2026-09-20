@@ -43,6 +43,7 @@ pub mod instance;
 pub mod layout;
 pub mod npy;
 pub mod pngchunk;
+pub mod render;
 pub mod thumbnail;
 pub mod wire;
 pub mod xmp;
@@ -1140,6 +1141,30 @@ impl Pan {
         };
         quads.extend(arrived_statements.iter().cloned());
 
+        // The call that made the image, when a diffusion user interface wrote
+        // one into the file (goodlux, 2026-09-19). Pan has always copied that
+        // chunk through untouched; now it is also read, so the prompt, the
+        // seed, the checkpoint and the sampler are facts. A chunk Pan cannot
+        // make sense of is not a reason to refuse an image: it is kept in the
+        // file either way, and the whole text is stored verbatim beside the
+        // parts that parsed.
+        if png {
+            if let Some(text) = pngchunk::read_text(bytes, render::PNG_KEYWORD)? {
+                if let Some(req) = render::RenderRequest::parse(&text) {
+                    let rec = req.record();
+                    let node = NamedNode::new(rec.iri())
+                        .map_err(|e| anyhow!("render request IRI: {e}"))?;
+                    quads.push(Quad::new(
+                        subject.clone(),
+                        pan_iri(render::REF_LOCAL),
+                        node,
+                        GraphName::DefaultGraph,
+                    ));
+                    quads.extend(enrich::record_facts(std::slice::from_ref(&rec))?);
+                }
+            }
+        }
+
         // Thumbnail — declared as its own node; not decodable = no thumbnail,
         // still stored, `pan state` says so.
         let mut thumb: Option<xmp::ThumbRef> = None;
@@ -1591,6 +1616,8 @@ pub struct RecordFile<'a> {
     /// Media-root-relative path of the server's own answer, when the stage
     /// saved one. Becomes pan:modelReplyPath on the reference.
     pub model_reply: Option<&'a str>,
+    /// What Pan asked the segmentation node for, kept with its answer.
+    pub request: Option<&'a enrich::SegmentRequest>,
 }
 
 impl<'a> RecordFile<'a> {
@@ -1598,11 +1625,17 @@ impl<'a> RecordFile<'a> {
         Self {
             variant: Some(variant),
             model_reply: None,
+            request: None,
         }
     }
 
     pub fn with_model_reply(mut self, rel: &'a str) -> Self {
         self.model_reply = Some(rel);
+        self
+    }
+
+    pub fn with_request(mut self, request: &'a enrich::SegmentRequest) -> Self {
+        self.request = Some(request);
         self
     }
 }
@@ -1643,6 +1676,7 @@ impl Pan {
         let RecordFile {
             variant,
             model_reply,
+            request,
         } = file;
         let Some(subject) = self.subject_for(id)? else {
             return Err(anyhow!("id not found: {id}"));
@@ -1664,6 +1698,9 @@ impl Pan {
         let mut r = enrich::EnrichmentRef::new(model, &rel, count);
         if let Some(answer) = model_reply {
             r = r.with_model_reply(answer);
+        }
+        if let Some(req) = request {
+            r = r.with_request(req.clone());
         }
         write_atomic(&abs, enrich::build_data_file(&r.iri(), records).as_bytes())
             .with_context(|| format!("write {}", abs.display()))?;
@@ -2296,6 +2333,10 @@ impl Pan {
                             count: f.get("count").and_then(|c| c.parse().ok()),
                             produced_date: f.get("producedDate").cloned().unwrap_or_default(),
                             model_reply_path: f.get("modelReplyPath").cloned(),
+                            // The request is read back from the graph, not
+                            // from the image's packet: it is not a fact about
+                            // the picture.
+                            request: None,
                         });
                     }
                 }

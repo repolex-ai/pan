@@ -578,9 +578,16 @@ async fn run_one(
             d.counters
                 .model_calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // What Pan is about to ask for, kept so the answer can be read
+            // against it (goodlux, 2026-09-19).
+            let request = crate::enrich::SegmentRequest {
+                nouns: prompts.join(","),
+                min_confidence: ep.min_confidence,
+                polygon_verts: ep.polygon_verts,
+            };
             let (regions, raw) = d
                 .iris
-                .segment(t, &bytes, media_type, &prompts, meter)
+                .segment(t, &bytes, media_type, &request, meter)
                 .await?;
             tokio::task::spawn_blocking(move || -> Result<()> {
                 let records: Vec<EnrichmentRecord> = regions
@@ -619,7 +626,9 @@ async fn run_one(
                     "regionData",
                     &model,
                     &records,
-                    crate::RecordFile::default().with_model_reply(&answer_rel),
+                    crate::RecordFile::default()
+                        .with_model_reply(&answer_rel)
+                        .with_request(&request),
                 )?;
                 Ok(())
             })

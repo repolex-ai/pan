@@ -61,5 +61,10 @@ models:
     # said "person" comes back with no person region. Optional; omit for the
     # caption's nouns alone.
     always: person, face
+    # What the segmentation node is told besides the image. The node's own
+    # defaults are 0.4 and 16; Pan sends these so the numbers that shaped a
+    # result are recorded with it.
+    min_confidence: 0.4
+    polygon_verts: 16
     concurrency: 2
     enabled: true

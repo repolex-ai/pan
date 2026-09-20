@@ -18,7 +18,13 @@
 %panRegionData = (
     NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
     STRUCT_NAME => 'PanRegionData',
-    id => { }, model => { }, path => { }, modelReplyPath => { }, producedDate => { }, count => { },
+    id => { }, model => { }, path => { }, modelReplyPath => { }, producedDate => { }, count => { }, requestNouns => { }, requestMinConfidence => { }, requestPolygonVerts => { },
+);
+
+%panRenderRequest = (
+    NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
+    STRUCT_NAME => 'PanRenderRequest',
+    id => { }, renderPrompt => { }, renderParameters => { }, renderNegativePrompt => { }, renderSteps => { }, renderSampler => { }, renderScheduleType => { }, renderCfgScale => { }, renderSeed => { }, renderModel => { }, renderModelHash => { }, renderRng => { }, renderVersion => { }, renderDenoisingStrength => { }, renderHiresUpscaler => { }, renderClipSkip => { }, width => { }, height => { },
 );
 
 %panThumbnail = (
@@ -68,6 +74,25 @@
     rating => { },
     readyDate => { },
     relatedToId => { },
+    renderCfgScale => { },
+    renderClipSkip => { },
+    renderDenoisingStrength => { },
+    renderHiresUpscaler => { },
+    renderModel => { },
+    renderModelHash => { },
+    renderModule => { },
+    renderNegativePrompt => { },
+    renderParameters => { },
+    renderPrompt => { },
+    renderRng => { },
+    renderSampler => { },
+    renderScheduleType => { },
+    renderSeed => { },
+    renderSteps => { },
+    renderVersion => { },
+    requestMinConfidence => { },
+    requestNouns => { },
+    requestPolygonVerts => { },
     sceneAction => { },
     sceneCamera => { },
     sceneEnergy => { },
@@ -93,6 +118,7 @@
     depthData => { List => 'Bag', Struct => \%panEnrichment },
     poseData => { List => 'Bag', Struct => \%panEnrichment },
     regionData => { List => 'Bag', Struct => \%panRegionData },
+    renderRequest => { Struct => \%panRenderRequest },
     thumbnail => { Struct => \%panThumbnail },
     vectorData => { List => 'Bag', Struct => \%panEnrichment },
 );

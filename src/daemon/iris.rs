@@ -428,15 +428,20 @@ impl Iris {
         t: &Target,
         bytes: &[u8],
         media_type: &str,
-        prompts: &[String],
+        request: &crate::enrich::SegmentRequest,
         meter: &Meter,
     ) -> std::result::Result<(Vec<Region>, serde_json::Value), CallError> {
-        if prompts.is_empty() {
+        let crate::enrich::SegmentRequest {
+            nouns,
+            min_confidence,
+            polygon_verts,
+        } = request;
+        if nouns.trim().is_empty() {
             return Err(CallError::Terminal(
-                "segment needs at least one prompt".into(),
+                "segment needs at least one noun".into(),
             ));
         }
-        let joined = prompts.join(",");
+        let joined = nouns.clone();
         let request_bytes = (bytes.len() + joined.len()) as u64;
         let form = Form::new()
             .part(
@@ -444,7 +449,12 @@ impl Iris {
                 Self::image_part(bytes, media_type)
                     .map_err(|e| CallError::Terminal(e.to_string()))?,
             )
-            .text("prompts", joined);
+            .text("prompts", joined)
+            // Sent rather than left to the node's defaults, so the two numbers
+            // that shaped the answer are the numbers on the record
+            // (goodlux, 2026-09-19).
+            .text("confidence", min_confidence.to_string())
+            .text("polygon_verts", polygon_verts.to_string());
         let v = self.post(t, form, request_bytes, meter).await?;
         let out: SegmentResponse = serde_json::from_value(v.clone())
             .map_err(|e| CallError::Transient(format!("segment shape: {e}")))?;

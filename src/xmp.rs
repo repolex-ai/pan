@@ -1456,6 +1456,7 @@ mod flat_block_tests {
                     count: None,
                     produced_date: "2026-09-05T10:02:40-07:00".into(),
                     model_reply_path: None,
+                    request: None,
                 }],
             )],
             ..Default::default()
@@ -1592,6 +1593,7 @@ mod flat_block_tests {
                     count: None,
                     produced_date: "2026-09-05T10:02:40-07:00".into(),
                     model_reply_path: None,
+                    request: None,
                 }],
             )],
             ..Default::default()

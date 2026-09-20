@@ -21,7 +21,7 @@ pub const DEFAULT_BIND: &str = "127.0.0.1";
 /// image; `model` is the name pand records as `pan:model` on every record the
 /// stage writes, so "which model produced this" is data in the graph, never a
 /// guess from a URL.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ModelEndpoint {
     pub url: String,
@@ -59,6 +59,15 @@ pub struct ModelEndpoint {
     /// mention them. Comma-separated in the config: `always: person, face`.
     #[serde(default, deserialize_with = "comma_or_list")]
     pub always: Vec<String>,
+    /// The score a region has to beat for the segmentation node to return it.
+    /// The node's own default is 0.4; Pan sends what is configured so the
+    /// number that shaped a result is recorded with it (goodlux, 2026-09-19).
+    #[serde(default = "default_min_confidence")]
+    pub min_confidence: f32,
+    /// How many vertices each outline is reduced to. The node's own default
+    /// is 16.
+    #[serde(default = "default_polygon_verts")]
+    pub polygon_verts: u32,
     /// Provider-side request fields for a captioning endpoint, sent VERBATIM
     /// as the `extra_body` form field; Iris merges them into the
     /// provider's request body untouched (m3rc, 2026-09-05). Qwen's thinking
@@ -126,6 +135,16 @@ impl ModelEndpoint {
 
 fn default_concurrency() -> usize {
     1
+}
+
+/// The segmentation node's own defaults, so Pan sends what the node would
+/// have chosen and the value is on the record either way.
+fn default_min_confidence() -> f32 {
+    0.4
+}
+
+fn default_polygon_verts() -> u32 {
+    16
 }
 
 fn default_enabled() -> bool {

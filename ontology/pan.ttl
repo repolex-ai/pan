@@ -44,11 +44,42 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.10" .
+    owl:versionInfo "0.4.11" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.11 (2026-09-19, ruled by goodlux): THE CALL THAT MADE THE IMAGE, AND
+#   THE REQUEST THAT FOUND THE REGIONS.
+#   (1) + pan:RenderRequest a owl:Class ; rdfs:subClassOf pan:Node — the
+#       generation call a diffusion user interface wrote into the PNG's
+#       `parameters` text chunk: prompt, negative prompt, steps, sampler,
+#       schedule type, CFG scale, seed, size, checkpoint and its hash, the
+#       modules, the random number source and the version. Pan has copied that
+#       chunk through untouched since 0.3.0 and never read it, so "every image
+#       with seed 1030317025" was a question the graph could not answer.
+#       + pan:renderRequest on pan:Media links the image to it.
+#   (2) + the fields: pan:renderPrompt, pan:renderNegativePrompt,
+#       pan:renderSteps, pan:renderSampler, pan:renderScheduleType,
+#       pan:renderCfgScale, pan:renderSeed, pan:renderModel,
+#       pan:renderModelHash, pan:renderModule (one per value),
+#       pan:renderRng, pan:renderVersion, pan:renderDenoisingStrength,
+#       pan:renderHiresUpscaler, pan:renderClipSkip. Width and height reuse
+#       pan:width / pan:height. + pan:renderParameters holds the WHOLE chunk
+#       verbatim, so a key Pan does not declare is not a key Pan has lost; a
+#       key earns its own property when someone needs to query it.
+#   (3) + the segmentation request, on pan:RegionData: pan:requestNouns (the
+#       comma-separated list Pan actually sent), pan:requestMinConfidence and
+#       pan:requestPolygonVerts (the two numbers the node was given). A noun
+#       that found nothing used to vanish — an image with no person region
+#       could not say whether Pan asked and the model found none, or whether
+#       Pan never asked. Now it can.
+#   Deliberately not done: no class for LoRAs or image-to-image inputs as
+#   nodes of their own. A LoRA arrives inside the settings line and is in
+#   pan:renderParameters; when something needs to query LoRAs it gets a
+#   property, or a class if it earns one. Also not done: reading the chunk
+#   from formats other than PNG, and re-reading images stored before this
+#   version (no unasked migration).
 # v0.4.10 (2026-09-19, ruled by goodlux): WHICH WAY THE SUBJECT FACES, WHICH
 #   PROMPT ASKED, AND WHERE THE SERVER'S OWN ANSWER WENT.
 #   (1) + pan:sceneSubjectOrientation on pan:Image — which way the main
@@ -722,6 +753,107 @@ pan:AudioSet a owl:Class ;
     rdfs:comment "Stub: an unordered set of Pan media holding only audio; not yet implemented — no pan:Audio media class exists yet and nothing writes one." .
 
 # -----------------------------------------------------------------------------
+# THE RENDER REQUEST (goodlux, 2026-09-19)
+# -----------------------------------------------------------------------------
+# An image made by a diffusion user interface arrives with the whole call that
+# made it in the PNG's `parameters` text chunk. Pan copies that chunk into the
+# stored file byte for byte; this class is what it says, as facts. One per
+# image, written at ingest, never authored. The declared fields are the ones
+# worth querying; pan:renderParameters keeps the whole text so nothing is
+# lost. An image that arrived without such a chunk simply has no node.
+# -----------------------------------------------------------------------------
+
+pan:RenderRequest a owl:Class ;
+    rdfs:subClassOf pan:Node ;
+    rdfs:label "Render request" ;
+    rdfs:comment "The generation call an image arrived with: prompt, sampler, seed, checkpoint and the rest, read from the PNG's parameters chunk. Written by pand at ingest; never authored." .
+
+pan:renderRequest a owl:ObjectProperty ;
+    rdfs:label "render request" ;
+    rdfs:comment "The call that made this image, when it arrived carrying one." ;
+    rdfs:domain pan:Media ; rdfs:range pan:RenderRequest .
+
+pan:renderPrompt a owl:DatatypeProperty ;
+    rdfs:label "render prompt" ;
+    rdfs:comment "The positive prompt the image was generated from, as written." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderNegativePrompt a owl:DatatypeProperty ;
+    rdfs:label "render negative prompt" ;
+    rdfs:comment "The negative prompt, when the call had one." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderParameters a owl:DatatypeProperty ;
+    rdfs:label "render parameters" ;
+    rdfs:comment "The whole parameters chunk, unchanged, so a setting Pan does not declare is still kept. Do not parse this when a declared field holds what you want." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderSteps a owl:DatatypeProperty ;
+    rdfs:label "render steps" ;
+    rdfs:comment "How many sampling steps the call asked for." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:integer .
+
+pan:renderSampler a owl:DatatypeProperty ;
+    rdfs:label "render sampler" ;
+    rdfs:comment "The sampler, as the interface named it: Euler, DPM++ 2M." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderScheduleType a owl:DatatypeProperty ;
+    rdfs:label "render schedule type" ;
+    rdfs:comment "The noise schedule, as the interface named it: Simple, Karras." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderCfgScale a owl:DatatypeProperty ;
+    rdfs:label "render CFG scale" ;
+    rdfs:comment "How hard the sampler was held to the prompt." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:decimal .
+
+pan:renderSeed a owl:DatatypeProperty ;
+    rdfs:label "render seed" ;
+    rdfs:comment "The seed the call used. A string: -1 and very large values both appear." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderModel a owl:DatatypeProperty ;
+    rdfs:label "render model" ;
+    rdfs:comment "The checkpoint that generated the image, as the interface named it. Not pan:model: that is the model that enriched an image, this is the model that made one." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderModelHash a owl:DatatypeProperty ;
+    rdfs:label "render model hash" ;
+    rdfs:comment "The checkpoint's hash, as the interface reported it — the same weights under a renamed file still match." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderModule a owl:DatatypeProperty ;
+    rdfs:label "render module" ;
+    rdfs:comment "One module loaded alongside the checkpoint (a VAE, a text encoder). Repeat the value, not the key." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderRng a owl:DatatypeProperty ;
+    rdfs:label "render random number source" ;
+    rdfs:comment "Where the noise came from: CPU, GPU. Two images share a seed only if they share this." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderVersion a owl:DatatypeProperty ;
+    rdfs:label "render version" ;
+    rdfs:comment "The version of the interface that made the call, as it reported itself." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderDenoisingStrength a owl:DatatypeProperty ;
+    rdfs:label "render denoising strength" ;
+    rdfs:comment "How far the call moved from its input image. Present on an image-to-image call." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:decimal .
+
+pan:renderHiresUpscaler a owl:DatatypeProperty ;
+    rdfs:label "render hires upscaler" ;
+    rdfs:comment "The upscaler used in a high-resolution pass, when there was one." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderClipSkip a owl:DatatypeProperty ;
+    rdfs:label "render clip skip" ;
+    rdfs:comment "How many text-encoder layers the call skipped." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:integer .
+
+# -----------------------------------------------------------------------------
 # THE INSTANCE (goodlux, 2026-09-16)
 # -----------------------------------------------------------------------------
 # One pand deployment as a node. A machine runs one daemon; the daemon serves
@@ -921,6 +1053,26 @@ pan:modelReplyPath a owl:DatatypeProperty ;
     rdfs:domain pan:Enrichment ;
     rdfs:range xsd:string .
 
+# --- what Pan asked a stage for (goodlux, 2026-09-19) --------------------------
+# The segmentation node is told which nouns to ground and how strict to be.
+# Without these a noun that found nothing left no trace, and an image with no
+# person region could not say whether Pan asked for one.
+
+pan:requestNouns a owl:DatatypeProperty ;
+    rdfs:label "request nouns" ;
+    rdfs:comment "The nouns Pan asked the segmenter to ground, comma-separated, exactly as sent. Includes the ones that found nothing." ;
+    rdfs:domain pan:RegionData ; rdfs:range xsd:string .
+
+pan:requestMinConfidence a owl:DatatypeProperty ;
+    rdfs:label "request minimum confidence" ;
+    rdfs:comment "The score a region had to beat to be returned. Regions below it were dropped by the node, not by Pan." ;
+    rdfs:domain pan:RegionData ; rdfs:range xsd:decimal .
+
+pan:requestPolygonVerts a owl:DatatypeProperty ;
+    rdfs:label "request polygon vertices" ;
+    rdfs:comment "How many vertices each outline was reduced to. A lower number is a coarser outline, not a different region." ;
+    rdfs:domain pan:RegionData ; rdfs:range xsd:integer .
+
 pan:count a owl:DatatypeProperty ;
     rdfs:label "count" ;
     rdfs:comment "How many regions the referenced segmentation file holds. Only on a RegionData reference; no other reference carries a count." ;
@@ -1029,6 +1181,7 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:modelPromptPath ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderRequest ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:rating     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:isPicked   ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:isRejected ; owl:maxCardinality 1 ] .
@@ -1057,9 +1210,35 @@ pan:Enrichment rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:modelReplyPath  ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:producedDate ; owl:cardinality 1 ] .
 
-# The segmentation reference alone carries a count (goodlux, 2026-09-16).
+# The segmentation reference alone carries a count (goodlux, 2026-09-16), and
+# the request that produced it (goodlux, 2026-09-19).
 pan:RegionData rdfs:subClassOf
-    [ a owl:Restriction ; owl:onProperty pan:count      ; owl:cardinality 1 ] .
+    [ a owl:Restriction ; owl:onProperty pan:count      ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:requestNouns ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:requestMinConfidence ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:requestPolygonVerts ; owl:maxCardinality 1 ] .
+
+# One render request per image, with its prompt and the whole chunk it came
+# from; every setting at most once, except the modules.
+pan:RenderRequest rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderPrompt ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderParameters ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderNegativePrompt ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderSteps ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderSampler ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderScheduleType ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderCfgScale ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderSeed ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderModel ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderModelHash ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderRng ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderVersion ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderDenoisingStrength ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderHiresUpscaler ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderClipSkip ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:width ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:height ; owl:maxCardinality 1 ] .
 
 pan:Region rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
