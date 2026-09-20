@@ -23,12 +23,13 @@ models:
     # something: the graph, the file, the file name, the log line. Lowercase
     # letters, digits and single dashes — no periods, no spaces, no slashes.
     model: qwen3-8-27b
-    # THE PROMPT. REQUIRED, and it names the file in full. pand ships its own
-    # prompts in prompts/default/ and rewrites them when it ships a new one;
-    # prompts/custom/ is yours and Pan never writes there. Copy a shipped
-    # prompt into custom/ under a new name to change it, and name that file
-    # here. pand refuses to start if this line is missing.
-    prompt: default/caption.md
+    # THE PROMPT. REQUIRED, and it names the file. Prompts live in one flat
+    # folder, ~/.config/pan/prompts/. A name ending .default.md is one Pan
+    # ships and rewrites when it ships a new version; every other name is
+    # yours and Pan never writes it. To change a prompt, copy it under a name
+    # of your own and put that name here. pand refuses to start without this
+    # line.
+    prompt: full-caption.default.md
     # Sent verbatim in the provider's request body; Pan has no opinion about
     # what is in here. Optional.
     extra_body:

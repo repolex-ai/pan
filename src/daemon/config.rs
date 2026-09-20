@@ -37,14 +37,14 @@ pub struct ModelEndpoint {
     /// stage. The prompt is the schema: the model answers with the property
     /// names it names.
     ///
-    /// Two folders hold prompts (goodlux, 2026-09-19):
-    /// `~/.config/pan/prompts/default/`, which pand rewrites when the prompt
-    /// it ships differs from what is on disk, and
-    /// `~/.config/pan/prompts/custom/`, which Pan never writes. The config
-    /// names one of them in full — `default/caption.md`, `custom/mine.md` —
-    /// and pand reads that file and no other.
+    /// One flat folder holds every prompt, `~/.config/pan/prompts/`. A name
+    /// ending `.default.md` is one Pan ships and rewrites when it ships a new
+    /// version; every other name is yours and Pan never writes it. The config
+    /// names the file and pand reads that one and no other (goodlux,
+    /// 2026-09-19).
     pub prompt: Option<String>,
-    /// Which prompt file was read, exactly as the config named it. Not
+    /// Which prompt file was read, its file name exactly as the config gave
+    /// it. Not
     /// config: `load` fills it in, and the caption stage records it on the
     /// object and on the Caption record, so an image says which prompt
     /// described it. A prompt that changes gets a new file name; Pan does not
@@ -237,32 +237,24 @@ where
         .collect())
 }
 
-/// The shipped prompts, rewritten from this binary at every start of pand.
-/// Never edit one in place: an upgrade overwrites the folder.
-pub const PROMPTS_DEFAULT: &str = "default";
-/// A person's own prompts. Pan never writes here. A file of the same name as
-/// a shipped one wins (goodlux, 2026-09-19).
-pub const PROMPTS_CUSTOM: &str = "custom";
-
-/// The prompts this binary ships. They land in `prompts/default/` and are
-/// rewritten only when the shipped text differs from what is on disk — so a
-/// new version of pand carrying a new prompt replaces it, and an ordinary
-/// start touches nothing (goodlux, 2026-09-19). The folder is Pan's, not a
-/// person's: an edited prompt belongs in `prompts/custom/`.
+/// The prompts this binary ships. One flat folder holds every prompt; a
+/// shipped one is marked by its name, `<what it does>.default.md`, and Pan
+/// rewrites it only when the text it ships differs from what is on disk — so a
+/// new version of pand carrying a new prompt replaces it and an ordinary start
+/// touches nothing (goodlux, 2026-09-19). Pan writes no other file in that
+/// folder: your own prompt is any name without `.default`, and it is yours.
 pub const SHIPPED_PROMPTS: [(&str, &str); 1] = [(
-    "caption.md",
-    include_str!("../../prompts/default/caption.md"),
+    "full-caption.default.md",
+    include_str!("../../prompts/full-caption.default.md"),
 )];
 
-/// Put the shipped prompts in `<prompts>/default/`, writing only the ones
-/// whose text has changed. Never touches `<prompts>/custom/`.
+/// Put the shipped prompts in the prompts folder, writing only the ones whose
+/// text has changed. Touches nothing else in there.
 pub fn install_default_prompts(prompts_dir: &Path) -> Result<()> {
-    let dir = prompts_dir.join(PROMPTS_DEFAULT);
-    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-    std::fs::create_dir_all(prompts_dir.join(PROMPTS_CUSTOM))
-        .with_context(|| format!("create {}", prompts_dir.join(PROMPTS_CUSTOM).display()))?;
+    std::fs::create_dir_all(prompts_dir)
+        .with_context(|| format!("create {}", prompts_dir.display()))?;
     for (name, text) in SHIPPED_PROMPTS {
-        let file = dir.join(name);
+        let file = prompts_dir.join(name);
         let same = std::fs::read_to_string(&file).is_ok_and(|on_disk| on_disk == text);
         if !same {
             crate::write_atomic(&file, text.as_bytes())
@@ -272,12 +264,13 @@ pub fn install_default_prompts(prompts_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The file a `prompt:` line names, resolved against the prompts directory.
+/// The file a `prompt:` line names, in the prompts directory.
 ///
-/// The config says which prompt a stage uses, in full: `default/caption.md`
-/// or `custom/mine.md`. There is no searching and no preference order — the
-/// line names the file, the file is read, and a line that names nothing
-/// readable stops pand (goodlux, 2026-09-19).
+/// The config says which prompt a stage uses by its file name:
+/// `full-caption.default.md` for the one Pan ships, or any name of your own.
+/// There is no searching and no preference order — the line names the file,
+/// the file is read, and a line that names nothing readable stops pand
+/// (goodlux, 2026-09-19).
 pub fn resolve_prompt(prompts_dir: &Path, name: &str) -> (String, PathBuf) {
     (name.to_string(), prompts_dir.join(name))
 }
@@ -365,7 +358,7 @@ impl DaemonConfig {
             // at a time (goodlux, 2026-09-19). No default is substituted.
             if stage == "caption" && m.prompt.as_deref().is_none_or(|p| p.trim().is_empty()) {
                 return Err(anyhow!(
-                    "{}: the caption stage needs a `prompt:` naming a file under {}, for example `prompt: {PROMPTS_DEFAULT}/caption.md`",
+                    "{}: the caption stage needs a `prompt:` naming a file in {}, for example `prompt: full-caption.default.md`",
                     path.display(),
                     prompts_dir.display(),
                 ));
@@ -615,11 +608,11 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n    prompt: custom/nope.md\n",
+            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n    prompt: nope.md\n",
         )
         .unwrap();
         let e = format!("{:#}", DaemonConfig::load_from(&p).unwrap_err());
-        assert!(e.contains("custom/nope.md"), "{e}");
+        assert!(e.contains("nope.md"), "{e}");
     }
 
     /// The shipped prompt lands, and the config's own name is what gets
@@ -630,15 +623,14 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n    prompt: default/caption.md\n",
+            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n    prompt: full-caption.default.md\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
-        assert!(dir.path().join("prompts/default/caption.md").is_file());
-        assert!(dir.path().join("prompts/custom").is_dir());
+        assert!(dir.path().join("prompts/full-caption.default.md").is_file());
         assert_eq!(
             cfg.models["caption"].prompt_path.as_deref(),
-            Some("default/caption.md")
+            Some("full-caption.default.md")
         );
         assert!(cfg.models["caption"]
             .prompt
@@ -669,7 +661,7 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n    prompt: default/caption.md\n",
+            "models:\n  caption:\n    url: http://x/percept/vlm\n    model: qwen3-8-27b\n    prompt: full-caption.default.md\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
