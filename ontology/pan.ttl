@@ -44,11 +44,28 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.12" .
+    owl:versionInfo "0.4.13" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.13 (2026-09-19, ruled by goodlux): ONE STRING, NOT A VOCABULARY.
+#   0.4.11 and 0.4.12 turned the PNG render chunk into a class with a property
+#   per setting, then into a class plus a name/value class for the settings a
+#   roster could not hold. Both were wrong for the same reason: they built
+#   Pan's ontology against one image generator's format, and that format is
+#   whatever its extensions decide it is — 94 distinct keys across the built-in
+#   ones alone, changing release to release.
+#   (1) + pan:renderRequestInformation on pan:Media — the whole chunk as one
+#       string, kept as written. The graph holds it so a reader need not open
+#       the file; Pan does not take it apart.
+#   (2) - pan:RenderRequest, - pan:RenderSetting, - pan:renderRequest,
+#       - pan:renderSetting, - pan:settingName, - pan:settingValue and all
+#       twenty-one render* properties. Deleted, not deprecated: nothing
+#       authored them and pand no longer writes them.
+#   Not searchable by field, deliberately. Finding every image from one seed
+#   means reading the string, and that is the trade: Pan stores media and runs
+#   perception, and is not a reader of any one generator's format.
 # v0.4.12 (2026-09-19, ruled by goodlux): THE RENDER REQUEST, READ FROM THE
 #   GENERATOR'S SOURCE RATHER THAN FROM SAMPLES.
 #   0.4.11 declared twelve settings guessed from one image. The generator's own
@@ -547,6 +564,19 @@ pan:sourceFile a owl:DatatypeProperty ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:string .
 
+# The request that made the image, kept whole and not taken apart. A
+# diffusion user interface writes its entire call into a PNG text chunk;
+# Pan copies that chunk into the stored file and also keeps its text here, so
+# the graph holds it without opening the file. Pan does not parse it: a field
+# per setting would tie this ontology to one generator's format, and that
+# format is whatever its extensions decide it is this week (goodlux,
+# 2026-09-19).
+pan:renderRequestInformation a owl:DatatypeProperty ;
+    rdfs:label "render request information" ;
+    rdfs:comment "The generation request the file arrived carrying, verbatim: prompt, sampler, seed, checkpoint and the rest as the generator wrote them. One string; do not parse it into the graph." ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:string .
+
 pan:readyDate a owl:DatatypeProperty ;
     rdfs:label "ready date" ;
     rdfs:comment "When every configured stage had a record for this object, RFC3339 local time. Absent = still in the pipeline; set once." ;
@@ -782,175 +812,6 @@ pan:AudioSet a owl:Class ;
     rdfs:subClassOf pan:MediaSet ;
     rdfs:label "AudioSet" ;
     rdfs:comment "Stub: an unordered set of Pan media holding only audio; not yet implemented — no pan:Audio media class exists yet and nothing writes one." .
-
-# -----------------------------------------------------------------------------
-# THE RENDER REQUEST (goodlux, 2026-09-19)
-# -----------------------------------------------------------------------------
-# An image made by a diffusion user interface arrives with the whole call that
-# made it in the PNG's `parameters` text chunk. Pan copies that chunk into the
-# stored file byte for byte; this class is what it says, as facts. One per
-# image, written at ingest, never authored. The declared fields are the ones
-# worth querying; pan:renderParameters keeps the whole text so nothing is
-# lost. An image that arrived without such a chunk simply has no node.
-# -----------------------------------------------------------------------------
-
-pan:RenderRequest a owl:Class ;
-    rdfs:subClassOf pan:Node ;
-    rdfs:label "Render request" ;
-    rdfs:comment "The generation call an image arrived with: prompt, sampler, seed, checkpoint and the rest, read from the PNG's parameters chunk. Written by pand at ingest; never authored." .
-
-pan:renderRequest a owl:ObjectProperty ;
-    rdfs:label "render request" ;
-    rdfs:comment "The call that made this image, when it arrived carrying one." ;
-    rdfs:domain pan:Media ; rdfs:range pan:RenderRequest .
-
-pan:renderPrompt a owl:DatatypeProperty ;
-    rdfs:label "render prompt" ;
-    rdfs:comment "The positive prompt the image was generated from, as written." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderNegativePrompt a owl:DatatypeProperty ;
-    rdfs:label "render negative prompt" ;
-    rdfs:comment "The negative prompt, when the call had one." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderParameters a owl:DatatypeProperty ;
-    rdfs:label "render parameters" ;
-    rdfs:comment "The whole parameters chunk, unchanged, so a setting Pan does not declare is still kept. Do not parse this when a declared field holds what you want." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-# Every other key from the chunk, by its own name. The generator's key set is
-# open — any extension may add one — so a class holds what Pan does not
-# declare instead of a roster quietly dropping it.
-pan:RenderSetting a owl:Class ;
-    rdfs:subClassOf pan:Node ;
-    rdfs:label "Render setting" ;
-    rdfs:comment "One setting from the render chunk that has no property of its own: its key and its value as written. Written by pand at ingest; never authored." .
-
-pan:renderSetting a owl:ObjectProperty ;
-    rdfs:label "render setting" ;
-    rdfs:comment "One setting of this render request that Pan declares no property for." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range pan:RenderSetting .
-
-pan:settingName a owl:DatatypeProperty ;
-    rdfs:label "setting name" ;
-    rdfs:comment "The key exactly as the generator wrote it, spaces and capitals included: Token merging ratio, Schedule rho." ;
-    rdfs:domain pan:RenderSetting ; rdfs:range xsd:string .
-
-pan:settingValue a owl:DatatypeProperty ;
-    rdfs:label "setting value" ;
-    rdfs:comment "The value as written, with the generator's quoting already removed." ;
-    rdfs:domain pan:RenderSetting ; rdfs:range xsd:string .
-
-pan:renderSteps a owl:DatatypeProperty ;
-    rdfs:label "render steps" ;
-    rdfs:comment "How many sampling steps the call asked for." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:integer .
-
-pan:renderSampler a owl:DatatypeProperty ;
-    rdfs:label "render sampler" ;
-    rdfs:comment "The sampler, as the interface named it: Euler, DPM++ 2M." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderScheduleType a owl:DatatypeProperty ;
-    rdfs:label "render schedule type" ;
-    rdfs:comment "The noise schedule, as the interface named it: Simple, Karras." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderCfgScale a owl:DatatypeProperty ;
-    rdfs:label "render CFG scale" ;
-    rdfs:comment "How hard the sampler was held to the prompt." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:decimal .
-
-pan:renderSeed a owl:DatatypeProperty ;
-    rdfs:label "render seed" ;
-    rdfs:comment "The seed the call used. A string: -1 and very large values both appear." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderModel a owl:DatatypeProperty ;
-    rdfs:label "render model" ;
-    rdfs:comment "The checkpoint that generated the image, as the interface named it. Not pan:model: that is the model that enriched an image, this is the model that made one." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderModelHash a owl:DatatypeProperty ;
-    rdfs:label "render model hash" ;
-    rdfs:comment "The checkpoint's hash, as the interface reported it — the same weights under a renamed file still match." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderModule a owl:DatatypeProperty ;
-    rdfs:label "render module" ;
-    rdfs:comment "One module loaded alongside the checkpoint (a VAE, a text encoder). Repeat the value, not the key." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderRng a owl:DatatypeProperty ;
-    rdfs:label "render random number source" ;
-    rdfs:comment "Where the noise came from: CPU, GPU. Two images share a seed only if they share this." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderVersion a owl:DatatypeProperty ;
-    rdfs:label "render version" ;
-    rdfs:comment "The version of the interface that made the call, as it reported itself." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderDenoisingStrength a owl:DatatypeProperty ;
-    rdfs:label "render denoising strength" ;
-    rdfs:comment "How far the call moved from its input image. Present on an image-to-image call." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:decimal .
-
-pan:renderHiresUpscaler a owl:DatatypeProperty ;
-    rdfs:label "render hires upscaler" ;
-    rdfs:comment "The upscaler used in a high-resolution pass, when there was one." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderHiresSteps a owl:DatatypeProperty ;
-    rdfs:label "render hires steps" ;
-    rdfs:comment "Sampling steps in the high-resolution pass." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:integer .
-
-pan:renderHiresCheckpoint a owl:DatatypeProperty ;
-    rdfs:label "render hires checkpoint" ;
-    rdfs:comment "The checkpoint the high-resolution pass switched to, when it switched." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderClipSkip a owl:DatatypeProperty ;
-    rdfs:label "render clip skip" ;
-    rdfs:comment "How many text-encoder layers the call skipped." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:integer .
-
-pan:renderDistilledCfgScale a owl:DatatypeProperty ;
-    rdfs:label "render distilled CFG scale" ;
-    rdfs:comment "The distilled guidance scale, on a model that uses one. Written as Shift by some versions; the generator renames it on read." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:decimal .
-
-pan:renderVariationSeed a owl:DatatypeProperty ;
-    rdfs:label "render variation seed" ;
-    rdfs:comment "The second seed mixed in to vary an image. Absent when the strength was zero." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderVariationSeedStrength a owl:DatatypeProperty ;
-    rdfs:label "render variation seed strength" ;
-    rdfs:comment "How much of the variation seed was mixed in, 0 to 1." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:decimal .
-
-pan:renderVaeEncoder a owl:DatatypeProperty ;
-    rdfs:label "render VAE encoder" ;
-    rdfs:comment "The encoder that turned the input image into latents, when the call named one." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderVaeDecoder a owl:DatatypeProperty ;
-    rdfs:label "render VAE decoder" ;
-    rdfs:comment "The decoder that turned latents back into pixels, when the call named one." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderLoraHashes a owl:DatatypeProperty ;
-    rdfs:label "render LoRA hashes" ;
-    rdfs:comment "Every LoRA the call used, as the generator wrote them: name and hash pairs in one string. One string, not one value per LoRA." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
-
-pan:renderDiffusionPrecision a owl:DatatypeProperty ;
-    rdfs:label "render diffusion precision" ;
-    rdfs:comment "The numeric precision the diffusion model was loaded at, when it was not the automatic choice." ;
-    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
 
 # -----------------------------------------------------------------------------
 # THE INSTANCE (goodlux, 2026-09-16)
@@ -1280,7 +1141,7 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:modelPromptPath ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderRequest ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderRequestInformation ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:rating     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:isPicked   ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:isRejected ; owl:maxCardinality 1 ] .
@@ -1319,39 +1180,6 @@ pan:RegionData rdfs:subClassOf
 
 # One render request per image, with its prompt and the whole chunk it came
 # from; every setting at most once, except the modules.
-pan:RenderSetting rdfs:subClassOf
-    [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:settingName ; owl:cardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:settingValue ; owl:cardinality 1 ] .
-
-pan:RenderRequest rdfs:subClassOf
-    [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderPrompt ; owl:cardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderParameters ; owl:cardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderNegativePrompt ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderSteps ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderSampler ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderScheduleType ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderCfgScale ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderSeed ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderModel ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderModelHash ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderRng ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderVersion ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderDenoisingStrength ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderHiresUpscaler ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderHiresSteps ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderHiresCheckpoint ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderClipSkip ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderDistilledCfgScale ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderVariationSeed ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderVariationSeedStrength ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderVaeEncoder ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderVaeDecoder ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderLoraHashes ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:renderDiffusionPrecision ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:width ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:height ; owl:maxCardinality 1 ] .
 
 pan:Region rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,

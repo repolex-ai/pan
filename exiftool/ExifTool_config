@@ -21,18 +21,6 @@
     id => { }, model => { }, path => { }, modelReplyPath => { }, producedDate => { }, count => { }, requestNouns => { }, requestMinConfidence => { }, requestPolygonVerts => { },
 );
 
-%panRenderRequest = (
-    NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
-    STRUCT_NAME => 'PanRenderRequest',
-    id => { }, renderPrompt => { }, renderParameters => { }, renderNegativePrompt => { }, renderSteps => { }, renderSampler => { }, renderScheduleType => { }, renderCfgScale => { }, renderSeed => { }, renderModel => { }, renderModelHash => { }, renderRng => { }, renderVersion => { }, renderDenoisingStrength => { }, renderHiresUpscaler => { }, renderHiresSteps => { }, renderHiresCheckpoint => { }, renderClipSkip => { }, renderDistilledCfgScale => { }, renderVariationSeed => { }, renderVariationSeedStrength => { }, renderVaeEncoder => { }, renderVaeDecoder => { }, renderLoraHashes => { }, renderDiffusionPrecision => { }, width => { }, height => { },
-);
-
-%panRenderSetting = (
-    NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
-    STRUCT_NAME => 'PanRenderSetting',
-    id => { }, settingName => { }, settingValue => { },
-);
-
 %panThumbnail = (
     NAMESPACE   => { 'pan' => 'https://repolex.ai/ontology/pan/' },
     STRUCT_NAME => 'PanThumbnail',
@@ -80,31 +68,7 @@
     rating => { },
     readyDate => { },
     relatedToId => { },
-    renderCfgScale => { },
-    renderClipSkip => { },
-    renderDenoisingStrength => { },
-    renderDiffusionPrecision => { },
-    renderDistilledCfgScale => { },
-    renderHiresCheckpoint => { },
-    renderHiresSteps => { },
-    renderHiresUpscaler => { },
-    renderLoraHashes => { },
-    renderModel => { },
-    renderModelHash => { },
-    renderModule => { },
-    renderNegativePrompt => { },
-    renderParameters => { },
-    renderPrompt => { },
-    renderRng => { },
-    renderSampler => { },
-    renderScheduleType => { },
-    renderSeed => { },
-    renderSteps => { },
-    renderVaeDecoder => { },
-    renderVaeEncoder => { },
-    renderVariationSeed => { },
-    renderVariationSeedStrength => { },
-    renderVersion => { },
+    renderRequestInformation => { },
     requestMinConfidence => { },
     requestNouns => { },
     requestPolygonVerts => { },
@@ -123,8 +87,6 @@
     sceneStyle => { },
     sceneSubjectOrientation => { },
     score => { },
-    settingName => { },
-    settingValue => { },
     shortCaption => { },
     sourceFile => { },
     sourceFormat => { },
@@ -135,8 +97,6 @@
     depthData => { List => 'Bag', Struct => \%panEnrichment },
     poseData => { List => 'Bag', Struct => \%panEnrichment },
     regionData => { List => 'Bag', Struct => \%panRegionData },
-    renderRequest => { Struct => \%panRenderRequest },
-    renderSetting => { List => 'Bag', Struct => \%panRenderSetting },
     thumbnail => { Struct => \%panThumbnail },
     vectorData => { List => 'Bag', Struct => \%panEnrichment },
 );

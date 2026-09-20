@@ -43,7 +43,6 @@ pub mod instance;
 pub mod layout;
 pub mod npy;
 pub mod pngchunk;
-pub mod render;
 pub mod thumbnail;
 pub mod wire;
 pub mod xmp;
@@ -415,9 +414,14 @@ pub const PERCEPTION_FIELDS: [&str; 17] = [
     "modelPromptPath",
 ];
 
+/// The PNG text chunk a diffusion user interface writes its whole request
+/// into. Pan copies the chunk through untouched and also keeps its text as
+/// one string on the object.
+pub const RENDER_REQUEST_CHUNK: &str = "parameters";
+
 /// Fields Pan itself writes about a media object at ingest or at stage
 /// completion. A person may never set these by hand.
-pub const STRUCTURAL_FIELDS: [&str; 7] = [
+pub const STRUCTURAL_FIELDS: [&str; 8] = [
     "mediaPath",
     "mediaType",
     "sourceFile",
@@ -425,6 +429,7 @@ pub const STRUCTURAL_FIELDS: [&str; 7] = [
     "height",
     "createdDate",
     "readyDate",
+    "renderRequestInformation",
 ];
 
 /// One property a person may set on a media object: its local name and the
@@ -1141,40 +1146,18 @@ impl Pan {
         };
         quads.extend(arrived_statements.iter().cloned());
 
-        // The call that made the image, when a diffusion user interface wrote
-        // one into the file (goodlux, 2026-09-19). Pan has always copied that
-        // chunk through untouched; now it is also read, so the prompt, the
-        // seed, the checkpoint and the sampler are facts. A chunk Pan cannot
-        // make sense of is not a reason to refuse an image: it is kept in the
-        // file either way, and the whole text is stored verbatim beside the
-        // parts that parsed.
+        // The call that made the image, when the file carries one. A
+        // diffusion user interface writes the whole request into a PNG text
+        // chunk; Pan keeps it as one string and does not take it apart
+        // (goodlux, 2026-09-19). Pan stores media and is not a reader of any
+        // one generator's format: a field set built from that generator's
+        // source would tie this ontology to it and would be wrong the next
+        // time it changed.
         if png {
-            if let Some(text) = pngchunk::read_text(bytes, render::PNG_KEYWORD)? {
-                if let Some(req) = render::RenderRequest::parse(&text) {
-                    let (rec, settings) = req.records();
-                    let node = NamedNode::new(rec.iri())
-                        .map_err(|e| anyhow!("render request IRI: {e}"))?;
-                    quads.push(Quad::new(
-                        subject.clone(),
-                        pan_iri(render::REF_LOCAL),
-                        node.clone(),
-                        GraphName::DefaultGraph,
-                    ));
-                    quads.extend(enrich::record_facts(std::slice::from_ref(&rec))?);
-                    // A setting Pan declares no property for keeps its own
-                    // name on a node of its own, so an extension's key is
-                    // queryable without inventing vocabulary for it.
-                    for s in &settings {
-                        let sn = NamedNode::new(s.iri())
-                            .map_err(|e| anyhow!("render setting IRI: {e}"))?;
-                        quads.push(Quad::new(
-                            node.clone(),
-                            pan_iri(render::SETTING_LOCAL),
-                            sn,
-                            GraphName::DefaultGraph,
-                        ));
-                    }
-                    quads.extend(enrich::record_facts(&settings)?);
+            if let Some(text) = pngchunk::read_text(bytes, RENDER_REQUEST_CHUNK)? {
+                let text = text.trim();
+                if !text.is_empty() {
+                    quads.push(self.quad(&subject, "renderRequestInformation", text));
                 }
             }
         }
