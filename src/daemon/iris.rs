@@ -293,8 +293,8 @@ impl Iris {
     /// text to embed WITH it as the `text` string part; ONE joint vector of
     /// pixels and text comes back (m3rc, 2026-09-08). Pan sends the file's
     /// complete XMP packet as the text (goodlux, 2026-09-08). The model
-    /// input is capped at 8192 tokens, image and text together; a very long
-    /// packet is truncated at its end by the node.
+    /// The node caps the input and truncates at the end; m4rq raised that cap
+    /// on 2026-09-20 and the model itself takes up to 32k tokens.
     pub async fn embed(
         &self,
         t: &Target,

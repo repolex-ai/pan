@@ -663,29 +663,9 @@ impl Perception {
                         }
                     }
                 }
-                // A score is a number in the answer and a number in the
-                // graph; the model sometimes writes it as a string, so both
-                // are read and anything outside 0 to 100 is refused rather
-                // than stored as a number nobody can compare.
-                other if other == "imageTechnicalScore" || other == "imageAestheticScore" => {
-                    let n = match v {
-                        serde_json::Value::Number(n) => n.as_f64(),
-                        serde_json::Value::String(s) => s.trim().parse::<f64>().ok(),
-                        serde_json::Value::Null => None,
-                        _ => return Err(format!("{other} must be a number from 0 to 100")),
-                    };
-                    if let Some(n) = n {
-                        if !(0.0..=100.0).contains(&n) {
-                            return Err(format!("{other} is {n}, outside 0 to 100"));
-                        }
-                        let text = if n.fract() == 0.0 {
-                            format!("{n:.0}")
-                        } else {
-                            format!("{n}")
-                        };
-                        out.scene.push((other.to_string(), text));
-                    }
-                }
+                // Stored as the model wrote it. Pan does not check a value
+                // against the range the prompt asked for: judging a model's
+                // answer is not the media store's job (goodlux, 2026-09-19).
                 other if SCENE_FIELDS.contains(&other) || JUDGEMENT_FIELDS.contains(&other) => {
                     let val = match v {
                         serde_json::Value::String(s) => s.trim().to_string(),
@@ -696,15 +676,22 @@ impl Perception {
                         out.scene.push((other.to_string(), val));
                     }
                 }
+                // Any other key the model answered with, stored under its own
+                // name. Pan is a media store running perception: it does not
+                // judge what a model returns, and it does not refuse a
+                // well-formed field it has not heard of (goodlux,
+                // 2026-09-19).
                 other => {
-                    return Err(format!(
-                        "answer has a key the Pan ontology does not declare: {other}"
-                    ))
+                    let val = match v {
+                        serde_json::Value::String(s) => s.trim().to_string(),
+                        serde_json::Value::Null => String::new(),
+                        x => x.to_string(),
+                    };
+                    if !val.is_empty() {
+                        out.scene.push((other.to_string(), val));
+                    }
                 }
             }
-        }
-        if out.short_caption.is_empty() || out.long_caption.is_empty() {
-            return Err("answer is missing shortCaption or longCaption".into());
         }
         Ok(out)
     }
@@ -730,10 +717,10 @@ mod ontology_copy_tests {
 mod perception_tests {
     use super::*;
 
-    /// The two scores arrive as numbers or as strings and land as numbers;
-    /// anything outside 0 to 100 is refused rather than stored.
+    /// The scores are stored as the model wrote them. Pan does not check
+    /// them against the range the prompt asked for.
     #[test]
-    fn the_image_scores_are_read_and_bounded() {
+    fn the_image_scores_are_stored_as_answered() {
         let ok = Perception::parse(
             r#"{"shortCaption":"A wolf.","longCaption":"A grey wolf on a ridge.","imageTechnicalScore":88,"imageTechnicalCritique":"Sharp, slight highlight clipping.","imageAestheticScore":"82.5","imageAestheticCritique":"Strong diagonal, crowded left edge."}"#,
         )
@@ -751,10 +738,16 @@ mod perception_tests {
             Some("Sharp, slight highlight clipping.")
         );
 
+        // Out of the range the prompt asked for, and stored anyway: the
+        // caption is not thrown away over one number.
         let over = Perception::parse(
             r#"{"shortCaption":"A wolf.","longCaption":"A wolf.","imageAestheticScore":150}"#,
-        );
-        assert!(over.is_err(), "a score above 100 must be refused");
+        )
+        .unwrap();
+        assert!(over
+            .scene
+            .iter()
+            .any(|(p, v)| p == "imageAestheticScore" && v == "150"));
     }
 
     #[test]
@@ -857,15 +850,15 @@ mod perception_tests {
     }
 
     #[test]
-    fn parses_the_answer_and_refuses_undeclared_keys() {
+    fn parses_the_answer_and_keeps_keys_it_does_not_know() {
         let p = Perception::parse("```json\n{\"shortCaption\": \"A wolf.\", \"longCaption\": \"A grey wolf on a ridge.\", \"sceneObjects\": [\"Wolf\", \"rock\", \"wolf\", \"\"], \"sceneMood\": \"still\", \"sceneGaze\": null}\n```").unwrap();
         assert_eq!(p.scene_objects, ["wolf", "rock"]);
         assert_eq!(p.scene, [("sceneMood".to_string(), "still".to_string())]);
-        let e =
+        let kept =
             Perception::parse("{\"shortCaption\": \"x\", \"longCaption\": \"y\", \"vibe\": \"z\"}")
-                .unwrap_err();
-        assert!(e.contains("vibe"), "{e}");
-        assert!(Perception::parse("{\"shortCaption\": \"x\"}").is_err());
+                .unwrap();
+        assert!(kept.scene.iter().any(|(k, v)| k == "vibe" && v == "z"));
+        assert!(Perception::parse("{\"shortCaption\": \"x\"}").is_ok());
     }
 }
 
@@ -1373,6 +1366,48 @@ impl Pan {
 
     /// All facts on the object's subject: full-IRI predicate → values. Empty =
     /// unknown id.
+    /// The text the embedding is built from, beside the image itself
+    /// (goodlux, 2026-09-20): the two captions, the scene fields, the two
+    /// scores and their critiques, and the render request the file arrived
+    /// with. Nothing else — the packet that used to be sent whole was mostly
+    /// markup, paths, identifiers and dates.
+    pub fn embedding_text(&self, id: &str) -> Result<String> {
+        let facts = self.facts_for(id)?;
+        let value = |local: &str| -> Vec<String> {
+            facts
+                .iter()
+                .find(|(p, _)| p == &format!("{PAN_NS}{local}"))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+        let mut out = String::new();
+        let mut put = |label: &str, values: Vec<String>| {
+            for v in values {
+                let v = v.trim();
+                if !v.is_empty() {
+                    out.push_str(label);
+                    out.push_str(": ");
+                    out.push_str(v);
+                    out.push('\n');
+                }
+            }
+        };
+        put("shortCaption", value("shortCaption"));
+        put("longCaption", value("longCaption"));
+        put("sceneObjects", vec![value("sceneObjects").join(", ")]);
+        for f in SCENE_FIELDS {
+            put(f, value(f));
+        }
+        for f in JUDGEMENT_FIELDS {
+            put(f, value(f));
+        }
+        put(
+            "renderRequestInformation",
+            value("renderRequestInformation"),
+        );
+        Ok(out)
+    }
+
     pub fn facts_for(&self, id: &str) -> Result<NodeFacts> {
         let Some(subject) = self.subject_for(id)? else {
             return Ok(vec![]);

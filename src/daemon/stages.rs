@@ -378,15 +378,23 @@ async fn run_one(
 
     match stage {
         STAGE_EMBED => {
-            // The embedding is multimodal: the image AND the complete XMP
-            // packet in the file, embedded together as one vector (goodlux,
-            // 2026-09-08). pending_for holds an image back until the caption
-            // stage has written its fields, so the packet carries them.
-            let packet = crate::xmp::read_xmp_packet_from_bytes(&bytes)?.unwrap_or_default();
+            // The embedding is multimodal: the image AND what the caption
+            // stage said about it, embedded together as one vector. The text
+            // is the two captions, the scene fields, the scores and their
+            // critiques, and the render request the file arrived with
+            // (goodlux, 2026-09-20). It used to be the whole XMP packet as
+            // raw markup — tags, file paths, identifiers, dates and every
+            // enrichment reference, most of which says nothing about the
+            // picture.
+            let text = {
+                let s = store.clone();
+                let id = item.id.clone();
+                tokio::task::spawn_blocking(move || s.pan.embedding_text(&id)).await??
+            };
             d.counters
                 .model_calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.embed(t, &bytes, media_type, &packet, meter).await?;
+            let r = d.iris.embed(t, &bytes, media_type, &text, meter).await?;
             let s = store.clone();
             let id = item.id.clone();
             let model = ep.model.clone();
@@ -439,14 +447,16 @@ async fn run_one(
                 )
                 .await?;
             if r.text.trim().is_empty() {
-                return Err(CallError::Terminal("no caption text returned".into()).into());
+                return Err(CallError::Transient("no caption text returned".into()).into());
             }
-            // The answer is one JSON object keyed by property name (pan.ttl
-            // 0.3.4). A key the ontology does not declare fails this image
-            // for good: the prompt is the schema, and a wrong prompt is a
-            // config error, not something to retry.
+            // An answer pand cannot read leaves the image pending, to be asked
+            // again on the next pass (goodlux, 2026-09-19). It used to be
+            // marked failed for good, on the reasoning that a bad answer meant
+            // the prompt and the ontology disagreed — a setup fault that would
+            // repeat. Nobody asked for that, and it is wrong: a model has a bad
+            // moment on one image and the next run is fine.
             let mut perception = crate::Perception::parse(&r.text).map_err(|e| {
-                CallError::Terminal(caption_failure_message(
+                CallError::Transient(caption_failure_message(
                     &e,
                     r.finish_reason.as_deref(),
                     r.prompt_tokens,
