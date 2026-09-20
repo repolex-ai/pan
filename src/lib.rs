@@ -1151,16 +1151,30 @@ impl Pan {
         if png {
             if let Some(text) = pngchunk::read_text(bytes, render::PNG_KEYWORD)? {
                 if let Some(req) = render::RenderRequest::parse(&text) {
-                    let rec = req.record();
+                    let (rec, settings) = req.records();
                     let node = NamedNode::new(rec.iri())
                         .map_err(|e| anyhow!("render request IRI: {e}"))?;
                     quads.push(Quad::new(
                         subject.clone(),
                         pan_iri(render::REF_LOCAL),
-                        node,
+                        node.clone(),
                         GraphName::DefaultGraph,
                     ));
                     quads.extend(enrich::record_facts(std::slice::from_ref(&rec))?);
+                    // A setting Pan declares no property for keeps its own
+                    // name on a node of its own, so an extension's key is
+                    // queryable without inventing vocabulary for it.
+                    for s in &settings {
+                        let sn = NamedNode::new(s.iri())
+                            .map_err(|e| anyhow!("render setting IRI: {e}"))?;
+                        quads.push(Quad::new(
+                            node.clone(),
+                            pan_iri(render::SETTING_LOCAL),
+                            sn,
+                            GraphName::DefaultGraph,
+                        ));
+                    }
+                    quads.extend(enrich::record_facts(&settings)?);
                 }
             }
         }

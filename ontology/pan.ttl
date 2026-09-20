@@ -44,11 +44,42 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.11" .
+    owl:versionInfo "0.4.12" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.12 (2026-09-19, ruled by goodlux): THE RENDER REQUEST, READ FROM THE
+#   GENERATOR'S SOURCE RATHER THAN FROM SAMPLES.
+#   0.4.11 declared twelve settings guessed from one image. The generator's own
+#   code (sd-webui-forge-neo, modules/processing.py create_infotext and
+#   modules/infotext_utils.py parse_generation_parameters, read 2026-09-19)
+#   says the key set CANNOT be fixed: every script and extension adds its own
+#   through p.extra_generation_params, and the built-in ones alone contribute
+#   around fifty. A fixed roster would silently drop whatever it had not heard
+#   of. So:
+#   (1) + pan:RenderSetting a owl:Class ; rdfs:subClassOf pan:Node — one
+#       setting from the chunk that Pan declares no property for, holding
+#       pan:settingName (the key exactly as written, "Token merging ratio")
+#       and pan:settingValue. + pan:renderSetting links a RenderRequest to
+#       each. Nothing is dropped and no new vocabulary is needed when an
+#       extension invents a key.
+#   (2) The settings with a property of their own are the ones worth querying
+#       by name, and now match the generator's spellings: + renderDistilledCfgScale,
+#       renderVariationSeed, renderVariationSeedStrength, renderVaeEncoder,
+#       renderVaeDecoder, renderLoraHashes, renderDiffusionPrecision,
+#       renderHiresSteps, renderHiresCheckpoint. pan:renderModule takes
+#       `Module 1`, `Module 2`, … one value each.
+#   (3) - pan:renderScheduleType keeps its name; - the 0.4.11 guesses that the
+#       source does not write are gone.
+#   Parsing follows the generator exactly: the settings are the LAST line and
+#   only if three or more pairs parse from it; a value in double quotes is a
+#   JSON string, so a comma inside `Lora hashes: "a: 1, b: 2"` stays with its
+#   value; a value shaped 1536x1536 is two numbers; a setting whose value
+#   equals its key is written bare and is skipped.
+#   Deliberately not done: LoRAs as nodes of their own. `Lora hashes` is one
+#   string of name-to-hash pairs and stays one string until something needs to
+#   query LoRAs. Also not done: re-reading images stored before this version.
 # v0.4.11 (2026-09-19, ruled by goodlux): THE CALL THAT MADE THE IMAGE, AND
 #   THE REQUEST THAT FOUND THE REGIONS.
 #   (1) + pan:RenderRequest a owl:Class ; rdfs:subClassOf pan:Node — the
@@ -788,6 +819,29 @@ pan:renderParameters a owl:DatatypeProperty ;
     rdfs:comment "The whole parameters chunk, unchanged, so a setting Pan does not declare is still kept. Do not parse this when a declared field holds what you want." ;
     rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
 
+# Every other key from the chunk, by its own name. The generator's key set is
+# open — any extension may add one — so a class holds what Pan does not
+# declare instead of a roster quietly dropping it.
+pan:RenderSetting a owl:Class ;
+    rdfs:subClassOf pan:Node ;
+    rdfs:label "Render setting" ;
+    rdfs:comment "One setting from the render chunk that has no property of its own: its key and its value as written. Written by pand at ingest; never authored." .
+
+pan:renderSetting a owl:ObjectProperty ;
+    rdfs:label "render setting" ;
+    rdfs:comment "One setting of this render request that Pan declares no property for." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range pan:RenderSetting .
+
+pan:settingName a owl:DatatypeProperty ;
+    rdfs:label "setting name" ;
+    rdfs:comment "The key exactly as the generator wrote it, spaces and capitals included: Token merging ratio, Schedule rho." ;
+    rdfs:domain pan:RenderSetting ; rdfs:range xsd:string .
+
+pan:settingValue a owl:DatatypeProperty ;
+    rdfs:label "setting value" ;
+    rdfs:comment "The value as written, with the generator's quoting already removed." ;
+    rdfs:domain pan:RenderSetting ; rdfs:range xsd:string .
+
 pan:renderSteps a owl:DatatypeProperty ;
     rdfs:label "render steps" ;
     rdfs:comment "How many sampling steps the call asked for." ;
@@ -848,10 +902,55 @@ pan:renderHiresUpscaler a owl:DatatypeProperty ;
     rdfs:comment "The upscaler used in a high-resolution pass, when there was one." ;
     rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
 
+pan:renderHiresSteps a owl:DatatypeProperty ;
+    rdfs:label "render hires steps" ;
+    rdfs:comment "Sampling steps in the high-resolution pass." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:integer .
+
+pan:renderHiresCheckpoint a owl:DatatypeProperty ;
+    rdfs:label "render hires checkpoint" ;
+    rdfs:comment "The checkpoint the high-resolution pass switched to, when it switched." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
 pan:renderClipSkip a owl:DatatypeProperty ;
     rdfs:label "render clip skip" ;
     rdfs:comment "How many text-encoder layers the call skipped." ;
     rdfs:domain pan:RenderRequest ; rdfs:range xsd:integer .
+
+pan:renderDistilledCfgScale a owl:DatatypeProperty ;
+    rdfs:label "render distilled CFG scale" ;
+    rdfs:comment "The distilled guidance scale, on a model that uses one. Written as Shift by some versions; the generator renames it on read." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:decimal .
+
+pan:renderVariationSeed a owl:DatatypeProperty ;
+    rdfs:label "render variation seed" ;
+    rdfs:comment "The second seed mixed in to vary an image. Absent when the strength was zero." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderVariationSeedStrength a owl:DatatypeProperty ;
+    rdfs:label "render variation seed strength" ;
+    rdfs:comment "How much of the variation seed was mixed in, 0 to 1." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:decimal .
+
+pan:renderVaeEncoder a owl:DatatypeProperty ;
+    rdfs:label "render VAE encoder" ;
+    rdfs:comment "The encoder that turned the input image into latents, when the call named one." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderVaeDecoder a owl:DatatypeProperty ;
+    rdfs:label "render VAE decoder" ;
+    rdfs:comment "The decoder that turned latents back into pixels, when the call named one." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderLoraHashes a owl:DatatypeProperty ;
+    rdfs:label "render LoRA hashes" ;
+    rdfs:comment "Every LoRA the call used, as the generator wrote them: name and hash pairs in one string. One string, not one value per LoRA." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
+
+pan:renderDiffusionPrecision a owl:DatatypeProperty ;
+    rdfs:label "render diffusion precision" ;
+    rdfs:comment "The numeric precision the diffusion model was loaded at, when it was not the automatic choice." ;
+    rdfs:domain pan:RenderRequest ; rdfs:range xsd:string .
 
 # -----------------------------------------------------------------------------
 # THE INSTANCE (goodlux, 2026-09-16)
@@ -1220,6 +1319,11 @@ pan:RegionData rdfs:subClassOf
 
 # One render request per image, with its prompt and the whole chunk it came
 # from; every setting at most once, except the modules.
+pan:RenderSetting rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:settingName ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:settingValue ; owl:cardinality 1 ] .
+
 pan:RenderRequest rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:renderPrompt ; owl:cardinality 1 ] ,
@@ -1236,7 +1340,16 @@ pan:RenderRequest rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:renderVersion ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:renderDenoisingStrength ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:renderHiresUpscaler ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderHiresSteps ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderHiresCheckpoint ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:renderClipSkip ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderDistilledCfgScale ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderVariationSeed ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderVariationSeedStrength ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderVaeEncoder ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderVaeDecoder ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderLoraHashes ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderDiffusionPrecision ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height ; owl:maxCardinality 1 ] .
 
