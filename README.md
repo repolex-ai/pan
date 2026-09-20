@@ -119,7 +119,7 @@ models:                                  # External perception model stages (opt
 
 ### Ingestion Sequence
 
-1. **XMP Harvest:** Incoming image metadata is parsed using an RDF/XML parser (`rdf:about=""` binds to the new image node).
+1. **XMP Harvest:** Incoming image metadata is parsed using an RDF/XML parser.
 2. **Disk Storage:** Image bytes land in the store path, and Pan appends its own identity and enrichment block to the XMP packet.
 3. **Thumbnail Generation:** a 512 px long-edge JPEG rendition is written under `img/jpg/` for fast preview.
 4. **Atomic Graph Commit:** Statements and file records are committed to Oxigraph in a single atomic transaction.
