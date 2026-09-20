@@ -111,7 +111,7 @@ pub struct ImagePacket {
     /// the producer's own Description.
     pub related_to: Vec<String>,
     /// Set once every configured stage has a record.
-    pub ready_date: Option<String>,
+    pub enrichment_complete_date: Option<String>,
     /// The thumbnail Pan made, with the Thumbnail node's own id.
     pub thumbnail: Option<ThumbRef>,
     /// `(reference predicate local name, references)`, e.g.
@@ -253,8 +253,11 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
     for r in &p.related_to {
         ident.push(("relatedToId".into(), FieldValue::Scalar(r.clone())));
     }
-    if let Some(r) = &p.ready_date {
-        ident.push(("readyDate".into(), FieldValue::Scalar(r.clone())));
+    if let Some(r) = &p.enrichment_complete_date {
+        ident.push((
+            "enrichmentCompleteDate".into(),
+            FieldValue::Scalar(r.clone()),
+        ));
     }
     for (local, value) in &ident {
         out.push_str(&serialize_field("pan", local, value, "      "));

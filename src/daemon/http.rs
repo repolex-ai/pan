@@ -118,7 +118,7 @@ pub struct StateResponse {
     pub media_type: String,
     pub created_date: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ready_date: Option<String>,
+    pub enrichment_complete_date: Option<String>,
     pub thumbnail: bool,
     pub stages: HashMap<String, StageStatus>,
 }
@@ -655,7 +655,7 @@ async fn get_state(
         store: store.entry.id.clone(),
         media_type: st.media_type,
         created_date: st.created_date,
-        ready_date: st.ready_date,
+        enrichment_complete_date: st.enrichment_complete_date,
         thumbnail: st.thumbnail,
         stages: stages_out,
     }))

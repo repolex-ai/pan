@@ -94,7 +94,7 @@ pub async fn run(d: Arc<Daemon>) {
         let d = d.clone();
         loops.spawn(async move {
             loop {
-                let did = mark_ready_pass(d.clone()).await;
+                let did = mark_enrichment_complete_pass(d.clone()).await;
                 if did == 0 {
                     tokio::time::sleep(every).await;
                 }
@@ -111,7 +111,7 @@ pub async fn run(d: Arc<Daemon>) {
 /// One pass of the ready mark over every store: an object whose every
 /// configured stage has a record is ready as configured; say when. With no
 /// stages configured, ingest IS ready. Returns how many were marked.
-pub async fn mark_ready_pass(d: Arc<Daemon>) -> usize {
+pub async fn mark_enrichment_complete_pass(d: Arc<Daemon>) -> usize {
     let mut done = 0usize;
     let required: Vec<(String, String)> = d
         .cfg
@@ -124,8 +124,8 @@ pub async fn mark_ready_pass(d: Arc<Daemon>) -> usize {
         let batch = d.cfg.batch * 4;
         match tokio::task::spawn_blocking(move || -> Result<usize> {
             let mut n = 0;
-            for id in s.pan.ready_candidates(&req, batch)? {
-                if s.pan.mark_ready(&id)? {
+            for id in s.pan.enrichment_complete_candidates(&req, batch)? {
+                if s.pan.mark_enrichment_complete(&id)? {
                     n += 1;
                 }
             }
@@ -168,7 +168,7 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
             }
         }
     }
-    done + mark_ready_pass(d).await
+    done + mark_enrichment_complete_pass(d).await
 }
 
 /// How long a whole stage waits after a call failed before reaching the model

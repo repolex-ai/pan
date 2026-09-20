@@ -44,11 +44,19 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.13" .
+    owl:versionInfo "0.4.14" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.14 (2026-09-19, ruled by goodlux): READY FOR WHAT?
+#   pan:readyDate RENAMED pan:enrichmentCompleteDate. The name said an object
+#   was "ready" without saying ready for what, and a reader had to find the
+#   code to learn that it means every configured enrichment stage has recorded
+#   a result for this object. That is what it has always meant and all it has
+#   ever meant; only the name changes.
+#   No alias for the old spelling: stored triples under pan:readyDate are test
+#   data, and pand writes the new name from here on.
 # v0.4.13 (2026-09-19, ruled by goodlux): ONE STRING, NOT A VOCABULARY.
 #   0.4.11 and 0.4.12 turned the PNG render chunk into a class with a property
 #   per setting, then into a class plus a name/value class for the settings a
@@ -577,9 +585,9 @@ pan:renderRequestInformation a owl:DatatypeProperty ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:string .
 
-pan:readyDate a owl:DatatypeProperty ;
-    rdfs:label "ready date" ;
-    rdfs:comment "When every configured stage had a record for this object, RFC3339 local time. Absent = still in the pipeline; set once." ;
+pan:enrichmentCompleteDate a owl:DatatypeProperty ;
+    rdfs:label "enrichment complete date" ;
+    rdfs:comment "When every configured enrichment stage had recorded a result for this object, RFC3339 local time. Absent means a stage is still owed. Written once by pand, never by hand." ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:dateTime .
 
@@ -1136,7 +1144,7 @@ pan:Media rdfs:subClassOf
     # When Pan created this record and its id (RFC3339, system local time):
     # pan:createdDate, the universal via owl:equivalentProperty.
     [ a owl:Restriction ; owl:onProperty pan:createdDate ; owl:cardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:readyDate    ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:enrichmentCompleteDate ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] ,

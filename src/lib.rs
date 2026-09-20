@@ -428,7 +428,7 @@ pub const STRUCTURAL_FIELDS: [&str; 8] = [
     "width",
     "height",
     "createdDate",
-    "readyDate",
+    "enrichmentCompleteDate",
     "renderRequestInformation",
 ];
 
@@ -826,7 +826,7 @@ pub struct MediaState {
     pub iri: String,
     pub media_type: String,
     pub created_date: String,
-    pub ready_date: Option<String>,
+    pub enrichment_complete_date: Option<String>,
     pub thumbnail: bool,
     /// enrichment reference (vectorData / captionData / regionData / poseData / depthData)
     /// → models that have run on this object (a run with nothing found counts).
@@ -1397,7 +1397,7 @@ impl Pan {
                 .find(|(p, _)| p == &format!("{PAN_NS}createdDate"))
                 .and_then(|(_, v)| v.first().cloned())
                 .unwrap_or_default(),
-            ready_date: one("readyDate"),
+            enrichment_complete_date: one("enrichmentCompleteDate"),
             thumbnail: facts
                 .iter()
                 .any(|(p, _)| p == &format!("{PAN_NS}thumbnail")),
@@ -1475,14 +1475,14 @@ impl Pan {
     }
 
     /// Images that have every listed (reference, model) pair recorded but no
-    /// `pan:readyDate` yet — the ones the ladder can now mark ready.
-    pub fn ready_candidates(
+    /// `pan:enrichmentCompleteDate` yet — the ones the ladder can now mark ready.
+    pub fn enrichment_complete_candidates(
         &self,
         required: &[(String, String)],
         limit: usize,
     ) -> Result<Vec<String>> {
         let mut q = String::from(
-            "SELECT ?s WHERE { ?s a pan:Image . FILTER NOT EXISTS { ?s pan:readyDate ?r } ",
+            "SELECT ?s WHERE { ?s a pan:Image . FILTER NOT EXISTS { ?s pan:enrichmentCompleteDate ?r } ",
         );
         for (i, (link, model)) in required.iter().enumerate() {
             let m = model.replace('\\', "\\\\").replace('"', "\\\"");
@@ -1501,8 +1501,8 @@ impl Pan {
         Ok(out)
     }
 
-    /// Set `pan:readyDate` now, once; a later call is a no-op. XMP refreshed.
-    pub fn mark_ready(&self, id: &str) -> Result<bool> {
+    /// Set `pan:enrichmentCompleteDate` now, once; a later call is a no-op. XMP refreshed.
+    pub fn mark_enrichment_complete(&self, id: &str) -> Result<bool> {
         let Some(subject) = self.subject_for(id)? else {
             return Err(anyhow!("id not found: {id}"));
         };
@@ -1510,7 +1510,7 @@ impl Pan {
             .store
             .quads_for_pattern(
                 Some((&subject).into()),
-                Some(pan_iri("readyDate").as_ref()),
+                Some(pan_iri("enrichmentCompleteDate").as_ref()),
                 None,
                 Some(GraphName::DefaultGraph.as_ref()),
             )
@@ -1519,7 +1519,7 @@ impl Pan {
         if already {
             return Ok(false);
         }
-        self.insert_quads(&[self.quad(&subject, "readyDate", &now_local())])?;
+        self.insert_quads(&[self.quad(&subject, "enrichmentCompleteDate", &now_local())])?;
         self.restamp(id)?;
         Ok(true)
     }
@@ -2404,7 +2404,7 @@ impl Pan {
                 v.dedup();
                 v
             },
-            ready_date: pan_field("readyDate"),
+            enrichment_complete_date: pan_field("enrichmentCompleteDate"),
             thumbnail,
             enrichment,
         })
