@@ -392,18 +392,21 @@ pub const SCENE_FIELDS: [&str; 13] = [
 ];
 
 /// What the caption model says about how good the image IS, as opposed to
-/// what is in it: two scores from 0 to 100 and the sentence behind each
-/// (goodlux, 2026-09-19). Asked for in the same call as everything else,
-/// since the encoder has already turned the pixels into tokens.
-pub const JUDGEMENT_FIELDS: [&str; 4] = [
+/// what is in it: three scores from 0 to 100 and the sentence behind each
+/// (goodlux, 2026-09-19; anatomy added 2026-09-20). Asked for in the same
+/// call as everything else, since the encoder has already turned the pixels
+/// into tokens. All three run the same direction: high is good.
+pub const JUDGEMENT_FIELDS: [&str; 6] = [
     "imageTechnicalScore",
     "imageTechnicalCritique",
     "imageAestheticScore",
     "imageAestheticCritique",
+    "imageAnatomyScore",
+    "imageAnatomyCritique",
 ];
 
 /// Every property the caption stage writes on the object.
-pub const PERCEPTION_FIELDS: [&str; 21] = [
+pub const PERCEPTION_FIELDS: [&str; 23] = [
     "shortCaption",
     "longCaption",
     "sceneObjects",
@@ -424,6 +427,8 @@ pub const PERCEPTION_FIELDS: [&str; 21] = [
     "imageTechnicalCritique",
     "imageAestheticScore",
     "imageAestheticCritique",
+    "imageAnatomyScore",
+    "imageAnatomyCritique",
     // The prompt that produced the captions riding on this object
     // (goodlux, 2026-09-19). Written by the caption stage, not by the model.
     "modelPromptPath",

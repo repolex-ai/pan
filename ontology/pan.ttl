@@ -44,11 +44,27 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.15" .
+    owl:versionInfo "0.4.16" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.16 (2026-09-20, ruled by goodlux): IS THE BODY RIGHT.
+#   0.4.15 added two scores and said anatomy was "a separate question and is
+#   not ruled". It is ruled now: a third score and critique on the same
+#   footing as the other two, asked for in the same caption call.
+#   (1) + pan:imageAnatomyScore on pan:Image — 0 to 100, pan:ScoreValue, the
+#       same scale and direction as the other two: HIGH is good. 100 is a body
+#       with nothing wrong with it; a low score is extra fingers, a second
+#       elbow, a limb that joins nowhere, a duplicated head.
+#   (2) + pan:imageAnatomyCritique — one sentence naming the defect it saw, or
+#       saying it saw none.
+#   A score rather than true/false, raised as an option on 2026-09-19 and
+#   settled here: generators fail anatomy by degree, so a threshold belongs to
+#   whoever is querying, not to the fact.
+#   The value applies to whatever body is in the frame — person or animal. An
+#   image with no body in it omits both keys, as any inapplicable key is
+#   omitted.
 # v0.4.15 (2026-09-19, ruled by goodlux): HOW GOOD IS THE IMAGE.
 #   The caption stage has described what is in an image since 0.3.4 and never
 #   said anything about how good it is. Specced on 2026-09-13 (Pan expanded
@@ -770,13 +786,13 @@ pan:description a owl:DatatypeProperty ;
 # the pand binary at every start, and `custom/`, which Pan never writes.
 pan:modelPromptPath a owl:DatatypeProperty ;
     rdfs:label "prompt path" ;
-    rdfs:comment "The prompt file that asked for this answer, as custom/caption.md or default/caption.md, relative to the prompts directory. Written by pand; a changed prompt is a new file, never an edit." ;
+    rdfs:comment "The prompt file that asked for this answer, as full-caption.default.md, relative to the prompts directory. Written by pand; a changed prompt is a new file, never an edit." ;
     rdfs:domain pan:Node ;
     rdfs:range xsd:string .
 
 # --- how good the image is, as the caption model sees it (goodlux, 2026-09-19) --
 # Written by the caption stage in the same call as the captions and the scene
-# fields. Two numbers and the sentence behind each: a score with no reason
+# fields. Three numbers and the sentence behind each: a score with no reason
 # attached is a number nobody can argue with, and so a number nobody can
 # trust. These are the MODEL's judgement; pan:rating is a person's.
 
@@ -801,6 +817,18 @@ pan:imageAestheticScore a owl:DatatypeProperty ;
 pan:imageAestheticCritique a owl:DatatypeProperty ;
     rdfs:label "image aesthetic critique" ;
     rdfs:comment "One sentence saying why the aesthetic score is what it is, naming what it saw." ;
+    rdfs:domain pan:Image ;
+    rdfs:range xsd:string .
+
+pan:imageAnatomyScore a owl:DatatypeProperty ;
+    rdfs:label "image anatomy score" ;
+    rdfs:comment "How anatomically correct the bodies are, 0 to 100, high is good: 100 has nothing wrong. Written by the caption stage; do not set it by hand." ;
+    rdfs:domain pan:Image ;
+    rdfs:range pan:ScoreValue .
+
+pan:imageAnatomyCritique a owl:DatatypeProperty ;
+    rdfs:label "image anatomy critique" ;
+    rdfs:comment "One sentence naming the anatomical defect the anatomy score is for, or saying none was seen." ;
     rdfs:domain pan:Image ;
     rdfs:range xsd:string .
 
@@ -1214,6 +1242,8 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:imageTechnicalCritique ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:imageAestheticScore ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:imageAestheticCritique ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:imageAnatomyScore ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:imageAnatomyCritique ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:rating     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:isPicked   ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:isRejected ; owl:maxCardinality 1 ] .

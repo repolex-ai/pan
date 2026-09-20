@@ -46,6 +46,8 @@
     id => { },
     imageAestheticCritique => { },
     imageAestheticScore => { },
+    imageAnatomyCritique => { },
+    imageAnatomyScore => { },
     imageTechnicalCritique => { },
     imageTechnicalScore => { },
     instanceMode => { },

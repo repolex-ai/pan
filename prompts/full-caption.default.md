@@ -27,5 +27,7 @@ Answer with ONE JSON object and nothing else. Use exactly these keys:
 "imageTechnicalCritique": one sentence saying why that score, naming what you actually saw.
 "imageAestheticScore": how good this image is to LOOK AT, a number from 0 to 100. Judge composition, framing, light, colour, gesture, whether it holds attention. A blurry snapshot of a remarkable moment can score high here.
 "imageAestheticCritique": one sentence saying why that score, naming what you actually saw.
+"imageAnatomyScore": how anatomically correct the bodies in this image are, a number from 0 to 100, where 100 means nothing is wrong. Count fingers, hands, arms, legs, feet, eyes and heads. Look for limbs that join nowhere, joints bending the wrong way, a duplicated or merged body part, a hand with the wrong number of fingers. Judge animals the same way. Lower the score the worse and the more obvious the error is. Omit this key and the next one if the image contains no body at all.
+"imageAnatomyCritique": one sentence naming the anatomical error you saw, or saying you saw none.
 
 Omit a scene key only if it truly does not apply. Do not add keys.
