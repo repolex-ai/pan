@@ -445,7 +445,7 @@ pub const STRUCTURAL_FIELDS: [&str; 9] = [
     "mediaPath",
     "mediaType",
     "sourceFile",
-    "pixelSha256Hash",
+    "fileSha256Hash",
     "width",
     "height",
     "createdDate",
@@ -1199,12 +1199,12 @@ impl Pan {
         // — that is pan:id — and not a gate: a file Pan cannot decode is
         // still stored, it simply carries no hash.
         if png {
-            match xmp::pixel_sha256(bytes) {
-                Ok(h) => quads.push(self.quad(&subject, "pixelSha256Hash", &h)),
+            match xmp::file_sha256(bytes) {
+                Ok(h) => quads.push(self.quad(&subject, "fileSha256Hash", &h)),
                 Err(e) => tracing::warn!(
                     store = %self.store_id,
                     id = %id,
-                    "pixel sha256 not computed, image stored without one: {e:#}"
+                    "file hash not computed, image stored without one: {e:#}"
                 ),
             }
         }

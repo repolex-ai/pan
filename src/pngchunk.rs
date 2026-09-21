@@ -36,7 +36,7 @@ impl Chunk {
         }
     }
 
-    fn is_xmp(&self) -> bool {
+    pub fn is_xmp(&self) -> bool {
         self.text_keyword() == Some(XMP_KEYWORD)
     }
 }

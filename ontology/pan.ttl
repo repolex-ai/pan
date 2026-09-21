@@ -49,29 +49,32 @@
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
-# v0.4.17 (2026-09-21, ruled by goodlux): THE PIXELS, NAMED.
-#   Pan has hashed pixels since the store was written and never recorded the
-#   result. The hash existed only inside tests, to prove that writing metadata
-#   leaves the image alone. An image's pixels had no name in the graph and no
-#   name in the file.
-#   + pan:pixelSha256Hash on pan:Media. The sha256 of the decoded raster as
-#   the file has it: every channel including alpha, both bytes of a 16-bit
-#   sample, nothing dropped and nothing reduced. A palette is resolved to its
-#   real colours first, because the same picture saved with a different
-#   palette is the same picture.
-#   The name says what was hashed and with what, so a reader need not go
-#   looking: the pixels, with sha256.
-#   NOT an identity. Identity is pan:id, assigned once. This answers a
-#   different question — is this the same picture, arriving again under
-#   another name or from somewhere else — and it proves a metadata write never
-#   disturbed the image.
-#   Written at ingest by pand, on the stored PNG. A file that will not decode
-#   is still stored and simply carries no hash.
-#   Removed with it: the rule that this hash had to match another program's
-#   byte for byte, which is where the discarded alpha and the discarded
-#   low byte came from. Nobody asked for that and it cost real information.
-#   Deliberately not done here: comparing an arrival's pixels with the stored
-#   file's after a JPEG is converted. That stays in issue #23.
+# v0.4.17 (2026-09-21, ruled by goodlux): WHAT THE FILE IS.
+#   Pan has hashed images since the store was written and never recorded the
+#   answer. The hash lived inside tests, proving that writing metadata leaves
+#   the image alone, and a stored file had no name for its own contents in the
+#   graph or in itself.
+#   + pan:fileSha256Hash on pan:Media. The sha256 of every block of the PNG
+#   except its XMP, each taken as it sits on disk: the header, the pixel data,
+#   the palette, the transparency, the colour profile, the generator's render
+#   chunk, every other text block, in file order. Nothing is decoded and
+#   nothing is normalised.
+#   The XMP is left out because Pan writes it. Pan rewrites that block every
+#   time a stage finishes, and a hash that moved whenever Pan touched its own
+#   metadata would say nothing about the file. Leaving it out fixes the hash
+#   from the moment the file is stored.
+#   NOT an identity. Identity is pan:id, assigned once. This answers whether
+#   two files hold the same thing: the same image arriving again under another
+#   name, from another store, or shared back.
+#   Written at ingest by pand. A file whose blocks will not read is still
+#   stored and simply carries no hash.
+#   Removed with it: the rule that this hash match another program byte for
+#   byte. That rule came from Pool, where the hash WAS the identity and three
+#   languages had to agree on it; it is why alpha and the low byte of a 16-bit
+#   sample were being thrown away. Identity moved to an assigned pan:id and
+#   the rule should have gone then.
+#   Deliberately not done here: comparing an arrival's contents with the
+#   stored file's after a JPEG is converted. That stays in issue #23.
 # v0.4.16 (2026-09-20, ruled by goodlux): IS THE BODY RIGHT.
 #   0.4.15 added two scores and said anatomy was "a separate question and is
 #   not ruled". It is ruled now: a third score and critique on the same
@@ -634,15 +637,15 @@ pan:sourceFile a owl:DatatypeProperty ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:string .
 
-# What the picture IS, as opposed to which file holds it: the sha256 of the
-# decoded raster exactly as the file has it, alpha and full bit depth
-# included. Identity stays pan:id; this answers "are these the same pixels",
-# so the same picture reshared under another name can be recognised, and a
-# metadata write can be shown not to have touched the image (goodlux,
+# What the file IS: the sha256 of every block of it except the XMP, which
+# Pan writes and rewrites. Everything else counts — pixels, palette,
+# transparency, colour profile, the generator's render chunk, every text
+# block. Identity stays pan:id; this answers "are these the same file", so
+# the same image reshared or re-delivered can be recognised (goodlux,
 # 2026-09-21).
-pan:pixelSha256Hash a owl:DatatypeProperty ;
-    rdfs:label "pixel sha256 hash" ;
-    rdfs:comment "sha256 of the image's decoded pixels, nothing dropped. Written by pand at ingest; not an identity and not settable by hand." ;
+pan:fileSha256Hash a owl:DatatypeProperty ;
+    rdfs:label "file sha256 hash" ;
+    rdfs:comment "sha256 of the whole file except its XMP. Written by pand at ingest; not an identity and not settable by hand." ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:string .
 
@@ -1272,7 +1275,7 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:modelPromptPath ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:pixelSha256Hash ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:fileSha256Hash ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:renderRequestInformation ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:imageTechnicalScore ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:imageTechnicalCritique ; owl:maxCardinality 1 ] ,

@@ -15,8 +15,8 @@
 //! ([`parse_packet`]).
 //!
 //! NON-NEGOTIABLE INVARIANT (ported with its test): stamping metadata into a
-//! PNG preserves the PIXELS exactly, so [`pixel_sha256`] before == after.
-//! (`pixel_sha256` hashes the decoded raster as the file has it —
+//! PNG preserves the PIXELS exactly, so [`file_sha256`] before == after.
+//! (`file_sha256` hashes every block of the file but the XMP —
 //! it is NOT an identity; identity is the assigned panId.)
 
 use anyhow::{anyhow, Context, Result};
@@ -238,7 +238,7 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
 /// chunk. Non-XMP text chunks are preserved best-effort.
 ///
 /// CRITICAL for the stamp invariant: re-encoding preserves the PIXELS
-/// exactly, so `pixel_sha256(output) == pixel_sha256(input)` — a metadata edit
+/// exactly, so `file_sha256(output) == file_sha256(input)` — a metadata edit
 /// never touches the image. (The FILE bytes DO change.)
 pub fn write_packet_into_png_bytes(png_bytes: &[u8], packet: &str) -> Result<Vec<u8>> {
     // Chunk surgery, not re-encoding: every chunk the producer wrote (IDAT,
@@ -913,42 +913,35 @@ fn obj_term(t: &Term) -> ObjTerm {
     }
 }
 
-// ── Pixel hash ─────────────────────────────────────────────────────────────
+// ── File hash ──────────────────────────────────────────────────────────────
 
-/// `sha256` of a PNG's pixels, exactly as the file has them.
+/// `sha256` of everything in a PNG except its XMP.
 ///
-/// The whole decoded raster goes into the hash: every channel including
-/// alpha, and both bytes of a 16-bit sample. Two files hash the same when
-/// their pixels are the same and differ when any pixel differs, so this
-/// recognises the same picture arriving again under another name, and it
-/// proves a metadata write never touched the image.
+/// The file is read as the blocks it is made of, the XMP block is left out,
+/// and every remaining block goes into the hash as it sits on disk: the
+/// header, the pixel data, the palette, the transparency, the colour
+/// profile, the render chunk a generator wrote, every other text block, in
+/// file order. Nothing is decoded and nothing is normalised.
 ///
-/// The one thing that is resolved rather than hashed raw is a palette: an
-/// indexed PNG is expanded to its real colours first, along with sub-8-bit
-/// greyscale and a tRNS chunk, because the same picture saved with a
-/// different palette is still the same picture. Nothing is dropped and
-/// nothing is reduced.
+/// The XMP is the one exclusion because Pan writes it. Pan rewrites that
+/// block every time a stage finishes, and a hash that changed each time Pan
+/// touched its own metadata would say nothing about the picture. Leaving it
+/// out means the hash is fixed from the moment the file is stored
+/// (goodlux, 2026-09-21).
 ///
-/// NOT an identity. Identity is `pan:id`, assigned once at ingest.
+/// NOT an identity. Identity is `pan:id`, assigned once at ingest. This says
+/// whether two files hold the same thing — the same picture arriving again
+/// under another name, from another store, or shared back.
 ///
-/// Recorded in the graph and in the file as `pan:pixelSha256Hash`
-/// (pan.ttl 0.4.17, goodlux 2026-09-21).
-pub fn pixel_sha256(png_bytes: &[u8]) -> Result<String> {
-    let mut decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
-    // EXPAND resolves a palette to real colours, widens sub-8-bit greyscale
-    // to 8-bit, and turns a tRNS chunk into a real alpha channel. It leaves
-    // 16-bit at 16-bit and alpha in place, which is what we want.
-    decoder.set_transformations(png::Transformations::EXPAND);
-    let mut reader = decoder.read_info().context("pixel hash: decode PNG info")?;
-    let mut buf = vec![0u8; reader.output_buffer_size()];
-    let frame = reader
-        .next_frame(&mut buf)
-        .context("pixel hash: read PNG frame")?;
-    if frame.color_type == png::ColorType::Indexed {
-        return Err(anyhow!("pixel hash: still indexed after expansion"));
-    }
+/// Recorded in the graph and in the file as `pan:fileSha256Hash`
+/// (pan.ttl 0.4.17).
+pub fn file_sha256(png_bytes: &[u8]) -> Result<String> {
+    let chunks = crate::pngchunk::read_chunks(png_bytes).context("file hash: read PNG chunks")?;
     let mut h = Sha256::new();
-    h.update(&buf[..frame.buffer_size()]);
+    for c in chunks.iter().filter(|c| !c.is_xmp()) {
+        h.update(c.kind);
+        h.update(&c.data);
+    }
     Ok(format!("sha256:{:x}", h.finalize()))
 }
 
@@ -992,10 +985,10 @@ pub(crate) mod tests {
     fn stamp_preserves_pixels() {
         // THE invariant: a metadata edit never touches the image.
         let png = make_test_png(16, 16, 7);
-        let hash_before = pixel_sha256(&png).unwrap();
+        let hash_before = file_sha256(&png).unwrap();
         let packet = simple_packet("abc123xy", "media/image/x.png", "2026-07-15T00:00:00Z");
         let stamped = write_packet_into_png_bytes(&png, &packet).unwrap();
-        let hash_after = pixel_sha256(&stamped).unwrap();
+        let hash_after = file_sha256(&stamped).unwrap();
         assert_eq!(hash_before, hash_after, "stamping changed the pixels");
         assert_ne!(png, stamped, "file bytes should differ (packet embedded)");
     }
