@@ -1,8 +1,10 @@
 //! pand — the Pan daemon.
 //!
-//!   pand start    kill EVERY pand on this machine, then run in the foreground
+//!   pand          run in the foreground; refuses if a pand is already up
+//!   pand restart  kill EVERY pand on this machine, then run in the foreground
+//!   pand start    the same as restart, kept because fingers remember it
 //!   pand stop     kill EVERY pand on this machine and exit
-//!   pand          run in the foreground without the kill-first step
+//!   pand status   say whether one is running, and what it has been doing
 //!
 //! There is no launchd job any more (Rob removed it, 2026-09-04): a terminal
 //! starts pand and owns it. `stop` still boots out the old label in case a
@@ -31,8 +33,11 @@ fn main() -> Result<()> {
         .collect::<Vec<_>>()
         .as_slice()
     {
-        [] => serve(),
-        ["start"] => {
+        [] => {
+            refuse_if_already_running();
+            serve()
+        }
+        ["restart"] | ["start"] => {
             stop_all();
             serve()
         }
@@ -43,7 +48,7 @@ fn main() -> Result<()> {
         ["status"] => status(),
         _ => {
             eprintln!(
-                "usage: pand | pand start | pand stop | pand status\n  (no flags; configure in {})",
+                "usage: pand | pand restart | pand stop | pand status\n  (no flags; configure in {})",
                 pan::daemon::config::config_dir()
                     .join("config.yml")
                     .display()
@@ -51,6 +56,68 @@ fn main() -> Result<()> {
             std::process::exit(2);
         }
     }
+}
+
+/// Every pand process on this machine except this one.
+fn other_pands() -> Vec<u32> {
+    let me = std::process::id();
+    std::process::Command::new("pgrep")
+        .args(["-x", "pand"])
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|l| l.trim().parse::<u32>().ok())
+                .filter(|p| *p != me)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Say so and stop, rather than letting the store layer fail on a lock file
+/// somebody has to recognise (goodlux, 2026-09-21). Two pands cannot share a
+/// store: the first one to open it holds the lock until it exits, so the
+/// second gets "Resource temporarily unavailable" on a path deep inside a
+/// repository, which says nothing about the actual problem.
+fn refuse_if_already_running() {
+    let pids = other_pands();
+    if pids.is_empty() {
+        return;
+    }
+    let who = pids
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    eprintln!("pand is already running (pid {who}).");
+    if let Some((version, up)) = running_version_and_uptime() {
+        eprintln!("  it is answering, version {version}, up {up}.");
+    } else {
+        eprintln!("  it is not answering on its port, so it may be wedged.");
+    }
+    eprintln!("  pand restart   stop it and run this build here");
+    eprintln!("  pand stop      stop it and leave nothing running");
+    eprintln!("  pand status    what it is doing right now");
+    std::process::exit(1);
+}
+
+/// The running daemon's version and how long it has been up, when it answers.
+fn running_version_and_uptime() -> Option<(String, String)> {
+    let cfg = pan::daemon::config::DaemonConfig::load().ok()?;
+    let h: serde_json::Value = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .ok()?
+        .get(format!("{}/health", cfg.base_url()))
+        .send()
+        .ok()?
+        .json()
+        .ok()?;
+    let secs = h["uptime_secs"].as_u64().unwrap_or(0);
+    Some((
+        h["version"].as_str().unwrap_or("?").to_string(),
+        format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60),
+    ))
 }
 
 fn serve() -> Result<()> {
@@ -96,17 +163,7 @@ fn status() -> Result<()> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
         .build()?;
-    let pids: Vec<String> = std::process::Command::new("pgrep")
-        .args(["-x", "pand"])
-        .output()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|p| !p.is_empty() && *p != std::process::id().to_string())
-                .collect()
-        })
-        .unwrap_or_default();
+    let pids: Vec<String> = other_pands().iter().map(|p| p.to_string()).collect();
     match client
         .get(&url)
         .send()
@@ -196,12 +253,12 @@ fn status() -> Result<()> {
             Ok(())
         }
         Err(_) if pids.is_empty() => {
-            println!("pand is NOT running (nothing answers on {} and no pand process exists). Start it with: pand start", cfg.base_url());
+            println!("pand is NOT running (nothing answers on {} and no pand process exists). Start it with: pand", cfg.base_url());
             std::process::exit(1);
         }
         Err(e) => {
             println!(
-                "pand is NOT answering on {} but a pand process exists (pid {}): {e}\n  `pand stop` kills it; then `pand start`",
+                "pand is NOT answering on {} but a pand process exists (pid {}): {e}\n  `pand stop` kills it; then `pand`",
                 cfg.base_url(),
                 pids.join(", ")
             );
@@ -229,20 +286,7 @@ fn stop_all() {
     }
 
     // 2. Every process named pand, except this one.
-    let me = std::process::id();
-    let pids = || -> Vec<u32> {
-        Command::new("pgrep")
-            .args(["-x", "pand"])
-            .output()
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .filter_map(|l| l.trim().parse::<u32>().ok())
-                    .filter(|p| *p != me)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
+    let pids = other_pands;
     let first = pids();
     if first.is_empty() {
         eprintln!("pand stop: no other pand process was running");
