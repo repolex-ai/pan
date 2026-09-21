@@ -28,11 +28,17 @@ pub fn make(bytes: &[u8]) -> Result<Thumb> {
         .context("sniff image format")?
         .decode()
         .context("decode image for thumbnail")?;
+    make_from(&img)
+}
+
+/// The thumbnail of an image that is already decoded. Ingest decodes every
+/// arriving image once, to confirm it is one, and hands the result here.
+pub fn make_from(img: &image::DynamicImage) -> Result<Thumb> {
     let (sw, sh) = (img.width(), img.height());
     let small = if sw.max(sh) > THUMB_MAX_EDGE {
         img.resize(THUMB_MAX_EDGE, THUMB_MAX_EDGE, FilterType::Triangle)
     } else {
-        img
+        img.clone()
     };
     let rgb = small.to_rgb8();
     let mut out = Vec::new();

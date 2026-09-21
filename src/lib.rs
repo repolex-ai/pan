@@ -1132,14 +1132,38 @@ impl Pan {
     /// thumbnail → ONE graph transaction. Failure before the commit removes
     /// the files written so far.
     pub fn put(&self, arrived: &[u8], content_type: Option<&str>) -> Result<PutResult> {
-        let arrived_png = xmp::is_png(arrived);
-        let arrived_type = content_type.map(|s| s.to_string()).unwrap_or_else(|| {
-            if arrived_png {
-                "image/png".to_string()
-            } else {
-                "application/octet-stream".to_string()
-            }
-        });
+        // FIRST, before anything is stored, converted, hashed or written:
+        // confirm what the file is (goodlux, 2026-09-21). Pan takes media in,
+        // changes it and sends it on to models, so it does not take a
+        // sender's word for what it holds. The format is read from the
+        // bytes, and an image is decoded in full. A file that calls itself
+        // an image, or starts like one, and will not decode is refused here
+        // and nothing is kept. What Pan records as the type is what it
+        // verified, never the label the delivery came with.
+        let sniffed = image::guess_format(arrived).ok();
+        let claims_image = content_type.is_some_and(|t| t.starts_with("image/"));
+        let decoded: Option<image::DynamicImage> = if sniffed.is_some() || claims_image {
+            let img = image::ImageReader::new(std::io::Cursor::new(arrived))
+                .with_guessed_format()
+                .map_err(|e| anyhow!("not a readable image: {e}"))?
+                .decode()
+                .map_err(|e| {
+                    anyhow!(
+                        "not a readable image: it was delivered as {} and does not decode ({e}). Nothing was stored.",
+                        content_type.unwrap_or("an unlabelled file")
+                    )
+                })?;
+            Some(img)
+        } else {
+            None
+        };
+        let arrived_png = sniffed == Some(image::ImageFormat::Png);
+        let arrived_type = match (decoded.is_some(), sniffed) {
+            (true, Some(f)) => f.to_mime_type().to_string(),
+            _ => content_type
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "application/octet-stream".to_string()),
+        };
         let arrived_ext = match arrived_type.as_str() {
             "image/png" => "png",
             "image/jpeg" => "jpg",
@@ -1154,10 +1178,10 @@ impl Pan {
         // as PNG under img/source/; the bytes as delivered are kept under
         // img/original/ and never read again. Other media kinds are stored as
         // delivered. Metadata carry-over from the arrival is #23.
-        let convert = arrived_type.starts_with("image/") && !arrived_png;
+        let convert = decoded.is_some() && !arrived_png;
         let converted: Vec<u8>;
         let (bytes, media_type, ext): (&[u8], String, &str) = if convert {
-            converted = convert::to_png(arrived)
+            converted = convert::to_png_from(decoded.as_ref().expect("decoded above"))
                 .with_context(|| format!("convert {arrived_type} arrival to PNG"))?;
             (&converted, "image/png".to_string(), "png")
         } else {
@@ -1251,14 +1275,14 @@ impl Pan {
             }
         }
 
-        // Thumbnail — declared as its own node; not decodable = no thumbnail,
-        // still stored, `pan state` says so.
+        // Thumbnail — declared as its own node, made from the image that was
+        // decoded on the way in.
         let mut thumb: Option<xmp::ThumbRef> = None;
         let mut thumb_jpeg: Vec<u8> = Vec::new();
         let mut width = None;
         let mut height = None;
-        if media_type.starts_with("image/") {
-            match thumbnail::make(bytes) {
+        if let Some(img) = &decoded {
+            match thumbnail::make_from(img) {
                 Ok(t) => {
                     width = Some(t.source_width);
                     height = Some(t.source_height);

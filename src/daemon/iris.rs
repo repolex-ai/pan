@@ -26,7 +26,9 @@ pub enum CallError {
     /// (m3rc's door, 2026-09-05: `503 {"reason":"busy"}` — max_queue 2 per
     /// node per model). Nothing is wrong with the image or Iris.
     Busy(String),
-    /// Never retry these bytes with this stage: the eye said no for cause.
+    /// The server refused the request itself (a 4xx), or pand could not
+    /// build it. Waits the ordinary backoff and is asked again; it is never
+    /// held for good (goodlux, 2026-09-21).
     Terminal(String),
 }
 

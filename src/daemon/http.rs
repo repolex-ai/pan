@@ -213,6 +213,7 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("nothing to set")
         || msg.contains("nothing to unset")
         || msg.contains("imageset file")
+        || msg.contains("not a readable image")
     {
         ApiError(StatusCode::BAD_REQUEST, msg)
     } else {

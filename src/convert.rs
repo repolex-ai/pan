@@ -22,6 +22,11 @@ pub fn to_png(bytes: &[u8]) -> Result<Vec<u8>> {
         .context("sniff image format")?
         .decode()
         .context("decode image for PNG conversion")?;
+    to_png_from(&img)
+}
+
+/// Write an already-decoded image out as PNG.
+pub fn to_png_from(img: &image::DynamicImage) -> Result<Vec<u8>> {
     let mut out = Cursor::new(Vec::new());
     img.write_to(&mut out, image::ImageFormat::Png)
         .context("encode PNG")?;

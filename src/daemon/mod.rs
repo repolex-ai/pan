@@ -322,12 +322,18 @@ impl Daemon {
         a.remove(&(store.to_string(), media.to_string(), stage.to_string()));
     }
 
-    /// Whether a stage should be skipped for now: a terminal refusal, or a
-    /// transient failure still inside its backoff.
+    /// Whether a stage should be skipped for now: any failure still inside
+    /// its backoff. Nothing is held for good (goodlux, 2026-09-21): a server
+    /// that refused a request outright used to hold the image until pand was
+    /// restarted, and a restart should never be what clears a stuck image.
+    /// A refusal waits the same ten minutes as any other failure and is
+    /// asked again, so a fixed config or a fixed server clears by itself.
+    /// `terminal` still says which kind of failure it was, for the log and
+    /// for `pan state`.
     pub fn holding(&self, store: &str, media: &str, stage: &str) -> Option<Attempt> {
         let a = crate::locked(&self.attempts);
         let att = a.get(&(store.to_string(), media.to_string(), stage.to_string()))?;
-        if att.terminal || att.at.elapsed() < TRANSIENT_BACKOFF {
+        if att.at.elapsed() < TRANSIENT_BACKOFF {
             Some(att.clone())
         } else {
             None
@@ -359,6 +365,44 @@ fn warn_if_not_ignored(repo: &Path) {
         tracing::warn!(
             repo = %repo.display(),
             ".pan/_ignore is not gitignored in this repo — the graph and media would enter git history; run `git lex kit-update` (it adds the `.pan/_ignore/` line)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+
+    /// A refusal is held for the backoff and then asked again, with no
+    /// restart: the hold depends on when it happened, never on its kind.
+    #[test]
+    fn a_refused_image_is_asked_again_after_the_backoff_without_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pan.yml"), "storage_id: holdtest\n").unwrap();
+        let cfg_path = dir.path().join("config.yml");
+        std::fs::write(
+            &cfg_path,
+            format!("stores:\n  - {}\n", dir.path().display()),
+        )
+        .unwrap();
+        let d = Daemon::open(DaemonConfig::load_from(&cfg_path).unwrap()).unwrap();
+        d.record_attempt("s", "img", "pose", "422 refused".into(), true);
+        assert!(d.holding("s", "img", "pose").is_some(), "held at first");
+        // Age the attempt past the backoff.
+        {
+            let mut a = crate::locked(&d.attempts);
+            let att = a
+                .get_mut(&("s".to_string(), "img".to_string(), "pose".to_string()))
+                .unwrap();
+            att.at = Instant::now() - TRANSIENT_BACKOFF - Duration::from_secs(1);
+        }
+        assert!(
+            d.holding("s", "img", "pose").is_none(),
+            "a refusal is released after the backoff like any other failure"
+        );
+        assert!(
+            d.last_attempt("s", "img", "pose").unwrap().terminal,
+            "and still says what kind of failure it was"
         );
     }
 }
