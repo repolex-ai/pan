@@ -15,8 +15,8 @@
 //! ([`parse_packet`]).
 //!
 //! NON-NEGOTIABLE INVARIANT (ported with its test): stamping metadata into a
-//! PNG preserves the PIXELS exactly, so [`file_sha256`] before == after.
-//! (`file_sha256` hashes every block of the file but the XMP —
+//! PNG preserves the PIXELS exactly, so [`image_sha256`] before == after.
+//! (`image_sha256` hashes every block of the PNG but the XMP —
 //! it is NOT an identity; identity is the assigned panId.)
 
 use anyhow::{anyhow, Context, Result};
@@ -238,7 +238,7 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
 /// chunk. Non-XMP text chunks are preserved best-effort.
 ///
 /// CRITICAL for the stamp invariant: re-encoding preserves the PIXELS
-/// exactly, so `file_sha256(output) == file_sha256(input)` — a metadata edit
+/// exactly, so `image_sha256(output) == image_sha256(input)` — a metadata edit
 /// never touches the image. (The FILE bytes DO change.)
 pub fn write_packet_into_png_bytes(png_bytes: &[u8], packet: &str) -> Result<Vec<u8>> {
     // Chunk surgery, not re-encoding: every chunk the producer wrote (IDAT,
@@ -913,7 +913,7 @@ fn obj_term(t: &Term) -> ObjTerm {
     }
 }
 
-// ── File hash ──────────────────────────────────────────────────────────────
+// ── Image hash ─────────────────────────────────────────────────────────────
 
 /// `sha256` of everything in a PNG except its XMP.
 ///
@@ -933,10 +933,10 @@ fn obj_term(t: &Term) -> ObjTerm {
 /// whether two files hold the same thing — the same picture arriving again
 /// under another name, from another store, or shared back.
 ///
-/// Recorded in the graph and in the file as `pan:fileSha256Hash`
+/// Recorded in the graph and in the file as `pan:imageSha256Hash`
 /// (pan.ttl 0.4.17).
-pub fn file_sha256(png_bytes: &[u8]) -> Result<String> {
-    let chunks = crate::pngchunk::read_chunks(png_bytes).context("file hash: read PNG chunks")?;
+pub fn image_sha256(png_bytes: &[u8]) -> Result<String> {
+    let chunks = crate::pngchunk::read_chunks(png_bytes).context("image hash: read PNG chunks")?;
     let mut h = Sha256::new();
     for c in chunks.iter().filter(|c| !c.is_xmp()) {
         h.update(c.kind);
@@ -985,10 +985,10 @@ pub(crate) mod tests {
     fn stamp_preserves_pixels() {
         // THE invariant: a metadata edit never touches the image.
         let png = make_test_png(16, 16, 7);
-        let hash_before = file_sha256(&png).unwrap();
+        let hash_before = image_sha256(&png).unwrap();
         let packet = simple_packet("abc123xy", "media/image/x.png", "2026-07-15T00:00:00Z");
         let stamped = write_packet_into_png_bytes(&png, &packet).unwrap();
-        let hash_after = file_sha256(&stamped).unwrap();
+        let hash_after = image_sha256(&stamped).unwrap();
         assert_eq!(hash_before, hash_after, "stamping changed the pixels");
         assert_ne!(png, stamped, "file bytes should differ (packet embedded)");
     }

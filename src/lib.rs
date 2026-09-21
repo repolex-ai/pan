@@ -445,7 +445,7 @@ pub const STRUCTURAL_FIELDS: [&str; 9] = [
     "mediaPath",
     "mediaType",
     "sourceFile",
-    "fileSha256Hash",
+    "imageSha256Hash",
     "width",
     "height",
     "createdDate",
@@ -1192,15 +1192,15 @@ impl Pan {
             self.quad(&subject, "sourceFile", &source_file),
         ];
 
-        // What the picture is, as opposed to which file holds it: the
-        // sha256 of the decoded pixels normalised to 8-bit RGB (pan.ttl
-        // 0.4.17, goodlux 2026-09-21). The same definition Pool and OpenIris
-        // use, so one picture hashes the same in all three. Not an identity
-        // — that is pan:id — and not a gate: a file Pan cannot decode is
+        // What the image is: the sha256 of every block of the PNG except
+        // its XMP, which Pan writes and rewrites (pan.ttl 0.4.17, goodlux
+        // 2026-09-21). Declared on pan:Image, and only a PNG reaches here,
+        // so the subject is always an Image. Not an identity — that is
+        // pan:id — and not a gate: a file whose blocks will not read is
         // still stored, it simply carries no hash.
         if png {
-            match xmp::file_sha256(bytes) {
-                Ok(h) => quads.push(self.quad(&subject, "fileSha256Hash", &h)),
+            match xmp::image_sha256(bytes) {
+                Ok(h) => quads.push(self.quad(&subject, "imageSha256Hash", &h)),
                 Err(e) => tracing::warn!(
                     store = %self.store_id,
                     id = %id,

@@ -118,17 +118,17 @@ fn every_roster_field_reaches_the_image_xmp() {
 
     // The pixel hash is computed at ingest and is the same string the
     // standalone function returns for the stored bytes (pan.ttl 0.4.17).
-    let expected = pan::xmp::file_sha256(&bytes).unwrap();
+    let expected = pan::xmp::image_sha256(&bytes).unwrap();
     assert!(
         packet.contains(&format!(
-            "<pan:fileSha256Hash>{expected}</pan:fileSha256Hash>"
+            "<pan:imageSha256Hash>{expected}</pan:imageSha256Hash>"
         )),
         "the pixel hash is not in the file, or does not match the stored pixels: {packet}"
     );
     assert!(
         facts
             .iter()
-            .any(|(p, v)| p.ends_with("/fileSha256Hash") && v.first() == Some(&expected)),
+            .any(|(p, v)| p.ends_with("/imageSha256Hash") && v.first() == Some(&expected)),
         "the pixel hash is not in the graph"
     );
 }

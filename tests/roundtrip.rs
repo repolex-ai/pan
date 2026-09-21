@@ -97,8 +97,8 @@ fn full_store_describe_query_search_roundtrip() {
     let (bytes, facts) = store.get(&wolf.id).unwrap();
     assert_ne!(bytes, wolf_png, "stored PNG is stamped (file bytes differ)");
     assert_eq!(
-        pan::xmp::file_sha256(&bytes).unwrap(),
-        pan::xmp::file_sha256(&wolf_png).unwrap(),
+        pan::xmp::image_sha256(&bytes).unwrap(),
+        pan::xmp::image_sha256(&wolf_png).unwrap(),
         "the stamp never touches the pixels"
     );
     let facts_map: HashMap<String, Vec<String>> = facts.into_iter().collect();
@@ -160,8 +160,8 @@ fn full_store_describe_query_search_roundtrip() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        pan::xmp::file_sha256(&bytes_after).unwrap(),
-        pan::xmp::file_sha256(&wolf_png).unwrap(),
+        pan::xmp::image_sha256(&bytes_after).unwrap(),
+        pan::xmp::image_sha256(&wolf_png).unwrap(),
         "restamp preserves the pixels"
     );
 
