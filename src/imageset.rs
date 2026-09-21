@@ -12,13 +12,14 @@
 //! the answer is a graph pattern, never a list kept on the set. Only a
 //! `pan:Image` may be added; the class name is the promise.
 //!
-//! Every set has its own file, `<store>/imagesets/<id>.xml`, an XMP-style
-//! RDF/XML packet with the same conventions as the image XMP: a root
-//! Description about the set itself, pan: vocabulary only, identities in
-//! git-lex's angle-bracket form. The file is the source of truth: on every
-//! open the store reads `imagesets/*.xml` and rewrites the set nodes in the
-//! graph from them, so the graph is rebuilt from files alone. The store root
-//! is committed (only `_ignore/` is not), so a soul's sets travel with it.
+//! Every set has its own file, `<store>/ImageSet/<id>.nq` — the folder named
+//! for the class (goodlux, 2026-09-21), the file N-Quads like every record
+//! Pan writes: the set's own quads, pan: vocabulary only, each line naming
+//! Pan's graph in its fourth column. The file is the source of truth: on
+//! every open the store reads `ImageSet/*.nq` and rewrites the set nodes in
+//! the graph from them, so the graph is rebuilt from files alone. The store
+//! root is committed (only `_ignore/` is not), so a soul's sets travel with
+//! it.
 
 use anyhow::{anyhow, Context, Result};
 use oxigraph::model::{Literal, NamedNode, Quad, Term};
@@ -28,8 +29,7 @@ use std::path::PathBuf;
 
 use crate::config::{PAN_MEDIA_NS, PAN_NS};
 use crate::{
-    bare_id, enrich, gen_pan_id, now_local, pan_iri, validate_pan_id, write_atomic, xmp, Pan,
-    PanLayout,
+    bare_id, enrich, gen_pan_id, now_local, pan_iri, validate_pan_id, write_atomic, Pan, PanLayout,
 };
 
 /// The ontology class and the IRI path segment: `<pan/ImageSet/id>`.
@@ -55,80 +55,123 @@ pub fn imageset_iri(id: &str) -> Result<NamedNode> {
         .map_err(|e| anyhow!("imageset IRI: {e}"))
 }
 
-/// The set's file, `imagesets/<id>.xml`: one root Description about the set,
-/// the three declared fields, nothing else. Same packet wrapping as the
-/// image XMP so the same reader parses both.
-pub fn build_imageset_file(p: &ImageSet) -> String {
-    let mut desc = String::with_capacity(512);
-    desc.push_str("    <rdf:Description rdf:about=\"\"");
-    desc.push_str(&format!(" xmlns:pan=\"{PAN_NS}\">\n"));
-    desc.push_str(&format!(
-        "      <pan:id>{}</pan:id>\n",
-        xml_escape(&xmp::bracket_of_iri(&p.iri))
-    ));
-    desc.push_str(&format!(
-        "      <pan:createdDate>{}</pan:createdDate>\n",
-        xml_escape(&p.created_date)
-    ));
-    if let Some(d) = &p.description {
-        desc.push_str(&format!(
-            "      <pan:description>{}</pan:description>\n",
-            xml_escape(d)
-        ));
-    }
-    desc.push_str("    </rdf:Description>\n");
-    xmp::compose_packet(None, &desc)
+/// The set's file, `ImageSet/<id>.nq`: the set's own quads and nothing
+/// else — type, identity, creation time, and the description when it has one.
+/// The same quads the graph holds, serialized.
+pub fn build_imageset_file(p: &ImageSet) -> Result<String> {
+    enrich::quads_to_nquads(&imageset_quads(p)?)
 }
 
-/// Read a set back from its file text. Strict: the root Description must
-/// carry a `pan:id` of the form `<pan/ImageSet/id>` and a `pan:createdDate`;
-/// a file that says less is an error, never a half-set.
+/// The facts of a set as quads: type, identity, creation time, description —
+/// spelled pan: in the graph exactly as in the file (goodlux, 2026-09-17).
+fn imageset_quads(p: &ImageSet) -> Result<Vec<Quad>> {
+    let node = imageset_iri(&p.id)?;
+    let mut quads = vec![
+        Quad::new(
+            node.clone(),
+            crate::rdf_type(),
+            pan_iri(IMAGESET_CLASS),
+            crate::config::pan_graph(),
+        ),
+        enrich::self_id_quad(&node)?,
+        Quad::new(
+            node.clone(),
+            pan_iri("createdDate"),
+            Literal::new_simple_literal(&p.created_date),
+            crate::config::pan_graph(),
+        ),
+    ];
+    if let Some(d) = &p.description {
+        quads.push(Quad::new(
+            node,
+            pan_iri("description"),
+            Literal::new_simple_literal(d),
+            crate::config::pan_graph(),
+        ));
+    }
+    Ok(quads)
+}
+
+/// Read a set back from its file text. Strict: the file must describe exactly
+/// one node, typed pan:ImageSet, whose `pan:id` is the node itself at
+/// `<pan/ImageSet/id>`, with a `pan:createdDate`, every line in Pan's graph.
+/// A file that says less, or more, is an error, never a half-set.
 pub fn read_imageset_file(text: &str) -> Result<ImageSet> {
-    let subjects = xmp::parse_packet(text).context("parse imageset file")?;
-    let root = subjects
+    let quads: Vec<Quad> = oxigraph::io::RdfParser::from_format(oxigraph::io::RdfFormat::NQuads)
+        .for_reader(text.as_bytes())
+        .collect::<std::result::Result<_, _>>()
+        .context("parse imageset file")?;
+    let graph = crate::config::pan_graph();
+    if let Some(q) = quads.iter().find(|q| q.graph_name != graph) {
+        return Err(anyhow!(
+            "imageset file has a line outside <pan/NamedGraph/pan>: {q}"
+        ));
+    }
+    let id_pred = pan_iri("id");
+    let id_quad = quads
         .iter()
-        .find(|s| s.subject.is_none())
-        .ok_or_else(|| anyhow!("imageset file has no root Description"))?;
-    let one = |local: &str| -> Option<String> {
-        root.facts
-            .iter()
-            .find(|(p, _)| p == &format!("{PAN_NS}{local}"))
-            .and_then(|(_, v)| v.first())
-            .map(|t| t.value().to_string())
+        .find(|q| q.predicate == id_pred)
+        .ok_or_else(|| anyhow!("imageset file has no pan:id"))?;
+    let (oxigraph::model::NamedOrBlankNode::NamedNode(node), Term::NamedNode(target)) =
+        (&id_quad.subject, &id_quad.object)
+    else {
+        return Err(anyhow!("imageset pan:id is not <pan/ImageSet/id>"));
     };
-    let id_text = one("id").ok_or_else(|| anyhow!("imageset file has no pan:id"))?;
-    let iri = crate::iri_from_bracket(&id_text)
-        .ok_or_else(|| anyhow!("imageset pan:id is not <pan/ImageSet/id>: {id_text}"))?;
-    let id = iri
+    let id = node
+        .as_str()
         .strip_prefix(&format!("{PAN_MEDIA_NS}{IMAGESET_CLASS}/"))
-        .ok_or_else(|| anyhow!("imageset pan:id is not <pan/ImageSet/id>: {id_text}"))?
+        .filter(|_| node == target)
+        .ok_or_else(|| anyhow!("imageset pan:id is not <pan/ImageSet/id>: {node}"))?
         .to_string();
     validate_pan_id(&id)?;
+    let mut created_date = None;
+    let mut description = None;
+    let mut typed = false;
+    for q in &quads {
+        if q.subject != id_quad.subject {
+            return Err(anyhow!(
+                "imageset file describes a second node, {}; a set's file holds the set and nothing else",
+                q.subject
+            ));
+        }
+        let local = q.predicate.as_str().strip_prefix(PAN_NS);
+        match (&q.object, local) {
+            (Term::NamedNode(o), None)
+                if q.predicate == crate::rdf_type() && *o == pan_iri(IMAGESET_CLASS) =>
+            {
+                typed = true
+            }
+            (_, Some("id")) => {}
+            (Term::Literal(l), Some("createdDate")) => created_date = Some(l.value().to_string()),
+            (Term::Literal(l), Some("description")) => description = Some(l.value().to_string()),
+            _ => {
+                return Err(anyhow!(
+                    "imageset file says something a set does not carry: {q}"
+                ))
+            }
+        }
+    }
+    if !typed {
+        return Err(anyhow!("imageset file does not type its node pan:ImageSet"));
+    }
     let created_date =
-        one("createdDate").ok_or_else(|| anyhow!("imageset file has no pan:createdDate"))?;
+        created_date.ok_or_else(|| anyhow!("imageset file has no pan:createdDate"))?;
     Ok(ImageSet {
         id,
-        iri,
-        description: one("description"),
+        iri: node.as_str().to_string(),
+        description,
         created_date,
     })
 }
 
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
 impl Pan {
-    /// `<root>/imagesets` — committed with the store, one file per set.
+    /// `<root>/ImageSet` — committed with the store, one file per set.
     pub fn imagesets_root(&self) -> PathBuf {
         self.layout.imagesets_root()
     }
 
     fn imageset_file(&self, id: &str) -> PathBuf {
-        self.imagesets_root().join(format!("{id}.xml"))
+        self.imagesets_root().join(format!("{id}.nq"))
     }
 
     /// Resolve a bare id to the set's IRI, if the graph holds a set by it.
@@ -148,37 +191,6 @@ impl Pan {
             .next()
             .is_some();
         Ok(exists.then_some(node))
-    }
-
-    /// The three facts of a set as graph quads: type, identity, creation
-    /// time, description — spelled pan: in the graph exactly as in the file
-    /// (goodlux, 2026-09-17).
-    fn imageset_quads(p: &ImageSet) -> Result<Vec<Quad>> {
-        let node = imageset_iri(&p.id)?;
-        let mut quads = vec![
-            Quad::new(
-                node.clone(),
-                crate::rdf_type(),
-                pan_iri(IMAGESET_CLASS),
-                crate::config::pan_graph(),
-            ),
-            enrich::self_id_quad(&node)?,
-            Quad::new(
-                node.clone(),
-                pan_iri("createdDate"),
-                Literal::new_simple_literal(&p.created_date),
-                crate::config::pan_graph(),
-            ),
-        ];
-        if let Some(d) = &p.description {
-            quads.push(Quad::new(
-                node,
-                pan_iri("description"),
-                Literal::new_simple_literal(d),
-                crate::config::pan_graph(),
-            ));
-        }
-        Ok(quads)
     }
 
     /// Put the set's node in the graph exactly as `p` says: every statement
@@ -202,7 +214,7 @@ impl Pan {
         for q in &old {
             t.remove(q.as_ref());
         }
-        for q in Self::imageset_quads(p)? {
+        for q in imageset_quads(p)? {
             t.insert(q.as_ref());
         }
         t.commit().context("commit imageset")?;
@@ -236,7 +248,7 @@ impl Pan {
         let path = self.imageset_file(&p.id);
         fs::create_dir_all(self.imagesets_root())
             .with_context(|| format!("create {}", self.imagesets_root().display()))?;
-        write_atomic(&path, build_imageset_file(&p).as_bytes())?;
+        write_atomic(&path, build_imageset_file(&p)?.as_bytes())?;
         if let Err(e) = self.write_imageset_node(&p) {
             let _ = fs::remove_file(&path);
             return Err(e);
@@ -415,7 +427,7 @@ impl Pan {
         self.restamp(media_id)
     }
 
-    /// Rebuild every set node from `imagesets/*.xml`. Called at every open,
+    /// Rebuild every set node from `ImageSet/*.nq`. Called at every open,
     /// so the graph never says a set the files do not. A file whose id does
     /// not match its name, or that is not a set at all, is an error: the
     /// store does not open over a set it cannot read. Returns how many sets
@@ -430,7 +442,7 @@ impl Pan {
             .with_context(|| format!("read {}", root.display()))?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| {
-                p.extension().and_then(|e| e.to_str()) == Some("xml")
+                p.extension().and_then(|e| e.to_str()) == Some("nq")
                     && !p
                         .file_name()
                         .and_then(|f| f.to_str())
@@ -456,12 +468,9 @@ impl Pan {
 }
 
 impl PanLayout {
-    /// `imagesets/` — one file per curated set, at the store root, committed.
-    pub const IMAGESETS_SUBDIR: &'static str = "imagesets";
-
-    /// `<root>/imagesets`.
+    /// `<root>/ImageSet`.
     pub fn imagesets_root(&self) -> PathBuf {
-        self.root.join(Self::IMAGESETS_SUBDIR)
+        self.root.join(Self::IMAGESET_SUBDIR)
     }
 }
 
@@ -469,42 +478,72 @@ impl PanLayout {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_set_file_round_trips_its_three_facts_and_nothing_else() {
-        let p = ImageSet {
+    fn sample() -> ImageSet {
+        ImageSet {
             id: "abcd2345".into(),
             iri: format!("{PAN_MEDIA_NS}ImageSet/abcd2345"),
             description: Some("portraits & <tests>".into()),
             created_date: "2026-09-16T12:00:00-07:00".into(),
-        };
-        let text = build_imageset_file(&p);
+        }
+    }
+
+    #[test]
+    fn a_set_file_round_trips_its_facts_and_nothing_else() {
+        let p = sample();
+        let text = build_imageset_file(&p).unwrap();
+        let node = format!("<{}>", p.iri);
+        let graph = format!("<{}> .", crate::config::PAN_GRAPH_IRI);
+        assert_eq!(
+            text.lines().count(),
+            4,
+            "type, id, created, description: {text}"
+        );
         assert!(
-            text.contains("<pan:id>&lt;pan/ImageSet/abcd2345&gt;</pan:id>"),
+            text.lines()
+                .all(|l| l.starts_with(&node) && l.ends_with(&graph)),
+            "every line is about the set, in Pan's graph: {text}"
+        );
+        assert!(
+            text.contains(&format!("{node} <{PAN_NS}id> {node} ")),
             "{text}"
         );
         assert!(
-            text.contains("<pan:createdDate>2026-09-16T12:00:00-07:00</pan:createdDate>"),
+            text.contains(&format!(
+                "<{PAN_NS}createdDate> \"2026-09-16T12:00:00-07:00\""
+            )),
             "{text}"
         );
         assert!(
-            text.contains("<pan:description>portraits &amp; &lt;tests&gt;</pan:description>"),
+            text.contains(&format!("<{PAN_NS}description> \"portraits & <tests>\"")),
             "{text}"
         );
         assert!(!text.contains("git-lex"), "the file carries pan: only");
-        assert!(
-            !text.contains("member") && !text.contains("inPhotoset"),
-            "no member list on a set"
-        );
+        assert!(!text.contains("relatedToId"), "no member list on a set");
         assert_eq!(read_imageset_file(&text).unwrap(), p);
     }
 
     #[test]
-    fn a_set_file_without_identity_is_refused() {
-        let text = xmp::compose_packet(None, &format!("    <rdf:Description rdf:about=\"\" xmlns:pan=\"{PAN_NS}\">\n      <pan:description>x</pan:description>\n    </rdf:Description>\n"));
-        let err = read_imageset_file(&text).unwrap_err().to_string();
+    fn a_set_file_that_says_too_little_or_too_much_is_refused() {
+        let g = crate::config::PAN_GRAPH_IRI;
+        let set = format!("<{PAN_MEDIA_NS}ImageSet/abcd2345>");
+        let no_id = format!("{set} <{PAN_NS}description> \"x\" <{g}> .\n");
+        let err = read_imageset_file(&no_id).unwrap_err().to_string();
         assert!(err.contains("pan:id"), "{err}");
-        let text = xmp::compose_packet(None, &format!("    <rdf:Description rdf:about=\"\" xmlns:pan=\"{PAN_NS}\">\n      <pan:id>&lt;pan/Image/abcd2345&gt;</pan:id>\n      <pan:createdDate>2026-09-16T12:00:00-07:00</pan:createdDate>\n    </rdf:Description>\n"));
-        let err = read_imageset_file(&text).unwrap_err().to_string();
+
+        let image = format!("<{PAN_MEDIA_NS}Image/abcd2345>");
+        let wrong_class = format!(
+            "{image} <{PAN_NS}id> {image} <{g}> .\n{image} <{PAN_NS}createdDate> \"2026-09-16T12:00:00-07:00\" <{g}> .\n"
+        );
+        let err = read_imageset_file(&wrong_class).unwrap_err().to_string();
         assert!(err.contains("not <pan/ImageSet/id>"), "{err}");
+
+        let good = build_imageset_file(&sample()).unwrap();
+        let extra = format!("{good}{set} <{PAN_NS}rating> \"5\" <{g}> .\n");
+        let err = read_imageset_file(&extra).unwrap_err().to_string();
+        assert!(err.contains("does not carry"), "{err}");
+
+        let outside = good.replace(&format!(" <{g}> ."), " .");
+        let err = read_imageset_file(&outside).unwrap_err().to_string();
+        assert!(err.contains("outside"), "{err}");
     }
 }

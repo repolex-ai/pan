@@ -850,7 +850,7 @@ mod perception_tests {
     }
 
     #[test]
-    fn parses_the_answer_and_keeps_keys_it_does_not_know() {
+    fn parses_the_answer_and_drops_keys_the_ontology_does_not_declare() {
         let p = Perception::parse("```json\n{\"shortCaption\": \"A wolf.\", \"longCaption\": \"A grey wolf on a ridge.\", \"sceneObjects\": [\"Wolf\", \"rock\", \"wolf\", \"\"], \"sceneMood\": \"still\", \"sceneGaze\": null}\n```").unwrap();
         assert_eq!(p.scene_objects, ["wolf", "rock"]);
         assert_eq!(p.scene, [("sceneMood".to_string(), "still".to_string())]);

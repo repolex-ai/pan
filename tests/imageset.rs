@@ -2,7 +2,7 @@
 //! renamed from Photoset, pan.ttl 0.4.7, goodlux 2026-09-17): a set is three
 //! facts in its own file and in the graph; membership is pan:relatedToId on
 //! the image, in the graph AND in the image's XMP; the graph is rebuilt from
-//! imagesets/*.xml on open; only a pan:Image may be a member.
+//! ImageSet/*.nq on open; only a pan:Image may be a member.
 
 use pan::Pan;
 
@@ -62,20 +62,26 @@ fn a_set_is_a_file_and_a_node_and_membership_is_an_edge_from_the_image() {
     );
     assert_eq!(set.iri, format!("{}ImageSet/{}", pan::PAN_MEDIA_NS, set.id));
 
-    // The file: imagesets/<id>.xml at the store root, the three facts only.
-    let file = dir.path().join("imagesets").join(format!("{}.xml", set.id));
+    // The file: ImageSet/<id>.nq at the store root, the folder named for the
+    // class, N-Quads in Pan's graph, the set's own facts only.
+    let file = dir.path().join("ImageSet").join(format!("{}.nq", set.id));
     let text = std::fs::read_to_string(&file).expect("the set has its own file");
+    let ns = pan::PAN_NS;
+    let node = format!("<{}>", set.iri);
+    let graph = format!("<{}> .", pan::config::PAN_GRAPH_IRI);
     assert!(
-        text.contains(&format!("<pan:id>&lt;pan/ImageSet/{}&gt;</pan:id>", set.id)),
+        text.lines()
+            .all(|l| l.starts_with(&node) && l.ends_with(&graph)),
         "{text}"
     );
+    assert!(text.contains(&format!("{node} <{ns}id> {node} ")), "{text}");
     assert!(
-        text.contains("<pan:description>portraits</pan:description>"),
+        text.contains(&format!("<{ns}description> \"portraits\"")),
         "{text}"
     );
-    assert!(text.contains("<pan:createdDate>"), "{text}");
+    assert!(text.contains(&format!("<{ns}createdDate> ")), "{text}");
     assert!(
-        !text.contains("member") && !text.contains("git-lex"),
+        !text.contains("relatedToId") && !text.contains("git-lex"),
         "{text}"
     );
 
@@ -216,8 +222,8 @@ fn the_graph_is_rebuilt_from_the_set_files_on_open() {
             created_date: "2026-09-16T10:00:00-07:00".into(),
         };
         std::fs::write(
-            dir.path().join("imagesets/handmade.xml"),
-            pan::imageset::build_imageset_file(&edited),
+            dir.path().join("ImageSet/handmade.nq"),
+            pan::imageset::build_imageset_file(&edited).unwrap(),
         )
         .unwrap();
         // And the first set's file changed its description under the graph's feet.
@@ -226,8 +232,8 @@ fn the_graph_is_rebuilt_from_the_set_files_on_open() {
             ..set.clone()
         };
         std::fs::write(
-            dir.path().join("imagesets").join(format!("{}.xml", set.id)),
-            pan::imageset::build_imageset_file(&changed),
+            dir.path().join("ImageSet").join(format!("{}.nq", set.id)),
+            pan::imageset::build_imageset_file(&changed).unwrap(),
         )
         .unwrap();
         (set, edited)
@@ -253,7 +259,7 @@ fn the_graph_is_rebuilt_from_the_set_files_on_open() {
 fn a_set_file_whose_name_and_id_disagree_refuses_the_open() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("pan.yml"), "storage_id: test-store\n").unwrap();
-    std::fs::create_dir_all(dir.path().join("imagesets")).unwrap();
+    std::fs::create_dir_all(dir.path().join("ImageSet")).unwrap();
     let p = pan::ImageSet {
         id: "abcd2345".into(),
         iri: format!("{}ImageSet/abcd2345", pan::PAN_MEDIA_NS),
@@ -261,8 +267,8 @@ fn a_set_file_whose_name_and_id_disagree_refuses_the_open() {
         created_date: "2026-09-16T10:00:00-07:00".into(),
     };
     std::fs::write(
-        dir.path().join("imagesets/other.xml"),
-        pan::imageset::build_imageset_file(&p),
+        dir.path().join("ImageSet/other.nq"),
+        pan::imageset::build_imageset_file(&p).unwrap(),
     )
     .unwrap();
     let err = match Pan::open(dir.path()) {
@@ -270,4 +276,82 @@ fn a_set_file_whose_name_and_id_disagree_refuses_the_open() {
         Err(e) => format!("{e:#}"),
     };
     assert!(err.contains("file name and the id must agree"), "{err}");
+}
+
+/// Deleting an image in a set takes the image, its records and every file a
+/// stage wrote for it, and leaves the set exactly as it was.
+#[test]
+fn deleting_a_member_leaves_the_set_and_takes_every_stage_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_at(dir.path());
+    let set = store.imageset_create(Some("keepers")).unwrap();
+    let a = store.put(&make_png(4, 4, 1), Some("image/png")).unwrap();
+    let b = store.put(&make_png(4, 4, 2), Some("image/png")).unwrap();
+    store.imageset_add(&set.id, &a.id).unwrap();
+    store.imageset_add(&set.id, &b.id).unwrap();
+
+    let rec = pan::enrich::EnrichmentRecord::new(pan::gen_pan_id(), "Caption", "m")
+        .field("text", "a caption");
+    let record_rel = store
+        .write_enrichment(
+            &a.id,
+            "caption",
+            "captionData",
+            "m",
+            std::slice::from_ref(&rec),
+            Default::default(),
+        )
+        .unwrap();
+    let mut details = serde_json::Map::new();
+    details.insert("provider".into(), "salad".into());
+    let embed_rel = store
+        .write_embedding(&a.id, "idx", "idx", &[0.1, 0.2, 0.3, 0.4], &details)
+        .unwrap();
+    let files = [
+        record_rel.clone(),
+        embed_rel.clone(),
+        embed_rel.replace(".nq", ".npy"),
+        embed_rel.replace(".nq", ".json"),
+    ];
+    for f in &files {
+        assert!(store.layout.abs(f).exists(), "{f} written");
+    }
+
+    store.delete(&a.id).unwrap();
+
+    for f in &files {
+        assert!(!store.layout.abs(f).exists(), "{f} removed with the image");
+    }
+    assert_eq!(
+        store.imageset_get(&set.id).unwrap(),
+        Some(set.clone()),
+        "the set keeps every fact it had"
+    );
+    assert_eq!(
+        store.imageset_members(&set.id).unwrap(),
+        vec![b.iri.clone()],
+        "the other member is still a member"
+    );
+    let left = match store
+        .query(&format!(
+            "SELECT ?s WHERE {{ ?s ?p ?o FILTER(CONTAINS(STR(?s), \"{}\") || CONTAINS(STR(?o), \"{}\")) }}",
+            a.id, a.id
+        ))
+        .unwrap()
+    {
+        pan::QueryResults::Solutions(s) => s.count(),
+        _ => 0,
+    };
+    assert_eq!(
+        left, 0,
+        "nothing in the graph still names the deleted image"
+    );
+    let records = match store
+        .query("SELECT ?r WHERE { { ?r a pan:Caption } UNION { ?r a pan:Embedding } UNION { ?r a pan:Enrichment } }")
+        .unwrap()
+    {
+        pan::QueryResults::Solutions(s) => s.count(),
+        _ => 0,
+    };
+    assert_eq!(records, 0, "its references and records went with it");
 }
