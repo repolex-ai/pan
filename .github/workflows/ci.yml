@@ -4,9 +4,8 @@
 #   exiftool-config  is exiftool/ExifTool_config what gen_config.py makes from pan.ttl + copia.ttl?
 #   kit-mirror       is ontology/pan.ttl byte-identical to the copy in git-lex-kit-pan?
 #
-# fmt and clippy run but do not gate (continue-on-error): both were red when
-# this workflow was written (2026-09-16); flipping them to gating is a
-# one-line change once the tree is clean.
+# fmt and clippy gate the build (goodlux, 2026-09-21): a formatting or lint
+# failure is a failed build.
 #
 # kit-mirror is red whenever pan.ttl lands on main before its mirror commit
 # in git-lex-kit-pan. That is the point: the mirror step is a rule, and this
@@ -34,11 +33,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: cargo fmt --check (advisory)
-        continue-on-error: true
+      - name: cargo fmt --check
         run: cargo fmt --check
-      - name: cargo clippy (advisory)
-        continue-on-error: true
+      - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: cargo test
         run: cargo test --all-targets --locked
