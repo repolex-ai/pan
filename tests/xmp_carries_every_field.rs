@@ -56,6 +56,7 @@ fn every_roster_field_reaches_the_image_xmp() {
                 scene_objects: vec!["wolf".into(), "ridge".into()],
                 scene,
                 prompt_path: "full-caption.default.md".into(),
+                dropped_keys: Vec::new(),
             },
         )
         .unwrap();

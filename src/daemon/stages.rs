@@ -464,6 +464,15 @@ async fn run_one(
                     &r.text,
                 ))
             })?;
+            if !perception.dropped_keys.is_empty() {
+                tracing::warn!(
+                    store = %store.entry.id,
+                    id = %item.id,
+                    model = %ep.model,
+                    "caption answer had keys pan.ttl does not declare; dropped, the rest stored: {}",
+                    perception.dropped_keys.join(", ")
+                );
+            }
             // Which prompt asked for this answer, recorded on the object and
             // on the Caption record (goodlux, 2026-09-19).
             perception.prompt_path = ep.prompt_path.clone().unwrap_or_default();

@@ -620,13 +620,16 @@ pub struct Perception {
     /// sends it. Rides on the object so an image says which prompt described
     /// it, and on the Caption record beside it.
     pub prompt_path: String,
+    /// Keys the model answered with that pan.ttl does not declare. Not
+    /// stored; carried so the caller can log them against the image.
+    pub dropped_keys: Vec<String>,
 }
 
 impl Perception {
     /// Parse the caption model's answer: one JSON object (a ```json fence
-    /// around it is tolerated) whose keys are property names. Unknown keys
-    /// are an error naming the key — the prompt is the schema and the
-    /// ontology is the law; nothing undeclared is stored.
+    /// around it is tolerated) whose keys are property names. A key the
+    /// ontology does not declare is dropped and named in `dropped_keys`;
+    /// the rest of the answer is kept.
     pub fn parse(answer: &str) -> std::result::Result<Self, String> {
         let s = answer.trim();
         let start = s.find('{').ok_or("answer has no JSON object")?;
@@ -682,21 +685,12 @@ impl Perception {
                         out.scene.push((other.to_string(), val));
                     }
                 }
-                // Any other key the model answered with, stored under its own
-                // name. Pan is a media store running perception: it does not
-                // judge what a model returns, and it does not refuse a
-                // well-formed field it has not heard of (goodlux,
-                // 2026-09-19).
-                other => {
-                    let val = match v {
-                        serde_json::Value::String(s) => s.trim().to_string(),
-                        serde_json::Value::Null => String::new(),
-                        x => x.to_string(),
-                    };
-                    if !val.is_empty() {
-                        out.scene.push((other.to_string(), val));
-                    }
-                }
+                // A key pan.ttl does not declare is not stored: the ontology
+                // comes first, and nothing undeclared is written. The declared
+                // keys in the same answer are kept. The dropped name goes back
+                // to the caller, which logs it with the image it came from
+                // (goodlux, 2026-09-21).
+                other => out.dropped_keys.push(other.to_string()),
             }
         }
         Ok(out)
@@ -860,10 +854,12 @@ mod perception_tests {
         let p = Perception::parse("```json\n{\"shortCaption\": \"A wolf.\", \"longCaption\": \"A grey wolf on a ridge.\", \"sceneObjects\": [\"Wolf\", \"rock\", \"wolf\", \"\"], \"sceneMood\": \"still\", \"sceneGaze\": null}\n```").unwrap();
         assert_eq!(p.scene_objects, ["wolf", "rock"]);
         assert_eq!(p.scene, [("sceneMood".to_string(), "still".to_string())]);
-        let kept =
+        let dropped =
             Perception::parse("{\"shortCaption\": \"x\", \"longCaption\": \"y\", \"vibe\": \"z\"}")
                 .unwrap();
-        assert!(kept.scene.iter().any(|(k, v)| k == "vibe" && v == "z"));
+        assert!(!dropped.scene.iter().any(|(k, _)| k == "vibe"));
+        assert_eq!(dropped.dropped_keys, ["vibe"]);
+        assert_eq!(dropped.short_caption, "x");
         assert!(Perception::parse("{\"shortCaption\": \"x\"}").is_ok());
     }
 }
