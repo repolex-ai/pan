@@ -141,8 +141,8 @@ pub fn read_f32_1d(path: &Path) -> Result<Vec<f32>> {
     }
 
     let mut out = Vec::with_capacity(n);
-    for chunk in payload[..expected_bytes].chunks_exact(4) {
-        out.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    for chunk in payload[..expected_bytes].as_chunks::<4>().0 {
+        out.push(f32::from_le_bytes(*chunk));
     }
     Ok(out)
 }
