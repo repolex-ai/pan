@@ -12,7 +12,7 @@
 //! resolve fails the whole describe, and the caller hears about it.
 
 use anyhow::{anyhow, Result};
-use oxigraph::model::{GraphName, Literal, NamedNode, Quad};
+use oxigraph::model::{Literal, NamedNode, Quad};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
@@ -70,7 +70,7 @@ impl Facts {
                     subject.clone(),
                     p.clone(),
                     Literal::new_simple_literal(&v),
-                    GraphName::DefaultGraph,
+                    crate::config::pan_graph(),
                 ));
             }
         }

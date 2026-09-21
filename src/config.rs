@@ -24,6 +24,16 @@ pub const PAN_NS: &str = "https://repolex.ai/ontology/pan/";
 /// a future resolver (Syrinx) can dereference it (Cool URIs).
 pub const PAN_MEDIA_NS: &str = "https://repolex.ai/pan/";
 
+/// The one named graph every fact pand writes goes into, the same IRI in
+/// every store: `<pan/NamedGraph/pan>`, an instance of pan:NamedGraph
+/// (goodlux, 2026-09-21). Record files carry it in their fourth column.
+pub const PAN_GRAPH_IRI: &str = "https://repolex.ai/pan/NamedGraph/pan";
+
+/// [`PAN_GRAPH_IRI`] as the graph name a quad is built with.
+pub fn pan_graph() -> oxigraph::model::GraphName {
+    oxigraph::model::GraphName::NamedNode(oxigraph::model::NamedNode::new_unchecked(PAN_GRAPH_IRI))
+}
+
 pub const COPIA_NS: &str = "https://repolex.ai/ontology/copia/";
 
 /// The base kit's namespace. Pan WRITES nothing under it (goodlux, 2026-09-17:

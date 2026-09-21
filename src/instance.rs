@@ -27,7 +27,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use oxigraph::model::{GraphName, Literal, NamedNode, Quad, Term};
+use oxigraph::model::{Literal, NamedNode, Quad, Term};
 
 use crate::config::{now_local, PAN_MEDIA_NS};
 use crate::{enrich, pan_iri, rdf_type, term_str, Pan, QueryResults};
@@ -124,7 +124,7 @@ impl Pan {
                     Some(s.into()),
                     None,
                     None,
-                    Some(GraphName::DefaultGraph.as_ref()),
+                    Some(crate::config::pan_graph().as_ref()),
                 )
                 .collect::<std::result::Result<_, _>>()
                 .context("read instance node")?;
@@ -154,7 +154,7 @@ impl Pan {
                 node.clone(),
                 rdf_type(),
                 pan_iri("Instance"),
-                GraphName::DefaultGraph,
+                crate::config::pan_graph(),
             )
             .as_ref(),
         );
@@ -175,7 +175,7 @@ impl Pan {
                     facts.listen_port.to_string(),
                     NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
                 ),
-                GraphName::DefaultGraph,
+                crate::config::pan_graph(),
             )
             .as_ref(),
         );

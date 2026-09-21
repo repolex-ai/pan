@@ -76,10 +76,18 @@ fn one_embed_run_lands_npy_json_record_file_graph_and_xmp() {
     let rel = store
         .write_embedding(&id, INDEX, INDEX, &vector, &details)
         .unwrap();
+    let stem = std::path::Path::new(&put.media_path)
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let shard = put.created_date[0..10].replace('-', "/");
+    let base = format!("image/enrichment/embed/{shard}/{stem}.embed.{INDEX}");
     assert_eq!(
         rel,
-        format!("image/data/vectors/{INDEX}/{id}.xml"),
-        "record file beside the vector"
+        format!("{base}.nq"),
+        "record file beside the vector, dated like every other stage"
     );
     let record_abs = store.layout.abs(&rel);
     assert!(record_abs.exists(), "record file written");
@@ -94,31 +102,32 @@ fn one_embed_run_lands_npy_json_record_file_graph_and_xmp() {
 
     // The data file has the declared shape: reference → pan:item → record.
     let text = std::fs::read_to_string(&record_abs).unwrap();
-    assert!(text.contains("<pan:item rdf:resource="), "{text}");
+    // N-Quads, every line in Pan's graph.
+    let ns = pan::PAN_NS;
+    let graph = format!("<{}> .", pan::config::PAN_GRAPH_IRI);
+    assert!(text.lines().all(|l| l.ends_with(&graph)), "{text}");
+    assert!(text.contains(&format!("<{ns}item> <")), "{text}");
     assert!(
-        text.contains(&format!("rdf:resource=\"{}Embedding\"", pan::PAN_NS)),
+        text.contains(&format!(
+            "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{ns}Embedding>"
+        )),
         "record typed pan:Embedding: {text}"
     );
     assert!(
-        text.contains("<pan:precision>bf16-cuda</pan:precision>"),
+        text.contains(&format!("<{ns}precision> \"bf16-cuda\"")),
         "{text}"
     );
     assert!(
-        text.contains("<pan:provider>salad</pan:provider>"),
+        text.contains(&format!("<{ns}provider> \"salad\"")),
         "{text}"
     );
+    assert!(text.contains(&format!("<{ns}model> \"{INDEX}\"")), "{text}");
+    assert!(text.contains(&format!("<{ns}dim> \"8\"")), "{text}");
     assert!(
-        text.contains(&format!("<pan:model>{INDEX}</pan:model>")),
+        text.contains(&format!("<{ns}vectorPath> \"{base}.npy\"")),
         "{text}"
     );
-    assert!(text.contains("<pan:dim>8</pan:dim>"), "{text}");
-    assert!(
-        text.contains(&format!(
-            "<pan:vectorPath>image/data/vectors/{INDEX}/{id}.npy</pan:vectorPath>"
-        )),
-        "{text}"
-    );
-    assert!(text.contains("<pan:producedDate>"), "{text}");
+    assert!(text.contains(&format!("<{ns}producedDate> ")), "{text}");
     assert!(
         !text.contains("git-lex"),
         "the file speaks pan: only: {text}"
@@ -159,7 +168,7 @@ fn one_embed_run_lands_npy_json_record_file_graph_and_xmp() {
         details["provider"].as_str().unwrap(),
         "provider is what the server reported"
     );
-    assert_eq!(r[6], format!("image/data/vectors/{INDEX}/{id}.npy"));
+    assert_eq!(r[6], format!("{base}.npy"));
     assert!(!r[7].is_empty());
 
     // The image's XMP carries the reference with the same path.
@@ -193,12 +202,10 @@ fn record_file_id_survives_a_reread_of_the_disk() {
         put.iri
     );
     let rec = rows(&store, &q, &["rec"])[0][0].clone();
-    let bracket = pan::xmp::bracket_of_iri(&rec);
+    // The record file is the graph's own quads, so the id is the record's
+    // IRI pointing at itself, as it is in the store.
     assert!(
-        text.contains(&format!(
-            "<pan:id>{}</pan:id>",
-            bracket.replace('<', "&lt;").replace('>', "&gt;")
-        )),
-        "record id {bracket} is in the file: {text}"
+        text.contains(&format!("<{rec}> <{}id> <{rec}> ", pan::PAN_NS)),
+        "record id {rec} is in the file: {text}"
     );
 }

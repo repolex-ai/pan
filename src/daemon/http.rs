@@ -597,7 +597,7 @@ async fn get_state(
         stages::STAGE_EMBED,
         stages::STAGE_CAPTION,
         stages::STAGE_POSE,
-        stages::STAGE_SAM3,
+        stages::STAGE_SEGMENT,
     ] {
         let link = stages::link_for(stage).unwrap_or_default();
         let models = present(link);

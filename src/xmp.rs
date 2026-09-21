@@ -450,6 +450,11 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
                 None => q,
             }
         })
+        // A parsed packet has no graph of its own. What a producer's file
+        // says lands in Pan's one named graph with everything else.
+        .map(|q| {
+            oxigraph::model::Quad::new(q.subject, q.predicate, q.object, crate::config::pan_graph())
+        })
         .collect();
     Ok(quads)
 }

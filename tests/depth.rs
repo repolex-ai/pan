@@ -1,5 +1,5 @@
 //! The depth stage's write path (issue #24): one run lands the map PNG and
-//! the node's sidecar under image/data/depth/, one Depth record hung off a
+//! the node's sidecar under image/enrichment/depth/, one Depth record hung off a
 //! reference on the image, in the graph AND the image's XMP, and the image
 //! stops being pending for that model.
 
@@ -51,18 +51,26 @@ fn one_depth_run_lands_map_sidecar_record_graph_and_xmp() {
 
     let answer: DepthAnswer = serde_json::from_str(FIXTURE).unwrap();
     let rel = store.write_depth(&id, model, &answer).unwrap();
-    assert!(
-        rel.starts_with("image/data/depth/"),
-        "record file under data/depth: {rel}"
+    // <source file name>.<stage>.<model>.<ext>, under enrichment/depth/.
+    let stem = std::path::Path::new(&put.media_path)
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(stem.ends_with(&id), "the source file name ends in the id");
+    let shard = &put.created_date[0..10].replace('-', "/");
+    assert_eq!(
+        rel,
+        format!(
+            "image/enrichment/depth/{shard}/{stem}.depth.depth-anything-Depth-Anything-V2-Base-hf.nq"
+        )
     );
-    assert!(rel.ends_with(&format!("{id}.xml")), "{rel}");
     assert!(store.layout.abs(&rel).exists(), "record file written");
 
-    // The map and the sidecar sit beside the record, model id flattened.
-    let map_rel = rel.replace(
-        &format!("{id}.xml"),
-        &format!("{id}.depth-anything-Depth-Anything-V2-Base-hf.png"),
-    );
+    // The map and the server's answer sit beside the record, same name,
+    // their own extensions.
+    let map_rel = rel.replace(".nq", ".png");
     let map_abs = store.layout.abs(&map_rel);
     assert!(map_abs.exists(), "map PNG at {map_rel}");
     assert!(std::fs::read(&map_abs).unwrap().starts_with(b"\x89PNG"));
@@ -162,7 +170,11 @@ fn an_answer_without_a_map_is_refused_and_the_image_stays_pending() {
     let pending = store.pending_for(REF_LOCAL, "m", 10, None).unwrap();
     assert!(pending.iter().any(|p| p.id == put.id));
     assert!(
-        !store.layout.media_root.join("image/data/depth").exists(),
+        !store
+            .layout
+            .media_root
+            .join("image/enrichment/depth")
+            .exists(),
         "nothing written"
     );
 }

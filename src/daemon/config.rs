@@ -368,6 +368,25 @@ impl DaemonConfig {
         // machine works with no setup. Unchanged ones are left alone.
         let prompts_dir = path.parent().unwrap_or(Path::new(".")).join("prompts");
         install_default_prompts(&prompts_dir)?;
+        // The five stages pand runs. A block under any other name would be
+        // read and then never run, so it is refused here: a stage that goes
+        // quiet is worse than a pand that will not start.
+        const STAGES: [&str; 5] = ["caption", "embed", "pose", "segment", "depth"];
+        for stage in models.keys() {
+            if stage == "sam3" {
+                return Err(anyhow!(
+                    "{}: the `sam3:` block under `models:` is now called `segment:`. Rename that one line and start pand again.",
+                    path.display()
+                ));
+            }
+            if !STAGES.contains(&stage.as_str()) {
+                return Err(anyhow!(
+                    "{}: `{stage}:` under `models:` is not a stage pand runs. The stages are: {}.",
+                    path.display(),
+                    STAGES.join(", ")
+                ));
+            }
+        }
         for (stage, m) in models.iter_mut() {
             if m.url.is_empty() {
                 return Err(anyhow!("{}: every model needs a url", path.display()));
@@ -665,12 +684,33 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  sam3:\n    url: http://x/percept/segment\n    model: sam3\n    always: Person, face\n  pose:\n    url: http://x/percept/pose\n    model: rtmw-x-l\n    always: [hand]\n",
+            "models:\n  segment:\n    url: http://x/percept/segment\n    model: sam3\n    always: Person, face\n  pose:\n    url: http://x/percept/pose\n    model: rtmw-x-l\n    always: [hand]\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
-        assert_eq!(cfg.models["sam3"].always, vec!["person", "face"]);
+        assert_eq!(cfg.models["segment"].always, vec!["person", "face"]);
         assert_eq!(cfg.models["pose"].always, vec!["hand"]);
+    }
+
+    /// The old block name stops pand at start and says what to change.
+    #[test]
+    fn the_old_sam3_block_name_is_refused_with_the_new_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.yml");
+        std::fs::write(
+            &p,
+            "models:\n  sam3:\n    url: http://x/percept/segment\n    model: sam3\n",
+        )
+        .unwrap();
+        let e = DaemonConfig::load_from(&p).unwrap_err().to_string();
+        assert!(e.contains("now called `segment:`"), "{e}");
+        std::fs::write(
+            &p,
+            "models:\n  captoin:\n    url: http://x/percept/vlm\n    model: m\n",
+        )
+        .unwrap();
+        let e = DaemonConfig::load_from(&p).unwrap_err().to_string();
+        assert!(e.contains("is not a stage pand runs"), "{e}");
     }
 
     /// One name per stage, and it is what the request says.

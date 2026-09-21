@@ -21,7 +21,7 @@
 //! is committed (only `_ignore/` is not), so a soul's sets travel with it.
 
 use anyhow::{anyhow, Context, Result};
-use oxigraph::model::{GraphName, Literal, NamedNode, Quad, Term};
+use oxigraph::model::{Literal, NamedNode, Quad, Term};
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
@@ -143,7 +143,7 @@ impl Pan {
                 Some((&node).into()),
                 Some(crate::rdf_type().as_ref()),
                 Some(pan_iri(IMAGESET_CLASS).as_ref().into()),
-                Some(GraphName::DefaultGraph.as_ref()),
+                Some(crate::config::pan_graph().as_ref()),
             )
             .next()
             .is_some();
@@ -160,14 +160,14 @@ impl Pan {
                 node.clone(),
                 crate::rdf_type(),
                 pan_iri(IMAGESET_CLASS),
-                GraphName::DefaultGraph,
+                crate::config::pan_graph(),
             ),
             enrich::self_id_quad(&node)?,
             Quad::new(
                 node.clone(),
                 pan_iri("createdDate"),
                 Literal::new_simple_literal(&p.created_date),
-                GraphName::DefaultGraph,
+                crate::config::pan_graph(),
             ),
         ];
         if let Some(d) = &p.description {
@@ -175,7 +175,7 @@ impl Pan {
                 node,
                 pan_iri("description"),
                 Literal::new_simple_literal(d),
-                GraphName::DefaultGraph,
+                crate::config::pan_graph(),
             ));
         }
         Ok(quads)
@@ -191,7 +191,7 @@ impl Pan {
                 Some((&node).into()),
                 None,
                 None,
-                Some(GraphName::DefaultGraph.as_ref()),
+                Some(crate::config::pan_graph().as_ref()),
             )
             .collect::<std::result::Result<_, _>>()
             .context("read imageset node")?;
@@ -251,7 +251,7 @@ impl Pan {
             None,
             Some(crate::rdf_type().as_ref()),
             Some(pan_iri(IMAGESET_CLASS).as_ref().into()),
-            Some(GraphName::DefaultGraph.as_ref()),
+            Some(crate::config::pan_graph().as_ref()),
         ) {
             let q = q.context("list imagesets")?;
             let oxigraph::model::NamedOrBlankNode::NamedNode(node) = &q.subject else {
@@ -280,7 +280,7 @@ impl Pan {
             Some(node.into()),
             None,
             None,
-            Some(GraphName::DefaultGraph.as_ref()),
+            Some(crate::config::pan_graph().as_ref()),
         ) {
             let q = q.context("read imageset")?;
             let value = match &q.object {
@@ -314,7 +314,7 @@ impl Pan {
             None,
             Some(pan_iri("relatedToId").as_ref()),
             Some((&node).into()),
-            Some(GraphName::DefaultGraph.as_ref()),
+            Some(crate::config::pan_graph().as_ref()),
         ) {
             let q = q.context("read members")?;
             if let oxigraph::model::NamedOrBlankNode::NamedNode(s) = &q.subject {
@@ -344,7 +344,7 @@ impl Pan {
                     media.clone(),
                     crate::rdf_type(),
                     pan_iri("Image"),
-                    GraphName::DefaultGraph,
+                    crate::config::pan_graph(),
                 )
                 .as_ref(),
             )
@@ -356,7 +356,7 @@ impl Pan {
                     Some((&media).into()),
                     Some(crate::rdf_type().as_ref()),
                     None,
-                    Some(GraphName::DefaultGraph.as_ref()),
+                    Some(crate::config::pan_graph().as_ref()),
                 )
                 .filter_map(|q| q.ok())
                 .find_map(|q| match q.object {
@@ -368,7 +368,12 @@ impl Pan {
                 "{media_id} is a pan:{class}, not a pan:Image; an ImageSet takes images only. A set for that media kind is not declared yet."
             ));
         }
-        let edge = Quad::new(media, pan_iri("relatedToId"), set, GraphName::DefaultGraph);
+        let edge = Quad::new(
+            media,
+            pan_iri("relatedToId"),
+            set,
+            crate::config::pan_graph(),
+        );
         if self
             .store
             .contains(edge.as_ref())
@@ -388,7 +393,12 @@ impl Pan {
         let Some(media) = self.subject_for(media_id)? else {
             return Err(anyhow!("id not found: {media_id}"));
         };
-        let edge = Quad::new(media, pan_iri("relatedToId"), set, GraphName::DefaultGraph);
+        let edge = Quad::new(
+            media,
+            pan_iri("relatedToId"),
+            set,
+            crate::config::pan_graph(),
+        );
         if !self
             .store
             .contains(edge.as_ref())

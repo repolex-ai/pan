@@ -22,7 +22,7 @@
 
 use anyhow::{anyhow, Context, Result};
 pub use oxigraph::model::Term;
-use oxigraph::model::{GraphName, Literal, NamedNode, NamedOrBlankNode, Quad};
+use oxigraph::model::{Literal, NamedNode, NamedOrBlankNode, Quad};
 use oxigraph::sparql::SparqlEvaluator;
 pub use oxigraph::sparql::{QueryResults, QuerySolution};
 use oxigraph::store::Store;
@@ -970,8 +970,9 @@ impl Pan {
             };
         let up = format!(
             "PREFIX pan: <{PAN_NS}>\n\
-             DELETE {{ ?v pan:item ?e . ?e ?p ?o }} WHERE {{ ?s pan:vectorData ?v . ?v pan:item ?e . ?e ?p ?o }} ;\n\
-             DELETE {{ ?s pan:vectorData ?v . ?v ?p ?o }} WHERE {{ ?s pan:vectorData ?v . ?v ?p ?o }}"
+             WITH <{g}> DELETE {{ ?v pan:item ?e . ?e ?p ?o }} WHERE {{ ?s pan:vectorData ?v . ?v pan:item ?e . ?e ?p ?o }} ;\n\
+             WITH <{g}> DELETE {{ ?s pan:vectorData ?v . ?v ?p ?o }} WHERE {{ ?s pan:vectorData ?v . ?v ?p ?o }}",
+            g = crate::config::PAN_GRAPH_IRI
         );
         self.store
             .update(&up)
@@ -985,8 +986,8 @@ impl Pan {
             for k in kinds.filter_map(|e| e.ok()) {
                 let v = k
                     .path()
-                    .join(PanLayout::DATA_SUBDIR)
-                    .join(PanLayout::VECTORS_SUBDIR);
+                    .join(PanLayout::ENRICHMENT_SUBDIR)
+                    .join(PanLayout::STAGE_EMBED);
                 if v.is_dir() {
                     fs::remove_dir_all(&v).with_context(|| format!("remove {}", v.display()))?;
                 }
@@ -1022,7 +1023,7 @@ impl Pan {
                 Some((&node).into()),
                 None,
                 None,
-                Some(GraphName::DefaultGraph.as_ref()),
+                Some(crate::config::pan_graph().as_ref()),
             )
             .filter_map(|q| q.ok())
             .filter(|q| {
@@ -1040,7 +1041,7 @@ impl Pan {
         // removed whole, not left as a second answer to "where is the media".
         let stale: Vec<Quad> = self
             .store
-            .quads_for_pattern(None, None, None, Some(GraphName::DefaultGraph.as_ref()))
+            .quads_for_pattern(None, None, None, Some(crate::config::pan_graph().as_ref()))
             .filter_map(|q| q.ok())
             .filter(|q| match &q.subject {
                 NamedOrBlankNode::NamedNode(n) => {
@@ -1059,12 +1060,23 @@ impl Pan {
                 node.clone(),
                 rdf_type(),
                 pan_iri("Store"),
-                GraphName::DefaultGraph,
+                crate::config::pan_graph(),
             )
             .as_ref(),
         );
         t.insert(enrich::self_id_quad(&node)?.as_ref());
         t.insert(self.quad(&node, "mediaRoot", &media_root).as_ref());
+        // The graph says what it is: <pan/NamedGraph/pan> a pan:NamedGraph
+        // (pan.ttl 0.4.18). One fact; the node's IRI is the graph's name.
+        t.insert(
+            Quad::new(
+                NamedNode::new_unchecked(crate::config::PAN_GRAPH_IRI),
+                NamedNode::new_unchecked(RDF_TYPE),
+                NamedNode::new_unchecked(format!("{PAN_NS}NamedGraph")),
+                crate::config::pan_graph(),
+            )
+            .as_ref(),
+        );
         t.commit().context("commit store node")?;
         Ok(())
     }
@@ -1096,7 +1108,7 @@ impl Pan {
                     Some((&cand).into()),
                     Some(rdf_type().as_ref()),
                     None,
-                    Some(GraphName::DefaultGraph.as_ref()),
+                    Some(crate::config::pan_graph().as_ref()),
                 )
                 .next()
                 .is_some();
@@ -1177,7 +1189,7 @@ impl Pan {
                 subject.clone(),
                 rdf_type(),
                 pan_iri(media_class(&media_type)),
-                GraphName::DefaultGraph,
+                crate::config::pan_graph(),
             ),
             enrich::self_id_quad(&subject)?,
             self.quad(&subject, "mediaPath", &rel_path),
@@ -1265,13 +1277,13 @@ impl Pan {
                         subject.clone(),
                         pan_iri("thumbnail"),
                         tnode.clone(),
-                        GraphName::DefaultGraph,
+                        crate::config::pan_graph(),
                     ));
                     quads.push(Quad::new(
                         tnode.clone(),
                         rdf_type(),
                         pan_iri("Thumbnail"),
-                        GraphName::DefaultGraph,
+                        crate::config::pan_graph(),
                     ));
                     quads.push(enrich::self_id_quad(&tnode)?);
                     quads.push(self.quad(&tnode, "path", &rel));
@@ -1440,7 +1452,7 @@ impl Pan {
             Some(subject.into()),
             None,
             None,
-            Some(GraphName::DefaultGraph.as_ref()),
+            Some(crate::config::pan_graph().as_ref()),
         ) {
             let quad = quad.context("read facts")?;
             map.entry(quad.predicate.as_str().to_string())
@@ -1462,7 +1474,7 @@ impl Pan {
                 Some((&node).into()),
                 Some(pan_iri(local).as_ref()),
                 None,
-                Some(GraphName::DefaultGraph.as_ref()),
+                Some(crate::config::pan_graph().as_ref()),
             )
             .next();
         match first {
@@ -1631,7 +1643,7 @@ impl Pan {
                 Some((&subject).into()),
                 Some(pan_iri("enrichmentCompleteDate").as_ref()),
                 None,
-                Some(GraphName::DefaultGraph.as_ref()),
+                Some(crate::config::pan_graph().as_ref()),
             )
             .next()
             .is_some();
@@ -1710,25 +1722,12 @@ impl Pan {
             .map(|(_, v)| v.clone())
             .unwrap_or_default())
     }
-
-    fn created_date_of(&self, id: &str) -> Result<String> {
-        Ok(self
-            .facts_for(id)?
-            .iter()
-            .find(|(p, _)| p == &format!("{PAN_NS}createdDate"))
-            .and_then(|(_, v)| v.first().cloned())
-            .unwrap_or_default())
-    }
 }
 
-/// The two things that vary about the file a stage writes: the variant that
-/// makes one model's record sit beside another's, and the server's own answer
-/// saved next to it.
+/// What a stage may hand over with its records: the server's own answer
+/// saved next to the record, and what Pan asked for.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RecordFile<'a> {
-    /// Part of the record's file name, so two captioning models do not
-    /// overwrite each other. None for a stage that runs once per image.
-    pub variant: Option<&'a str>,
     /// Media-root-relative path of the server's own answer, when the stage
     /// saved one. Becomes pan:modelReplyPath on the reference.
     pub model_reply: Option<&'a str>,
@@ -1737,14 +1736,6 @@ pub struct RecordFile<'a> {
 }
 
 impl<'a> RecordFile<'a> {
-    pub fn variant(variant: &'a str) -> Self {
-        Self {
-            variant: Some(variant),
-            model_reply: None,
-            request: None,
-        }
-    }
-
     pub fn with_model_reply(mut self, rel: &'a str) -> Self {
         self.model_reply = Some(rel);
         self
@@ -1757,50 +1748,62 @@ impl<'a> RecordFile<'a> {
 }
 
 impl Pan {
-    /// Where this stage's record file for `id` will land, relative to the
-    /// store's media root. Deterministic: `write_enrichment` derives the same
-    /// path. A caller needs it to name the server's answer file beside the
-    /// record before the record exists.
-    pub fn enrichment_rel(&self, id: &str, kind: &str, variant: Option<&str>) -> Result<String> {
-        let created = self.created_date_of(id)?;
+    /// Where one of a stage's files for `id` lands, relative to the store's
+    /// media root: `<kind>/enrichment/<stage>/YYYY/MM/DD/<source file
+    /// name>.<stage>.<model>.<ext>` (goodlux, 2026-09-18). The source file
+    /// name is read from the object's pan:mediaPath, never rebuilt. `ext` is
+    /// `nq` for the record, `json` for the server's answer, `png` for a map or
+    /// an overlay, `npy` for a vector. Deterministic, so a caller can name the
+    /// server's answer before the record exists.
+    pub fn enrichment_file(&self, id: &str, stage: &str, model: &str, ext: &str) -> Result<String> {
+        let facts = self.facts_for(id)?;
+        let val = |local: &str| -> Option<String> {
+            facts
+                .iter()
+                .find(|(p, _)| p == &format!("{PAN_NS}{local}"))
+                .and_then(|(_, v)| v.first().cloned())
+        };
+        let media_path = val("mediaPath").ok_or_else(|| anyhow!("id not found: {id}"))?;
+        let stem = Path::new(&media_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow!("pan:mediaPath of {id} has no file name: {media_path}"))?;
+        let created = val("createdDate").unwrap_or_default();
         let shard = created.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
-        let media_kind = self.media_kind_of(id)?;
-        Ok(PanLayout::enrichment_rel_path(
-            &media_kind,
-            kind,
+        Ok(PanLayout::enrichment_file_rel(
+            PanLayout::kind_of_path(&media_path),
+            stage,
             &shard,
-            id,
-            variant,
+            stem,
+            model,
+            ext,
         ))
     }
 
     /// Record one model's output for an object as a data file beside the
     /// media plus the graph statements that describe it, then refresh the
-    /// XMP so the image's own packet lists the new file. `kind` = data-file
-    /// directory (caption / sam3 / pose); `ref_local` = reference predicate.
+    /// XMP so the image's own packet lists the new file. `stage` = the stage
+    /// folder and the stage part of the file name (caption / segment / pose /
+    /// depth); `ref_local` = reference predicate.
     /// The image links to the reference only; the reference links each record
     /// with pan:item (goodlux, 2026-09-16).
     pub fn write_enrichment(
         &self,
         id: &str,
-        kind: &str,
+        stage: &str,
         ref_local: &str,
         model: &str,
         records: &[enrich::EnrichmentRecord],
         file: RecordFile<'_>,
     ) -> Result<String> {
         let RecordFile {
-            variant,
             model_reply,
             request,
         } = file;
         let Some(subject) = self.subject_for(id)? else {
             return Err(anyhow!("id not found: {id}"));
         };
-        let created = self.created_date_of(id)?;
-        let shard = created.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
-        let media_kind = self.media_kind_of(id)?;
-        let rel = PanLayout::enrichment_rel_path(&media_kind, kind, &shard, id, variant);
+        let rel = self.enrichment_file(id, stage, model, "nq")?;
         let abs = self.layout.abs(&rel);
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent).context("create enrichment dir")?;
@@ -1818,7 +1821,7 @@ impl Pan {
         if let Some(req) = request {
             r = r.with_request(req.clone());
         }
-        write_atomic(&abs, enrich::build_data_file(&r.iri(), records).as_bytes())
+        write_atomic(&abs, enrich::build_data_file(&r.iri(), records)?.as_bytes())
             .with_context(|| format!("write {}", abs.display()))?;
         let mut quads = enrich::ref_quads(subject.as_str(), ref_local, &r)?;
         quads.extend(enrich::record_quads(&r.iri(), records)?);
@@ -1841,11 +1844,12 @@ impl Pan {
     /// `model` stays the functional label = the index name; the server's own
     /// model id has no declared property yet and stays in the `.json` only.
     ///
-    /// The record lives in `vectors/<index>/<id>.xml`, the same RDF/XML shape
-    /// caption, pose, sam3 and depth write (reference node, `pan:item`, the
-    /// record in full), so a rebuild from disk recovers its id, dim and
-    /// producedDate (issue #31). The reference's `pan:path` names that file;
-    /// the record's `pan:vectorPath` names the `.npy`.
+    /// The record lives in `enrichment/embed/YYYY/MM/DD/<source file
+    /// name>.embed.<model>.nq`, the same N-Quads shape every other stage
+    /// writes (reference node, `pan:item`, the record in full), so a rebuild
+    /// from disk recovers its id, dim and producedDate (issue #31). The
+    /// reference's `pan:path` names that file; the record's `pan:vectorPath`
+    /// names the `.npy` beside it.
     pub fn write_embedding(
         &self,
         id: &str,
@@ -1859,17 +1863,13 @@ impl Pan {
         };
         self.add_vector(id, index_name, vec)?;
         self.flush()?;
-        let media_kind = self.media_kind_of(id)?;
-        let npy_rel = PanLayout::vector_rel_path(&media_kind, index_name, id);
+        let npy_rel = self.enrichment_file(id, PanLayout::STAGE_EMBED, index_name, "npy")?;
         // Everything the server said besides the vector, whole, beside the
         // .npy, and named on the reference as pan:modelReplyPath (goodlux,
         // 2026-09-19).
         let mut answer_rel: Option<String> = None;
         if !details.is_empty() {
-            let rel = format!(
-                "{}.json",
-                npy_rel.strip_suffix(".npy").unwrap_or(npy_rel.as_str())
-            );
+            let rel = self.enrichment_file(id, PanLayout::STAGE_EMBED, index_name, "json")?;
             let side = self.layout.abs(&rel);
             write_atomic(&side, serde_json::to_string_pretty(details)?.as_bytes())
                 .with_context(|| format!("write {}", side.display()))?;
@@ -1887,7 +1887,7 @@ impl Pan {
                 rec = rec.field(key, v);
             }
         }
-        let rel = PanLayout::vector_record_rel_path(&media_kind, index_name, id);
+        let rel = self.enrichment_file(id, PanLayout::STAGE_EMBED, index_name, "nq")?;
         let abs = self.layout.abs(&rel);
         let mut r = enrich::EnrichmentRef::new(model, &rel, None);
         if let Some(reply) = &answer_rel {
@@ -1895,7 +1895,7 @@ impl Pan {
         }
         write_atomic(
             &abs,
-            enrich::build_data_file(&r.iri(), std::slice::from_ref(&rec)).as_bytes(),
+            enrich::build_data_file(&r.iri(), std::slice::from_ref(&rec))?.as_bytes(),
         )
         .with_context(|| format!("write {}", abs.display()))?;
         let mut quads = enrich::ref_quads(subject.as_str(), "vectorData", &r)?;
@@ -1927,7 +1927,7 @@ impl Pan {
                     Some((&subject).into()),
                     Some(pan_iri(local).as_ref()),
                     None,
-                    Some(GraphName::DefaultGraph.as_ref()),
+                    Some(crate::config::pan_graph().as_ref()),
                 )
                 .collect::<std::result::Result<_, _>>()
                 .with_context(|| format!("read {local}"))?;
@@ -1991,7 +1991,7 @@ impl Pan {
                     Some((&subject).into()),
                     Some(pan_iri(local).as_ref()),
                     None,
-                    Some(GraphName::DefaultGraph.as_ref()),
+                    Some(crate::config::pan_graph().as_ref()),
                 )
                 .collect::<std::result::Result<_, _>>()
                 .with_context(|| format!("read {local}"))?;
@@ -2003,7 +2003,7 @@ impl Pan {
                     subject.clone(),
                     pan_iri(local),
                     lit.clone(),
-                    GraphName::DefaultGraph,
+                    crate::config::pan_graph(),
                 )
                 .as_ref(),
             );
@@ -2039,7 +2039,7 @@ impl Pan {
                     Some((&subject).into()),
                     Some(pan_iri(local).as_ref()),
                     None,
-                    Some(GraphName::DefaultGraph.as_ref()),
+                    Some(crate::config::pan_graph().as_ref()),
                 )
                 .collect::<std::result::Result<_, _>>()
                 .with_context(|| format!("read {local}"))?;
@@ -2051,8 +2051,8 @@ impl Pan {
         self.restamp(id)
     }
 
-    /// Delete an object: media, thumbnail, data files, vector sidecars +
-    /// index entries, and every statement about it or its records.
+    /// Delete an object: media, thumbnail, every file a stage wrote for it,
+    /// its index entries, and every statement about it or its records.
     pub fn delete(&self, id: &str) -> Result<()> {
         let Some(subject) = self.subject_for(id)? else {
             return Err(anyhow!("id not found: {id}"));
@@ -2064,29 +2064,64 @@ impl Pan {
                 .find(|(p, _)| p == &format!("{PAN_NS}{local}"))
                 .and_then(|(_, v)| v.first().cloned())
         };
-        // Files: media, thumbnail, every referenced data file.
+        // Files: the media, the thumbnail, and
+        // everything each stage wrote — the record, the server's answer, and
+        // whatever the records themselves point at (vector, map, overlay,
+        // mask). Every path is read from the graph; none is guessed.
         let mut rels: Vec<String> = Vec::new();
         rels.extend(pan_val("mediaPath"));
-        if let Some(t) = pan_val("thumbnail") {
-            rels.extend(self.node_field(&t, "path")?);
-        }
-        // Linked nodes (enrichment refs, records, thumbnail) — their statements go too.
+        // The nodes that exist only because this object does: its thumbnail,
+        // its references, and the records each reference holds. A node the
+        // object merely points at (an ImageSet, a Moment) is someone else's
+        // and keeps every statement it has.
         let mut linked: Vec<NamedNode> = Vec::new();
+        let own_links = [
+            "thumbnail",
+            "captionData",
+            "vectorData",
+            "poseData",
+            "regionData",
+            "depthData",
+        ];
         for (pred, values) in &facts {
-            if !pred.starts_with(PAN_NS) {
+            let Some(local) = pred.strip_prefix(PAN_NS) else {
+                continue;
+            };
+            if !own_links.contains(&local) {
                 continue;
             }
             for v in values {
-                if v.starts_with(PAN_MEDIA_NS) {
-                    if let Ok(n) = NamedNode::new(v.as_str()) {
-                        if let Some(p) = self.node_field(v, "path")? {
-                            rels.push(p);
-                        }
-                        linked.push(n);
-                    }
+                let Ok(node) = NamedNode::new(v.as_str()) else {
+                    continue;
+                };
+                for field in ["path", "modelReplyPath"] {
+                    rels.extend(self.node_field(v, field)?);
                 }
+                let items: Vec<NamedNode> = self
+                    .store
+                    .quads_for_pattern(
+                        Some((&node).into()),
+                        Some(pan_iri("item").as_ref()),
+                        None,
+                        Some(crate::config::pan_graph().as_ref()),
+                    )
+                    .filter_map(|q| q.ok())
+                    .filter_map(|q| match q.object {
+                        oxigraph::model::Term::NamedNode(n) => Some(n),
+                        _ => None,
+                    })
+                    .collect();
+                for item in items {
+                    for field in ["vectorPath", "depthMapPath", "overlayPath", "maskPath"] {
+                        rels.extend(self.node_field(item.as_str(), field)?);
+                    }
+                    linked.push(item);
+                }
+                linked.push(node);
             }
         }
+        rels.sort();
+        rels.dedup();
         for rel in &rels {
             let abs = self.layout.abs(rel);
             if abs.exists() {
@@ -2106,7 +2141,7 @@ impl Pan {
                     Some(s.into()),
                     None,
                     None,
-                    Some(GraphName::DefaultGraph.as_ref()),
+                    Some(crate::config::pan_graph().as_ref()),
                 )
                 .collect::<std::result::Result<_, _>>()
                 .context("scan for delete")?;
@@ -2150,14 +2185,6 @@ impl Pan {
                     vi.dirty = true;
                 }
             }
-            let sidecar = self.layout.vector_sidecar_path(
-                &self.media_kind_of(id).unwrap_or_else(|_| "image".into()),
-                &name,
-                id,
-            );
-            if sidecar.exists() {
-                fs::remove_file(&sidecar).ok();
-            }
         }
         Ok(())
     }
@@ -2187,12 +2214,13 @@ impl Pan {
         if vi.id_to_key.contains_key(id) {
             return Ok(false);
         }
-        npy::write_f32_1d(
-            &self
-                .layout
-                .vector_sidecar_path(&self.media_kind_of(id)?, index_name, id),
-            vec,
-        )?;
+        let npy_abs = self.layout.abs(&self.enrichment_file(
+            id,
+            PanLayout::STAGE_EMBED,
+            index_name,
+            "npy",
+        )?);
+        npy::write_f32_1d(&npy_abs, vec)?;
         let key = vi.next_key;
         vi.next_key += 1;
         vi.id_to_key.insert(id.to_string(), key);
@@ -2272,11 +2300,8 @@ impl Pan {
             self.prefix_prologue()
         );
         let mut candidate_ids: HashSet<String> = HashSet::new();
-        if let QueryResults::Solutions(sols) = SparqlEvaluator::new()
-            .parse_query(&q)
-            .map_err(|e| anyhow!("search where-clause: {e}"))?
-            .on_store(&self.store)
-            .execute()
+        if let QueryResults::Solutions(sols) = self
+            .run_query(&q)
             .map_err(|e| anyhow!("search where-clause: {e}"))?
         {
             for s in sols {
@@ -2346,12 +2371,25 @@ impl Pan {
     /// copia, pan.yml extras, rdf/rdfs/owl/xsd).
     pub fn query(&self, sparql: &str) -> Result<QueryResults<'_>> {
         let prologue = self.prefix_prologue();
-        SparqlEvaluator::new()
-            .parse_query(&format!("{prologue}{sparql}"))
-            .map_err(|e| anyhow!("SPARQL error: {e}"))?
+        self.run_query(&format!("{prologue}{sparql}"))
+            .map_err(|e| anyhow!("SPARQL error: {e}"))
+    }
+
+    /// Evaluate a query whose plain patterns read Pan's named graph. Every
+    /// fact pand writes is in that one graph (goodlux, 2026-09-18), so a
+    /// query with no GRAPH clause must see it; `GRAPH <pan/NamedGraph/pan>`
+    /// works as well, for a caller that names it.
+    fn run_query(&self, full: &str) -> Result<QueryResults<'_>> {
+        let mut prepared = SparqlEvaluator::new()
+            .parse_query(full)
+            .map_err(|e| anyhow!("{e}"))?;
+        prepared
+            .dataset_mut()
+            .set_default_graph(vec![crate::config::pan_graph()]);
+        prepared
             .on_store(&self.store)
             .execute()
-            .map_err(|e| anyhow!("SPARQL error: {e}"))
+            .map_err(|e| anyhow!("{e}"))
     }
 
     fn prefix_prologue(&self) -> String {
@@ -2416,7 +2454,7 @@ impl Pan {
                 Some((&node).into()),
                 None,
                 None,
-                Some(GraphName::DefaultGraph.as_ref()),
+                Some(crate::config::pan_graph().as_ref()),
             ) {
                 let q = q.context("read node")?;
                 if let Some(l) = q.predicate.as_str().strip_prefix(PAN_NS) {
@@ -2571,7 +2609,7 @@ impl Pan {
             subject.clone(),
             pan_iri(local),
             Literal::new_simple_literal(value),
-            GraphName::DefaultGraph,
+            crate::config::pan_graph(),
         )
     }
 }
@@ -2598,7 +2636,7 @@ mod declare_store_tests {
             node.clone(),
             NamedNode::new(format!("{GIT_LEX_NS}id")).unwrap(),
             node.clone(),
-            GraphName::DefaultGraph,
+            crate::config::pan_graph(),
         );
         pan.store.insert(stale.as_ref()).unwrap();
 
@@ -2610,7 +2648,7 @@ mod declare_store_tests {
                 Some((&node).into()),
                 None,
                 None,
-                Some(GraphName::DefaultGraph.as_ref()),
+                Some(crate::config::pan_graph().as_ref()),
             )
             .filter_map(|q| q.ok())
             .map(|q| q.predicate.as_str().to_string())
@@ -2621,6 +2659,61 @@ mod declare_store_tests {
             vec![format!("{PAN_NS}id")],
             "exactly one identity predicate, spelled pan:id: {ids:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod named_graph_tests {
+    use super::*;
+
+    fn png() -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 20, 30, 255]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    /// Every fact pand writes sits in <pan/NamedGraph/pan> (goodlux,
+    /// 2026-09-21): nothing in the default graph, and a query with no GRAPH
+    /// clause still finds it.
+    #[test]
+    fn every_fact_is_in_the_named_graph_and_plain_queries_still_see_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let put = pan.put(&png(), Some("image/png")).unwrap();
+
+        let in_default = pan
+            .store
+            .quads_for_pattern(
+                None,
+                None,
+                None,
+                Some(oxigraph::model::GraphNameRef::DefaultGraph),
+            )
+            .count();
+        assert_eq!(in_default, 0, "nothing may be written to the default graph");
+        let total = pan.store.len().unwrap();
+        assert!(total > 0);
+        let named = pan
+            .store
+            .quads_for_pattern(None, None, None, Some(crate::config::pan_graph().as_ref()))
+            .count();
+        assert_eq!(named, total, "every quad is in the one named graph");
+
+        let plain = format!("ASK {{ <{}> a pan:Image }}", put.iri);
+        assert!(matches!(
+            pan.query(&plain).unwrap(),
+            QueryResults::Boolean(true)
+        ));
+        let graphed = format!(
+            "ASK {{ GRAPH <{}> {{ <{}> a pan:Image }} }}",
+            crate::config::PAN_GRAPH_IRI,
+            put.iri
+        );
+        assert!(matches!(
+            pan.query(&graphed).unwrap(),
+            QueryResults::Boolean(true)
+        ));
     }
 }
 

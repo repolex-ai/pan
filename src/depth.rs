@@ -10,9 +10,9 @@
 //! (checked on a real image, 2026-09-17).
 //!
 //! On disk, beside the record file the stage engine writes:
-//!   image/data/depth/YYYY/MM/DD/<id>.<model>.png   the map
-//!   image/data/depth/YYYY/MM/DD/<id>.<model>.json  everything else the node said
-//!   image/data/depth/YYYY/MM/DD/<id>.xml           the reference + Depth record
+//!   image/enrichment/depth/YYYY/MM/DD/<source file name>.depth.<model>.png   the map
+//!   image/enrichment/depth/YYYY/MM/DD/<source file name>.depth.<model>.json  everything else the node said
+//!   image/enrichment/depth/YYYY/MM/DD/<source file name>.depth.<model>.nq    the reference + Depth record
 //!
 //! The record keeps min and max on purpose: the map is normalized per image,
 //! so without its range two images' maps cannot be compared.
@@ -21,7 +21,6 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
 use crate::enrich::EnrichmentRecord;
-use crate::layout::PanLayout;
 use crate::{gen_pan_id, write_atomic, Pan};
 
 /// Config key and data-file directory of the stage.
@@ -111,7 +110,7 @@ fn dec(v: f64) -> String {
 
 impl Pan {
     /// Record one depth run for an image: the map PNG and the node's sidecar
-    /// under `image/data/depth/`, one Depth record hung off a fresh reference,
+    /// under `image/enrichment/depth/`, one Depth record hung off a fresh reference,
     /// graph and XMP refreshed. Returns the record file's media-root-relative
     /// path. An answer with no map is refused here so the image stays pending.
     pub fn write_depth(&self, id: &str, model: &str, answer: &DepthAnswer) -> Result<String> {
@@ -124,10 +123,7 @@ impl Pan {
             ));
         };
         let png = answer.map_png()?;
-        let created = self.created_date_of(id)?;
-        let shard = created.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
-        let media_kind = self.media_kind_of(id)?;
-        let map_rel = PanLayout::overlay_rel_path(&media_kind, STAGE, &shard, id, model);
+        let map_rel = self.enrichment_file(id, STAGE, model, "png")?;
         let map_abs = self.layout.abs(&map_rel);
         if let Some(p) = map_abs.parent() {
             std::fs::create_dir_all(p).context("create depth dir")?;
@@ -135,10 +131,7 @@ impl Pan {
         write_atomic(&map_abs, &png).with_context(|| format!("write {}", map_abs.display()))?;
         // The node's own answer, whole, beside the map. Named on the
         // reference as pan:modelReplyPath (goodlux, 2026-09-19).
-        let answer_rel = format!(
-            "{}.json",
-            map_rel.strip_suffix(".png").unwrap_or(map_rel.as_str())
-        );
+        let answer_rel = self.enrichment_file(id, STAGE, model, "json")?;
         let side = self.layout.abs(&answer_rel);
         write_atomic(
             &side,

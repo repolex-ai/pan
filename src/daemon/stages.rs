@@ -35,7 +35,7 @@ use crate::{gen_pan_id, PendingItem};
 pub const STAGE_EMBED: &str = "embed";
 pub const STAGE_CAPTION: &str = "caption";
 pub const STAGE_POSE: &str = "pose";
-pub const STAGE_SAM3: &str = "sam3";
+pub const STAGE_SEGMENT: &str = "segment";
 pub const STAGE_DEPTH: &str = crate::depth::STAGE;
 
 /// Which graph link a stage's completion is read from: the data REFERENCE
@@ -49,7 +49,7 @@ pub fn link_for(stage: &str) -> Option<&'static str> {
         STAGE_EMBED => Some("vectorData"),
         STAGE_CAPTION => Some("captionData"),
         STAGE_POSE => Some("poseData"),
-        STAGE_SAM3 => Some("regionData"),
+        STAGE_SEGMENT => Some("regionData"),
         STAGE_DEPTH => Some(crate::depth::REF_LOCAL),
         _ => None,
     }
@@ -68,7 +68,7 @@ pub async fn run(d: Arc<Daemon>) {
         STAGE_EMBED,
         STAGE_CAPTION,
         STAGE_POSE,
-        STAGE_SAM3,
+        STAGE_SEGMENT,
         STAGE_DEPTH,
     ] {
         if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
@@ -154,7 +154,7 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
             STAGE_EMBED,
             STAGE_CAPTION,
             STAGE_POSE,
-            STAGE_SAM3,
+            STAGE_SEGMENT,
             STAGE_DEPTH,
         ] {
             if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
@@ -513,25 +513,10 @@ async fn run_one(
             let s = store.clone();
             let id = item.id.clone();
             let model = ep.model.clone();
-            let media_type_owned = media_type.to_string();
             tokio::task::spawn_blocking(move || -> Result<()> {
                 let mut overlay_rel: Option<String> = None;
                 if let Some(png) = overlay {
-                    let created = s
-                        .pan
-                        .facts_for(&id)?
-                        .iter()
-                        .find(|(p, _)| p == &format!("{}createdDate", crate::PAN_NS))
-                        .and_then(|(_, v)| v.first().cloned())
-                        .unwrap_or_default();
-                    let shard = created.get(0..10).unwrap_or("0000-00-00").replace('-', "/");
-                    let rel = crate::layout::PanLayout::overlay_rel_path(
-                        crate::layout::PanLayout::media_kind(&media_type_owned),
-                        "pose",
-                        &shard,
-                        &id,
-                        &model,
-                    );
+                    let rel = s.pan.enrichment_file(&id, STAGE_POSE, &model, "png")?;
                     let abs = s.pan.layout.abs(&rel);
                     if let Some(p) = abs.parent() {
                         std::fs::create_dir_all(p)?;
@@ -563,7 +548,7 @@ async fn run_one(
             })
             .await??;
         }
-        STAGE_SAM3 => {
+        STAGE_SEGMENT => {
             // What this stage grounds: the nouns the caption model listed,
             // plus the nouns the config says to ask for every time (goodlux,
             // 2026-09-19). A caption that never says "person" used to leave a
@@ -583,7 +568,7 @@ async fn run_one(
                     s.pan
                         .write_enrichment(
                             &id,
-                            "sam3",
+                            STAGE_SEGMENT,
                             "regionData",
                             &model,
                             &[],
@@ -632,8 +617,7 @@ async fn run_one(
                 // Everything the server said, verbatim, beside the record,
                 // and named on the reference as pan:modelReplyPath (goodlux,
                 // 2026-09-19) so the graph knows the file exists.
-                let record_rel = s.pan.enrichment_rel(&id, "sam3", None)?;
-                let answer_rel = format!("{record_rel}.json");
+                let answer_rel = s.pan.enrichment_file(&id, STAGE_SEGMENT, &model, "json")?;
                 let side = s.pan.layout.abs(&answer_rel);
                 if let Some(parent) = side.parent() {
                     std::fs::create_dir_all(parent)?;
@@ -641,7 +625,7 @@ async fn run_one(
                 crate::write_atomic(&side, serde_json::to_string_pretty(&raw)?.as_bytes())?;
                 s.pan.write_enrichment(
                     &id,
-                    "sam3",
+                    STAGE_SEGMENT,
                     "regionData",
                     &model,
                     &records,
@@ -701,7 +685,7 @@ fn write_perception(
         "captionData",
         model,
         std::slice::from_ref(&rec),
-        crate::RecordFile::variant(model),
+        Default::default(),
     )?;
     s.pan.set_perception(id, p)
 }

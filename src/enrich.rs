@@ -10,8 +10,8 @@
 //!   Pool's masks silently unfindable: a missing file and a never-run detector
 //!   looked identical).
 //!
-//! A data file is plain RDF/XML — the same triples the graph holds, written
-//! standalone. It opens with the REFERENCE node (the same `<pan/Enrichment/id>`
+//! A data file is N-Quads, `.nq` — the same quads the graph holds, written
+//! standalone, each naming Pan's graph in its fourth column. It opens with the REFERENCE node (the same `<pan/Enrichment/id>`
 //! the image's XMP names) linking each record with `pan:item`, and every
 //! record inside is a first-class node with its own assigned id and its own
 //! `https://repolex.ai/pan/<Class>/<id>` IRI. The image links only to the
@@ -21,7 +21,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use oxigraph::io::RdfFormat;
-use oxigraph::model::{GraphName, Literal, NamedNode, Quad, Term};
+use oxigraph::model::{Literal, NamedNode, Quad, Term};
 use std::path::Path;
 
 use crate::config::{now_local, PAN_MEDIA_NS, PAN_NS};
@@ -140,68 +140,26 @@ impl EnrichmentRef {
     }
 }
 
-/// Escape text for XML character data / attribute values.
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-/// Author a standalone data file: the reference node linked to each record
-/// with `pan:item`, then each record described in full.
+/// Author a standalone data file: N-Quads, one statement per line, every
+/// line naming Pan's graph in its fourth column (goodlux, 2026-09-18). The
+/// statements are the reference node linked to each record with `pan:item`,
+/// then each record in full — exactly the quads [`record_quads`] hands the
+/// store, serialized, so a file and the graph cannot disagree.
 ///
 /// `ref_iri` is the reference's IRI (`<pan/Enrichment/id>`), the same node the
-/// image's XMP names — so a file and the store never disagree about how a
-/// record hangs off its image: image → reference → item.
-pub fn build_data_file(ref_iri: &str, records: &[EnrichmentRecord]) -> String {
-    let mut out = String::with_capacity(512 + records.len() * 256);
-    out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    out.push_str("<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"\n");
-    out.push_str(&format!("         xmlns:pan=\"{PAN_NS}\">\n"));
+/// image's XMP names: image → reference → item.
+pub fn build_data_file(ref_iri: &str, records: &[EnrichmentRecord]) -> Result<String> {
+    quads_to_nquads(&record_quads(ref_iri, records)?)
+}
 
-    // The reference, and the records its file holds.
-    out.push_str(&format!(
-        "  <rdf:Description rdf:about=\"{}\">\n",
-        esc(ref_iri)
-    ));
-    for r in records {
-        out.push_str(&format!(
-            "    <pan:item rdf:resource=\"{}\"/>\n",
-            esc(&r.iri())
-        ));
+/// Serialize quads as N-Quads text.
+pub fn quads_to_nquads(quads: &[Quad]) -> Result<String> {
+    let mut w = oxigraph::io::RdfSerializer::from_format(RdfFormat::NQuads).for_writer(Vec::new());
+    for q in quads {
+        w.serialize_quad(q.as_ref()).context("serialize quad")?;
     }
-    out.push_str("  </rdf:Description>\n");
-
-    // Each record, in full.
-    for r in records {
-        out.push_str(&format!(
-            "  <rdf:Description rdf:about=\"{}\">\n",
-            esc(&r.iri())
-        ));
-        out.push_str(&format!(
-            "    <rdf:type rdf:resource=\"{PAN_NS}{}\"/>\n",
-            esc(&r.class)
-        ));
-        out.push_str(&format!(
-            "    <pan:id>{}</pan:id>\n",
-            esc(&crate::xmp::bracket_of_iri(&r.iri()))
-        ));
-        if !r.model.is_empty() {
-            out.push_str(&format!("    <pan:model>{}</pan:model>\n", esc(&r.model)));
-        }
-        out.push_str(&format!(
-            "    <pan:producedDate>{}</pan:producedDate>\n",
-            esc(&r.produced_date)
-        ));
-        for (local, value) in &r.fields {
-            out.push_str(&format!("    <pan:{local}>{}</pan:{local}>\n", esc(value)));
-        }
-        out.push_str("  </rdf:Description>\n");
-    }
-
-    out.push_str("</rdf:RDF>\n");
-    out
+    let bytes = w.finish().context("finish N-Quads")?;
+    String::from_utf8(bytes).context("N-Quads is UTF-8")
 }
 
 /// The quads a data file's content contributes to the graph — produced from
@@ -217,7 +175,7 @@ pub fn record_quads(ref_iri: &str, records: &[EnrichmentRecord]) -> Result<Vec<Q
             reference.clone(),
             link.clone(),
             subj.clone(),
-            GraphName::DefaultGraph,
+            crate::config::pan_graph(),
         ));
     }
     quads.extend(record_facts(records)?);
@@ -239,7 +197,7 @@ pub fn record_facts(records: &[EnrichmentRecord]) -> Result<Vec<Quad>> {
             rdf_type.clone(),
             NamedNode::new(format!("{PAN_NS}{}", r.class))
                 .map_err(|e| anyhow!("bad class IRI: {e}"))?,
-            GraphName::DefaultGraph,
+            crate::config::pan_graph(),
         ));
         quads.push(self_id_quad(&subj)?);
         if !r.model.is_empty() {
@@ -265,7 +223,7 @@ pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<
             NamedNode::new(format!("{PAN_NS}{ref_local}"))
                 .map_err(|e| anyhow!("bad ref predicate: {e}"))?,
             node.clone(),
-            GraphName::DefaultGraph,
+            crate::config::pan_graph(),
         ),
         Quad::new(
             node.clone(),
@@ -282,7 +240,7 @@ pub fn ref_quads(image_iri: &str, ref_local: &str, r: &EnrichmentRef) -> Result<
                 }
             ))
             .expect("reference class IRI"),
-            GraphName::DefaultGraph,
+            crate::config::pan_graph(),
         ),
         self_id_quad(&node)?,
         pan_quad(&node, "model", &r.model)?,
@@ -323,7 +281,7 @@ pub fn self_id_quad(node: &NamedNode) -> Result<Quad> {
         node.clone(),
         NamedNode::new(format!("{PAN_NS}id")).map_err(|e| anyhow!("pan:id IRI: {e}"))?,
         node.clone(),
-        GraphName::DefaultGraph,
+        crate::config::pan_graph(),
     ))
 }
 
@@ -333,21 +291,15 @@ fn pan_quad(subject: &NamedNode, local: &str, value: &str) -> Result<Quad> {
         NamedNode::new(format!("{PAN_NS}{local}"))
             .map_err(|e| anyhow!("bad predicate {local}: {e}"))?,
         Literal::new_simple_literal(value),
-        GraphName::DefaultGraph,
+        crate::config::pan_graph(),
     ))
 }
 
 /// Read a data file back into triples — the proof that a file IS the graph
 /// content, not a private format needing a translator.
 pub fn read_data_file(path: &Path) -> Result<Vec<(String, String, Term)>> {
-    let raw = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let store = oxigraph::store::Store::new().context("scratch store")?;
-    store
-        .load_from_reader(RdfFormat::RdfXml, raw.as_bytes())
-        .with_context(|| format!("parse {}", path.display()))?;
     let mut out = Vec::new();
-    for q in store.iter() {
-        let q = q.context("read parsed data file")?;
+    for q in read_nquads_file(path)? {
         out.push((
             q.subject
                 .to_string()
@@ -358,6 +310,15 @@ pub fn read_data_file(path: &Path) -> Result<Vec<(String, String, Term)>> {
         ));
     }
     Ok(out)
+}
+
+/// Parse an N-Quads file into quads, graph names and all.
+pub fn read_nquads_file(path: &Path) -> Result<Vec<Quad>> {
+    let raw = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    oxigraph::io::RdfParser::from_format(RdfFormat::NQuads)
+        .for_reader(raw.as_bytes())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("parse {}", path.display()))
 }
 
 #[cfg(test)]
@@ -376,10 +337,15 @@ mod tests {
     #[test]
     fn data_file_round_trips_through_a_real_rdf_parser() {
         let reference = "https://repolex.ai/pan/Enrichment/r7k2p9x4";
-        let xml = build_data_file(reference, &sample());
+        let nq = build_data_file(reference, &sample()).unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("regions.xml");
-        std::fs::write(&p, &xml).unwrap();
+        let p = dir.path().join("regions.nq");
+        std::fs::write(&p, &nq).unwrap();
+        assert!(
+            nq.lines()
+                .all(|l| l.ends_with(&format!("<{}> .", crate::config::PAN_GRAPH_IRI))),
+            "every line names Pan's graph in its fourth column:\n{nq}"
+        );
 
         let triples = read_data_file(&p).unwrap();
         let region_iri = "https://repolex.ai/pan/Region/x7q2mf";
@@ -401,8 +367,8 @@ mod tests {
     #[test]
     fn empty_fields_never_become_empty_facts() {
         // maskPath was supplied empty: it must be ABSENT, not "".
-        let xml = build_data_file("https://repolex.ai/pan/Enrichment/a", &sample());
-        assert!(!xml.contains("maskPath"), "empty field is omitted entirely");
+        let nq = build_data_file("https://repolex.ai/pan/Enrichment/a", &sample()).unwrap();
+        assert!(!nq.contains("maskPath"), "empty field is omitted entirely");
     }
 
     #[test]
@@ -412,8 +378,8 @@ mod tests {
         let recs = sample();
         let quads = record_quads(reference, &recs).unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("r.xml");
-        std::fs::write(&p, build_data_file(reference, &recs)).unwrap();
+        let p = dir.path().join("r.nq");
+        std::fs::write(&p, build_data_file(reference, &recs).unwrap()).unwrap();
         let from_file = read_data_file(&p).unwrap();
         assert_eq!(
             quads.len(),

@@ -7,7 +7,7 @@
 //! ```text
 //! <root>/                          soul repo: <repo>/.pan   bare store: the dir itself
 //!   pan.yml                        committable config (optional)
-//!   imagesets/<id>.xml             one file per curated set; committed, the graph is rebuilt from them
+//!   ImageSet/<id>.nq               one file per curated set, the folder named for the class; committed, the graph is rebuilt from them
 //!   _ignore/                       machine-local pocket
 //!     oxigraph/                    the graph — always here, never relocated
 //!     hnsw/<model>/                vector index per embedding model — always here
@@ -25,15 +25,22 @@
 //!       │   ├── source/YYYY/MM/DD/<stem>.png           THE image: always PNG, XMP inside, what every stage reads
 //!       │   ├── jpg/YYYY/MM/DD/<stem>_<longEdge>.jpg   derived JPEG renditions; the thumbnail is _512
 //!       │   └── upscale/YYYY/MM/DD/<stem>_<longEdge>.png upscaled renditions, PNG like the source; reserved, nothing writes here yet
-//!       └── data/                  MODEL OUTPUT: records about the picture
-//!           ├── caption/YYYY/MM/DD/<id>.<model>.xml
-//!           ├── pose/YYYY/MM/DD/<id>.xml (+ <id>.<model>.png overlay)
-//!           ├── sam3/YYYY/MM/DD/<id>.xml
-//!           ├── depth/YYYY/MM/DD/<id>.xml (+ <id>.<model>.png map, <id>.<model>.json sidecar)
-//!           └── vectors/<model>/<id>.xml (+ <id>.npy vector, <id>.json server answer)
+//!       └── enrichment/            MODEL OUTPUT: records about the picture
+//!           ├── caption/YYYY/MM/DD/<stem>.caption.<model>.nq
+//!           ├── segment/YYYY/MM/DD/<stem>.segment.<model>.nq (+ .json, the server's answer)
+//!           ├── pose/YYYY/MM/DD/<stem>.pose.<model>.nq (+ .png overlay)
+//!           ├── depth/YYYY/MM/DD/<stem>.depth.<model>.nq (+ .png map, .json server answer)
+//!           └── embed/YYYY/MM/DD/<stem>.embed.<model>.nq (+ .npy vector, .json server answer)
 //! ```
 //!
-//! Pixels under `img/`, records under `data/` (goodlux, 2026-09-16): one glob
+//! Every enrichment file is named `<source file name>.<stage>.<model>.<ext>`
+//! (goodlux, 2026-09-18): the name of the picture it is about, the stage that
+//! made it, the model that ran, and what kind of file it is. A record is
+//! N-Quads, `.nq`. For example
+//! `image/enrichment/caption/2026/09/17/20260917-042527-hembnsjs.caption.qwen3-8-27b.nq`.
+//!
+//! Pixels under `img/`, records under `enrichment/` (goodlux, 2026-09-16, the
+//! folder renamed from `data/` on 2026-09-18): one glob
 //! finds every picture, another every record, and neither has to know the
 //! other's folder names. A derived size is named by its long edge in the file
 //! name (`_512`, `_2048`), never by a role word in a folder — roles drift, a
@@ -76,14 +83,22 @@ impl PanLayout {
     pub const MEDIA_SUBDIR: &'static str = "media";
     /// `<kind>/img/` — the pictures and their renditions.
     pub const IMG_SUBDIR: &'static str = "img";
-    /// `<kind>/data/` — model output about the pictures.
-    pub const DATA_SUBDIR: &'static str = "data";
+    /// `<kind>/enrichment/` — model output about the pictures.
+    pub const ENRICHMENT_SUBDIR: &'static str = "enrichment";
+    /// `<root>/ImageSet/` — one file per curated set, named for the class.
+    pub const IMAGESET_SUBDIR: &'static str = "ImageSet";
+    /// The five stage folders under `enrichment/`, which are also the stage
+    /// part of every enrichment file name.
+    pub const STAGE_CAPTION: &'static str = "caption";
+    pub const STAGE_SEGMENT: &'static str = "segment";
+    pub const STAGE_POSE: &'static str = "pose";
+    pub const STAGE_DEPTH: &'static str = "depth";
+    pub const STAGE_EMBED: &'static str = "embed";
     pub const ORIGINAL_SUBDIR: &'static str = "original";
     pub const SOURCE_SUBDIR: &'static str = "source";
     pub const JPG_SUBDIR: &'static str = "jpg";
     /// `<kind>/img/upscale/` — upscaled renditions, PNG like the source.
     pub const UPSCALE_SUBDIR: &'static str = "upscale";
-    pub const VECTORS_SUBDIR: &'static str = "vectors";
 
     /// The top folder for a media type: `image`, `video`, `audio` — from the
     /// media type's major part; anything else lands under `other`.
@@ -112,10 +127,24 @@ impl PanLayout {
         format!("{media_kind}/{}/{sub}/{tail}", Self::IMG_SUBDIR)
     }
 
-    /// `<media_kind>/data/<kind>/<tail>` — a record a stage wrote about a
-    /// picture (caption, pose, sam3, vectors, …).
-    pub fn data_rel_path(media_kind: &str, kind: &str, tail: &str) -> String {
-        format!("{media_kind}/{}/{kind}/{tail}", Self::DATA_SUBDIR)
+    /// Media-root-relative path of one enrichment file:
+    /// `<kind>/enrichment/<stage>/YYYY/MM/DD/<stem>.<stage>.<model>.<ext>`.
+    /// `stem` is the source file's name without its extension; `ext` is `nq`
+    /// for a record, `json` for the server's answer, `png` for a map or an
+    /// overlay, `npy` for a vector. One rule for every file a stage writes.
+    pub fn enrichment_file_rel(
+        media_kind: &str,
+        stage: &str,
+        shard: &str,
+        stem: &str,
+        model: &str,
+        ext: &str,
+    ) -> String {
+        format!(
+            "{media_kind}/{}/{stage}/{shard}/{stem}.{stage}.{}.{ext}",
+            Self::ENRICHMENT_SUBDIR,
+            Self::file_safe_model(model)
+        )
     }
 
     /// Resolve every root. `media_root_override` is the fully-resolved media
@@ -201,67 +230,6 @@ impl PanLayout {
         Self::jpg_rel_path(media_kind, shard, stem, long_edge)
     }
 
-    /// Media-root-relative path of a vector sidecar:
-    /// `<kind>/data/vectors/<index>/<id>.npy` (index name flattened for the path).
-    pub fn vector_rel_path(media_kind: &str, index_name: &str, id: &str) -> String {
-        Self::data_rel_path(
-            media_kind,
-            Self::VECTORS_SUBDIR,
-            &format!("{}/{id}.npy", Self::file_safe_model(index_name)),
-        )
-    }
-
-    /// Absolute path of a vector sidecar.
-    pub fn vector_sidecar_path(&self, media_kind: &str, index_name: &str, id: &str) -> PathBuf {
-        self.media_root
-            .join(Self::vector_rel_path(media_kind, index_name, id))
-    }
-
-    /// Media-root-relative path of the embedding's data file — the vectorData
-    /// reference and its Embedding record, beside the `.npy` it describes:
-    /// `<kind>/data/vectors/<index>/<id>.xml`. The same shape every other
-    /// stage's record has, so the record is rebuildable from disk (issue #31).
-    pub fn vector_record_rel_path(media_kind: &str, index_name: &str, id: &str) -> String {
-        Self::data_rel_path(
-            media_kind,
-            Self::VECTORS_SUBDIR,
-            &format!("{}/{id}.xml", Self::file_safe_model(index_name)),
-        )
-    }
-
-    /// Media-root-relative path of an enricher's data file:
-    /// `<kind>/data/<stage>/YYYY/MM/DD/<id>[.<variant>].xml`. The variant is a
-    /// model id and is flattened for the path.
-    pub fn enrichment_rel_path(
-        media_kind: &str,
-        kind: &str,
-        shard: &str,
-        id: &str,
-        variant: Option<&str>,
-    ) -> String {
-        let file = match variant {
-            Some(v) => format!("{shard}/{id}.{}.xml", Self::file_safe_model(v)),
-            None => format!("{shard}/{id}.xml"),
-        };
-        Self::data_rel_path(media_kind, kind, &file)
-    }
-
-    /// Media-root-relative path of a stage's overlay picture, beside its
-    /// record: `<kind>/data/<stage>/YYYY/MM/DD/<id>.<model>.png`.
-    pub fn overlay_rel_path(
-        media_kind: &str,
-        kind: &str,
-        shard: &str,
-        id: &str,
-        model: &str,
-    ) -> String {
-        Self::data_rel_path(
-            media_kind,
-            kind,
-            &format!("{shard}/{id}.{}.png", Self::file_safe_model(model)),
-        )
-    }
-
     /// Absolute path for a media-root-relative path.
     pub fn abs(&self, rel: &str) -> PathBuf {
         self.media_root.join(rel)
@@ -330,24 +298,39 @@ mod tests {
             "an upscale is PNG, beside jpg/, named by its long edge"
         );
         assert_eq!(
-            PanLayout::vector_rel_path("image", "m", "k7m2p9x4"),
-            "image/data/vectors/m/k7m2p9x4.npy"
+            PanLayout::enrichment_file_rel(
+                "image",
+                PanLayout::STAGE_CAPTION,
+                "2026/09/17",
+                "20260917-042527-hembnsjs",
+                "qwen3-8-27b",
+                "nq"
+            ),
+            "image/enrichment/caption/2026/09/17/20260917-042527-hembnsjs.caption.qwen3-8-27b.nq",
+            "the example goodlux gave on 2026-09-18, to the letter"
         );
         assert_eq!(
-            PanLayout::vector_record_rel_path("image", "m", "k7m2p9x4"),
-            "image/data/vectors/m/k7m2p9x4.xml"
+            PanLayout::enrichment_file_rel(
+                "image",
+                PanLayout::STAGE_EMBED,
+                "2026/09/04",
+                &stem,
+                "qwen3-vl-embedding-2b",
+                "npy"
+            ),
+            "image/enrichment/embed/2026/09/04/20260904-034953-k7m2p9x4.embed.qwen3-vl-embedding-2b.npy",
+            "the vector is dated like every other stage's file"
         );
         assert_eq!(
-            PanLayout::enrichment_rel_path("image", "caption", "2026/09/04", "k7m2p9x4", Some("m")),
-            "image/data/caption/2026/09/04/k7m2p9x4.m.xml"
-        );
-        assert_eq!(
-            PanLayout::enrichment_rel_path("image", "sam3", "2026/09/04", "k7m2p9x4", None),
-            "image/data/sam3/2026/09/04/k7m2p9x4.xml"
-        );
-        assert_eq!(
-            PanLayout::overlay_rel_path("image", "pose", "2026/09/04", "k7m2p9x4", "rtmw-x-l"),
-            "image/data/pose/2026/09/04/k7m2p9x4.rtmw-x-l.png"
+            PanLayout::enrichment_file_rel(
+                "image",
+                PanLayout::STAGE_POSE,
+                "2026/09/04",
+                &stem,
+                "rtmw-x-l",
+                "png"
+            ),
+            "image/enrichment/pose/2026/09/04/20260904-034953-k7m2p9x4.pose.rtmw-x-l.png"
         );
         assert_eq!(PanLayout::media_kind("video/mp4"), "video");
     }
@@ -359,22 +342,8 @@ mod tests {
             "qwen-qwen3.8-27b"
         );
         assert_eq!(
-            PanLayout::enrichment_rel_path(
-                "image",
-                "caption",
-                "2026/09/08",
-                "ygjjmvkw",
-                Some("qwen/qwen3.8-27b")
-            ),
-            "image/data/caption/2026/09/08/ygjjmvkw.qwen-qwen3.8-27b.xml"
-        );
-        assert_eq!(
-            PanLayout::vector_rel_path("image", "org/model", "x"),
-            "image/data/vectors/org-model/x.npy"
-        );
-        assert_eq!(
-            PanLayout::overlay_rel_path("image", "pose", "2026/09/08", "x", "a/b"),
-            "image/data/pose/2026/09/08/x.a-b.png"
+            PanLayout::enrichment_file_rel("image", "caption", "2026/09/08", "s", "a/b", "nq"),
+            "image/enrichment/caption/2026/09/08/s.caption.a-b.nq"
         );
     }
 }

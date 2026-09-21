@@ -25,7 +25,7 @@
 #
 # WHERE THE DATA LIVES (Rob, 2026-08-25, unchanged): bulk model output does
 # NOT ride inside the image. Each stage writes its own DATA FILE beside the
-# media (caption/, sam3/, pose/, vectors/, thumbnail/) and the image carries
+# media (caption/, segment/, pose/, depth/, embed/) and the image carries
 # one REFERENCE per output — an pan:Enrichment record naming the model, the
 # file, how many items it holds and when it was produced. Every path is
 # declared here; nothing is found by filesystem convention.
@@ -44,11 +44,26 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.17" .
+    owl:versionInfo "0.4.18" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.18 (2026-09-21, ruled by goodlux): THE GRAPH HAS A NAME.
+#   Every fact pand writes goes into one named graph, the same IRI in every
+#   store, decided on 2026-09-18 and left without a name until now. The name
+#   is <pan/NamedGraph/pan>: https://repolex.ai/pan/NamedGraph/pan.
+#   (1) + pan:NamedGraph a owl:Class ; rdfs:subClassOf subtexture:NamedGraph —
+#       the class that IRI is an instance of. subtexture:NamedGraph arrived in
+#       the base ontology 0.2.0 the same day.
+#   (2) Record files are N-Quads, `.nq`, and carry that IRI in the fourth
+#       column. A set's file is ImageSet/<id>.nq, the folder named for the
+#       class. Comments on pan:ImageSet and the MediaSet section follow.
+#   (3) Comments only: the pan:modelPromptPath section still described two
+#       prompt folders that were replaced by one flat folder on 2026-09-19,
+#       and a comment about render requests outlived the class it described.
+#   Deliberately not done: no property on pan:NamedGraph. The node's IRI is
+#   the graph's name, and nothing reads more than that.
 # v0.4.17 (2026-09-21, ruled by goodlux): WHAT THE IMAGE IS.
 #   Pan has hashed images since the store was written and never recorded the
 #   answer. The hash lived inside tests, proving that writing metadata leaves
@@ -585,6 +600,19 @@ pan:Node a owl:Class ;
     rdfs:comment "Abstract root entity for the Pan media store; sits under subtexture:Thing." .
 
 # -----------------------------------------------------------------------------
+# THE NAMED GRAPH
+# -----------------------------------------------------------------------------
+# One instance, the same in every store: <pan/NamedGraph/pan>. Every fact pand
+# writes is in it, and every record file names it in its fourth column
+# (goodlux, 2026-09-21).
+# -----------------------------------------------------------------------------
+
+pan:NamedGraph a owl:Class ;
+    rdfs:subClassOf subtexture:NamedGraph ;
+    rdfs:label "NamedGraph" ;
+    rdfs:comment "The named graph every Pan fact is written into: <pan/NamedGraph/pan>, the same in every store. Written by pand; never authored." .
+
+# -----------------------------------------------------------------------------
 # THE STORE
 # -----------------------------------------------------------------------------
 # One per .pan directory. IRI <pan/Store/<id>> where <id> is the FIRST SIX
@@ -823,8 +851,8 @@ pan:description a owl:DatatypeProperty ;
 # The prompt that asked for an answer. On the media object (which prompt
 # described this image) and on the Caption record beside it (which prompt
 # produced THIS answer), so a second model or a second prompt is a second
-# record naming its own. Two folders hold prompts: `default/`, rewritten from
-# the pand binary at every start, and `custom/`, which Pan never writes.
+# record naming its own. Prompts live in one flat folder; the one pand ships
+# says so in its name, full-caption.default.md.
 pan:modelPromptPath a owl:DatatypeProperty ;
     rdfs:label "prompt path" ;
     rdfs:comment "The prompt file that asked for this answer, as full-caption.default.md, relative to the prompts directory. Written by pand; a changed prompt is a new file, never an edit." ;
@@ -918,7 +946,7 @@ pan:isRejected a owl:DatatypeProperty ;
 #
 # An ImageSet is a pan:MediaSet holding only pan:Image. IRI <pan/ImageSet/<id>>.
 # It is not a fact about any one image, so it has its own file on disk,
-# imagesets/<id>.xml, beside the media; the graph is rebuilt from that file.
+# ImageSet/<id>.nq, in the store; the graph is rebuilt from that file.
 # Membership is written once, on the image, with the universal: each image
 # carries pan:relatedToId <pan/ImageSet/id> in its XMP, one value per set, so
 # the fact travels with the file; the set's members are read from the images.
@@ -936,7 +964,7 @@ pan:MediaSet a owl:Class ;
 pan:ImageSet a owl:Class ;
     rdfs:subClassOf pan:MediaSet ;
     rdfs:label "ImageSet" ;
-    rdfs:comment "An unordered set of Pan media holding only pan:Image; its own file imagesets/<id>.xml on disk, from which the graph is rebuilt. Do not put an ordering on it." .
+    rdfs:comment "An unordered set of Pan media holding only pan:Image; its own file ImageSet/<id>.nq on disk, from which the graph is rebuilt. Do not put an ordering on it." .
 
 # Stub: not yet implemented — no pan:Video media class exists yet and nothing writes one.
 pan:VideoSet a owl:Class ;
@@ -1321,9 +1349,6 @@ pan:RegionData rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:requestNouns ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:requestMinConfidence ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:requestPolygonVerts ; owl:maxCardinality 1 ] .
-
-# One render request per image, with its prompt and the whole chunk it came
-# from; every setting at most once, except the modules.
 
 pan:Region rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
