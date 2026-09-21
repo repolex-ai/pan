@@ -2470,46 +2470,71 @@ impl Pan {
             }
             None => None,
         };
+        // Every flat property, built from the rosters rather than from a
+        // list written out here. The rosters are the ontology's own view of
+        // what Pan writes on a media object, so a property added to one
+        // reaches the file with no second edit (pan issue #50, 2026-09-21:
+        // the three image scores, their critiques, the prompt path and the
+        // render information never reached the XMP because this built only
+        // from SCENE_FIELDS).
+        let mut fields: Vec<(String, xmp::FieldValue)> = Vec::new();
+        fn put(fields: &mut Vec<(String, xmp::FieldValue)>, local: &str, value: String) {
+            fields.push((local.to_string(), xmp::FieldValue::Scalar(value)))
+        }
+        for local in STRUCTURAL_FIELDS {
+            // pan:createdDate is written on its own, first, by the packet.
+            if local == "createdDate" {
+                continue;
+            }
+            if let Some(v) = pan_field(local) {
+                put(&mut fields, local, v);
+            }
+        }
+        for local in PERCEPTION_FIELDS {
+            if local == "sceneObjects" {
+                continue; // an rdf:Bag, added below in roster order
+            }
+            if let Some(v) = pan_field(local) {
+                put(&mut fields, local, v);
+            }
+        }
+        if let Some(objects) = facts
+            .iter()
+            .find(|(p, _)| p == &format!("{PAN_NS}sceneObjects"))
+            .map(|(_, v)| v.clone())
+            .filter(|v| !v.is_empty())
+        {
+            fields.push(("sceneObjects".into(), xmp::FieldValue::Bag(objects)));
+        }
+        for f in settable_fields() {
+            if let Some(v) = pan_field(&f.local) {
+                put(&mut fields, &f.local, v);
+            }
+        }
+        // The references Pan itself put on the image — imageset membership,
+        // `<pan/ImageSet/id>` (goodlux, 2026-09-16). A producer's
+        // relatedToId (Horae's `<copia/Moment/id>`) stays in the producer's
+        // own block, so only pan Things are written here. One flat element
+        // per value, never a Bag: a reader turns a bracket literal on this
+        // predicate into the edge, and a Bag member would not be on the
+        // predicate.
+        let mut related: Vec<String> = facts
+            .iter()
+            .filter(|(p, _)| p == &format!("{PAN_NS}relatedToId"))
+            .flat_map(|(_, vals)| vals.iter())
+            .filter(|iri| iri.starts_with(PAN_MEDIA_NS))
+            .map(|iri| xmp::bracket_of_iri(iri))
+            .collect();
+        related.sort();
+        related.dedup();
+        for r in related {
+            put(&mut fields, "relatedToId", r);
+        }
+
         Ok(xmp::ImagePacket {
             iri: subject.as_str().to_string(),
-            media_path: pan_field("mediaPath").unwrap_or_default(),
             created_date: pan_field("createdDate").unwrap_or_default(),
-            media_type: pan_field("mediaType").unwrap_or_default(),
-            source_file: pan_field("sourceFile").unwrap_or_default(),
-            width: pan_field("width").and_then(|v| v.parse().ok()),
-            height: pan_field("height").and_then(|v| v.parse().ok()),
-            short_caption: pan_field("shortCaption"),
-            long_caption: pan_field("longCaption"),
-            scene_objects: facts
-                .iter()
-                .find(|(p, _)| p == &format!("{PAN_NS}sceneObjects"))
-                .map(|(_, v)| v.clone())
-                .unwrap_or_default(),
-            scene: SCENE_FIELDS
-                .iter()
-                .filter_map(|l| pan_field(l).map(|v| (l.to_string(), v)))
-                .collect(),
-            curation: settable_fields()
-                .iter()
-                .filter_map(|f| pan_field(&f.local).map(|v| (f.local.clone(), v)))
-                .collect(),
-            // The references Pan itself put on the image — imageset
-            // membership, `<pan/ImageSet/id>` (goodlux, 2026-09-16). A
-            // producer's relatedToId (Horae's `<copia/Moment/id>`) stays in
-            // the producer's own block, so only pan Things are written here.
-            related_to: {
-                let mut v: Vec<String> = facts
-                    .iter()
-                    .filter(|(p, _)| p == &format!("{PAN_NS}relatedToId"))
-                    .flat_map(|(_, vals)| vals.iter())
-                    .filter(|iri| iri.starts_with(PAN_MEDIA_NS))
-                    .map(|iri| xmp::bracket_of_iri(iri))
-                    .collect();
-                v.sort();
-                v.dedup();
-                v
-            },
-            enrichment_complete_date: pan_field("enrichmentCompleteDate"),
+            fields,
             thumbnail,
             enrichment,
         })

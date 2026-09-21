@@ -85,33 +85,16 @@ pub struct ThumbRef {
 pub struct ImagePacket {
     /// The media object's full IRI (`pan:id`).
     pub iri: String,
-    pub media_path: String,
+    /// `pan:createdDate`. Written on its own because the ontology requires
+    /// exactly one and the file is unreadable as a Pan image without it.
     pub created_date: String,
-    pub media_type: String,
-    /// The file this source was made from (pan:sourceFile): the original
-    /// under img/original/ when converted, the source itself otherwise.
-    pub source_file: String,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    /// One sentence (pan:shortCaption) and the detailed caption
-    /// (pan:longCaption) the caption stage wrote.
-    pub short_caption: Option<String>,
-    pub long_caption: Option<String>,
-    /// Every physical thing the caption model named (pan:sceneObjects), one
-    /// value each — an rdf:Bag in the file.
-    pub scene_objects: Vec<String>,
-    /// The scene fields, `(local name, value)`, e.g. `("sceneMood", "serene")`.
-    pub scene: Vec<(String, String)>,
-    /// Facts a person set with `pan set`, `(local name, value)`, e.g.
-    /// `("rating", "4")` — the settable fields of pan.ttl.
-    pub curation: Vec<(String, String)>,
-    /// References Pan itself put on the image, in bracket form — imageset
-    /// membership, `<pan/ImageSet/id>`, one `pan:relatedToId` element each
-    /// (pan.ttl 0.4.2). A producer's relatedToId is not here: it stays in
-    /// the producer's own Description.
-    pub related_to: Vec<String>,
-    /// Set once every configured stage has a record.
-    pub enrichment_complete_date: Option<String>,
+    /// Every other flat property of the media object, in the order it is
+    /// written: `(local name, value)`. Built from the field rosters in
+    /// `Pan::image_packet_from`, never from a list kept here — a property
+    /// added to a roster reaches the file with no edit in this file
+    /// (pan issue #50, 2026-09-21: six caption properties never reached the
+    /// XMP because this side enumerated only the scene fields).
+    pub fields: Vec<(String, FieldValue)>,
     /// The thumbnail Pan made, with the Thumbnail node's own id.
     pub thumbnail: Option<ThumbRef>,
     /// `(reference predicate local name, references)`, e.g.
@@ -212,54 +195,11 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
         "      <pan:createdDate>{}</pan:createdDate>\n",
         xml_escape(&p.created_date)
     ));
-    let mut ident: Vec<(String, FieldValue)> =
-        vec![("mediaPath".into(), FieldValue::Scalar(p.media_path.clone()))];
-    if !p.media_type.is_empty() {
-        ident.push(("mediaType".into(), FieldValue::Scalar(p.media_type.clone())));
-    }
-    if !p.source_file.is_empty() {
-        ident.push((
-            "sourceFile".into(),
-            FieldValue::Scalar(p.source_file.clone()),
-        ));
-    }
-    if let Some(w) = p.width {
-        ident.push(("width".into(), FieldValue::Scalar(w.to_string())));
-    }
-    if let Some(h) = p.height {
-        ident.push(("height".into(), FieldValue::Scalar(h.to_string())));
-    }
-    if let Some(c) = &p.short_caption {
-        ident.push(("shortCaption".into(), FieldValue::Scalar(c.clone())));
-    }
-    if let Some(c) = &p.long_caption {
-        ident.push(("longCaption".into(), FieldValue::Scalar(c.clone())));
-    }
-    if !p.scene_objects.is_empty() {
-        ident.push((
-            "sceneObjects".into(),
-            FieldValue::Bag(p.scene_objects.clone()),
-        ));
-    }
-    for (local, value) in &p.scene {
-        ident.push((local.clone(), FieldValue::Scalar(value.clone())));
-    }
-    for (local, value) in &p.curation {
-        ident.push((local.clone(), FieldValue::Scalar(value.clone())));
-    }
-    // One flat element per reference, never a Bag: the reader turns a
-    // bracket literal on this predicate into the edge, and a Bag member
-    // would not be on the predicate.
-    for r in &p.related_to {
-        ident.push(("relatedToId".into(), FieldValue::Scalar(r.clone())));
-    }
-    if let Some(r) = &p.enrichment_complete_date {
-        ident.push((
-            "enrichmentCompleteDate".into(),
-            FieldValue::Scalar(r.clone()),
-        ));
-    }
-    for (local, value) in &ident {
+    // Every other flat property, in the order the packet carries them. One
+    // element per value, never a Bag except where the caller asked for one:
+    // a reader turns a bracket literal on pan:relatedToId into the edge, and
+    // a Bag member would not sit on the predicate.
+    for (local, value) in &p.fields {
         out.push_str(&serialize_field("pan", local, value, "      "));
     }
     if let Some(t) = &p.thumbnail {
@@ -1068,9 +1008,8 @@ pub(crate) mod tests {
     fn simple_packet(id: &str, media: &str, created: &str) -> String {
         build_packet(&ImagePacket {
             iri: format!("https://repolex.ai/pan/Image/{id}"),
-            media_path: media.into(),
-            source_file: String::new(),
             created_date: created.into(),
+            fields: vec![("mediaPath".into(), FieldValue::Scalar(media.into()))],
             ..Default::default()
         })
     }
@@ -1164,10 +1103,11 @@ pub(crate) mod tests {
 
         let pan_desc = build_pan_description(&ImagePacket {
             iri: "https://repolex.ai/pan/Image/abc123xy".into(),
-            media_path: "image/2026/09/04/abc123xy.png".into(),
-            source_file: String::new(),
             created_date: "2026-09-04T01:00:00-07:00".into(),
-            curation: vec![],
+            fields: vec![(
+                "mediaPath".into(),
+                FieldValue::Scalar("image/2026/09/04/abc123xy.png".into()),
+            )],
             thumbnail: Some(ThumbRef {
                 id: "th1umb01".into(),
                 path: "image/img/jpg/2026/09/04/abc123xy_512.jpg".into(),
@@ -1433,16 +1373,29 @@ mod flat_block_tests {
     fn pan_block_is_flat_and_every_id_is_in_bracket_form() {
         let p = ImagePacket {
             iri: "https://repolex.ai/pan/Image/altocnif".into(),
-            media_path: "image/2026/09/05/20260905-000009-altocnif.png".into(),
-            source_file: String::new(),
             created_date: "2026-09-05T00:00:09-07:00".into(),
-            short_caption: Some("A wolf on a ridge at dusk.".into()),
-            long_caption: Some(
-                "A grey wolf stands on a rocky ridge, lit from the left by a low sun.".into(),
-            ),
-            scene_objects: vec!["wolf".into(), "rock".into(), "sky".into()],
-            scene: vec![("sceneMood".into(), "still".into())],
-            curation: vec![],
+            fields: vec![
+                (
+                    "mediaPath".into(),
+                    FieldValue::Scalar("image/2026/09/05/20260905-000009-altocnif.png".into()),
+                ),
+                (
+                    "shortCaption".into(),
+                    FieldValue::Scalar("A wolf on a ridge at dusk.".into()),
+                ),
+                (
+                    "longCaption".into(),
+                    FieldValue::Scalar(
+                        "A grey wolf stands on a rocky ridge, lit from the left by a low sun."
+                            .into(),
+                    ),
+                ),
+                (
+                    "sceneObjects".into(),
+                    FieldValue::Bag(vec!["wolf".into(), "rock".into(), "sky".into()]),
+                ),
+                ("sceneMood".into(), FieldValue::Scalar("still".into())),
+            ],
             thumbnail: Some(ThumbRef {
                 id: "th2umb02".into(),
                 path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(),
@@ -1462,7 +1415,6 @@ mod flat_block_tests {
                     request: None,
                 }],
             )],
-            ..Default::default()
         };
         let desc = build_pan_description(&p);
         assert!(!desc.contains("<pan:image"), "no wrapper struct: {desc}");
@@ -1570,16 +1522,25 @@ mod flat_block_tests {
         };
         let desc = build_pan_description(&ImagePacket {
             iri: "https://repolex.ai/pan/Image/altocnif".into(),
-            media_path: "image/2026/09/05/20260905-000009-altocnif.png".into(),
-            source_file: String::new(),
             created_date: "2026-09-05T00:00:09-07:00".into(),
-            media_type: "image/png".into(),
-            width: Some(1280),
-            height: Some(1920),
-            short_caption: Some("A sample caption.".into()),
-            long_caption: Some("A sample caption, at length.".into()),
-            scene_objects: vec!["wolf".into()],
-            curation: vec![],
+            fields: vec![
+                (
+                    "mediaPath".into(),
+                    FieldValue::Scalar("image/2026/09/05/20260905-000009-altocnif.png".into()),
+                ),
+                ("mediaType".into(), FieldValue::Scalar("image/png".into())),
+                ("width".into(), FieldValue::Scalar("1280".into())),
+                ("height".into(), FieldValue::Scalar("1920".into())),
+                (
+                    "shortCaption".into(),
+                    FieldValue::Scalar("A sample caption.".into()),
+                ),
+                (
+                    "longCaption".into(),
+                    FieldValue::Scalar("A sample caption, at length.".into()),
+                ),
+                ("sceneObjects".into(), FieldValue::Bag(vec!["wolf".into()])),
+            ],
             thumbnail: Some(ThumbRef {
                 id: "th3umb03".into(),
                 path: "image/img/jpg/2026/09/05/20260905-000009-altocnif_512.jpg".into(),
@@ -1599,7 +1560,6 @@ mod flat_block_tests {
                     request: None,
                 }],
             )],
-            ..Default::default()
         });
         let copia = "<rdf:Description rdf:about=\"\" xmlns:copia=\"https://repolex.ai/ontology/copia/\" xmlns:pan=\"https://repolex.ai/ontology/pan/\" xmlns:git-lex=\"https://repolex.ai/ontology/git-lex/\">\n  <copia:momentId>296pm7ygm6np-1-4</copia:momentId>\n  <copia:seed>4123927538</copia:seed>\n  <git-lex:createdDate>2026-09-04T21:31:34-07:00</git-lex:createdDate>\n  <pan:relatedToId>&lt;copia/Moment/296pm7ygm6np-1-4&gt;</pan:relatedToId>\n</rdf:Description>";
         let arrived = format!(
