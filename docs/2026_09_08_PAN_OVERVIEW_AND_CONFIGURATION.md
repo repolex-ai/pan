@@ -40,14 +40,16 @@ kind, then by what the file is.
     │   │   └── 20260907-043526-v5ha2dfd.png
     │   └── jpg/YYYY/MM/DD/                derived JPEG sizes, named by long edge; the thumbnail is _512
     │       └── 20260907-043526-v5ha2dfd_512.jpg
-    └── data/                              model output: records about the picture
-        ├── caption/YYYY/MM/DD/            one XML record per model run, the raw answer inside
+    └── enrichment/                        model output: records about the picture
+        ├── caption/YYYY/MM/DD/            one N-Quads record per model run, the raw answer inside
+        ├── segment/YYYY/MM/DD/            regions per noun (bbox, polygon, score), plus the server's answer as .json
         ├── pose/YYYY/MM/DD/               keypoints per person, plus an overlay image
-        ├── sam3/YYYY/MM/DD/               regions per prompt (bbox, polygon, score)
-        └── vectors/<model>/               one .npy per image, plus the server's answer as .json
+        ├── depth/YYYY/MM/DD/              one depth map per image, plus the server's answer as .json
+        └── embed/YYYY/MM/DD/              one .npy per image, plus the server's answer as .json
 
 <store root>/                          the store itself
 ├── pan.yml                            the store's own settings (today: its id)
+├── ImageSet/                          one N-Quads file per curated set
 └── _ignore/
     ├── oxigraph/                      the graph: every fact about every file
     └── hnsw/<model>/                  the vector index, one per embedding model
@@ -56,7 +58,7 @@ kind, then by what the file is.
 A bare store puts its media root inside `_ignore/media/`. When a media volume
 is configured, the media root is `<volume>/_pan/<first 6 chars of the store
 id>/pan/` and the folder above is what you find there. The full layout, with
-the naming rules, is in `docs/2026_09_16_PAN_FILE_LAYOUT.md`.
+the naming rules, is in `docs/2026_09_21_PAN_FILE_LAYOUT.md`.
 
 The source image is always PNG. A JPEG, WebP, GIF or TIFF that arrives is
 converted once, and the bytes as delivered are kept under `img/original/`.
@@ -146,7 +148,7 @@ models:
     enabled: true
   embed:  { url: ..., model: qwen3-vl-embedding-2b, concurrency: 2 }
   pose:   { url: ..., model: rtmw-x-l,  concurrency: 2 }
-  sam3:   { url: ..., model: facebook/sam3, concurrency: 2, enabled: false }
+  segment: { url: ..., model: sam3, concurrency: 2, enabled: false }
 ```
 
 Every stage is optional. A missing config file means one store at `~/.pan`

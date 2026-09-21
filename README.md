@@ -123,7 +123,7 @@ models:                                  # External perception model stages (opt
 2. **Disk Storage:** Image bytes land in the store path, and Pan appends its own identity and enrichment block to the XMP packet.
 3. **Thumbnail Generation:** a 512 px long-edge JPEG rendition is written under `img/jpg/` for fast preview.
 4. **Atomic Graph Commit:** Statements and file records are committed to Oxigraph in a single atomic transaction.
-5. **Background Stage Ladder:** `pand` queries the graph for images lacking configured model outputs, invokes models via bounded HTTP worker pools, and saves vectors (`.npy`) and overlays (`.xml`/`.png`).
+5. **Background Stage Ladder:** `pand` queries the graph for images lacking configured model outputs, invokes models via bounded HTTP worker pools, and saves each result as an N-Quads record (`.nq`) with its vector (`.npy`), map or overlay (`.png`) beside it.
 
 ---
 
@@ -132,6 +132,7 @@ models:                                  # External perception model stages (opt
 ```
 <root>/                                       # e.g., ~/projects/my-project/.pan or ~/.pan
 ├── pan.yml                                   # Storage ID (for standalone stores)
+├── ImageSet/<id>.nq                          # one file per curated set, committed
 └── _ignore/                                  # Gitignored runtime data
     ├── oxigraph/                             # Oxigraph embedded RDF database
     ├── hnsw/                                 # Vector search indexes
@@ -142,9 +143,10 @@ models:                                  # External perception model stages (opt
             │   ├── original/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.jpg   # the arrival, when it was not PNG
             │   ├── source/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.png     # THE image: always PNG, XMP inside
             │   └── jpg/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>_512.jpg    # derived JPEG sizes, named by long edge
-            └── data/                         # model output
-                ├── caption/YYYY/MM/DD/<id>.<model>.xml
-                ├── pose/YYYY/MM/DD/<id>.xml
-                ├── sam3/YYYY/MM/DD/<id>.xml
-                └── vectors/<model>/<id>.npy
+            └── enrichment/                   # model output, every file <source file name>.<stage>.<model>.<ext>
+                ├── caption/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.caption.<model>.nq
+                ├── segment/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.segment.<model>.nq
+                ├── pose/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.pose.<model>.nq
+                ├── depth/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.depth.<model>.nq
+                └── embed/YYYY/MM/DD/YYYYMMDD-HHMMSS-<id>.embed.<model>.nq
 ```

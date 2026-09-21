@@ -99,6 +99,25 @@ fn one_embed_run_lands_npy_json_record_file_graph_and_xmp() {
         "the server's own model id is kept verbatim in the .json"
     );
     assert_eq!(side["provider"], "salad");
+    // The server's answer is named on the reference (pan:modelReplyPath), so
+    // the graph knows the file exists and a sweep can tell it from litter.
+    let named = match store
+        .query(&format!(
+            "SELECT ?r WHERE {{ <{}> pan:vectorData ?d . ?d pan:modelReplyPath ?r }}",
+            put.iri
+        ))
+        .unwrap()
+    {
+        pan::QueryResults::Solutions(sols) => sols
+            .filter_map(|s| s.ok())
+            .filter_map(|s| match s.get("r") {
+                Some(oxigraph::model::Term::Literal(l)) => Some(l.value().to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    assert_eq!(named, vec![format!("{base}.json")]);
 
     // The data file has the declared shape: reference → pan:item → record.
     let text = std::fs::read_to_string(&record_abs).unwrap();

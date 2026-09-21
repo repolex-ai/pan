@@ -77,6 +77,25 @@ fn one_depth_run_lands_map_sidecar_record_graph_and_xmp() {
     let side: serde_json::Value =
         serde_json::from_slice(&std::fs::read(map_abs.with_extension("json")).unwrap()).unwrap();
     assert_eq!(side["provider"], "salad");
+    // The server's answer is named on the reference (pan:modelReplyPath), so
+    // the graph knows the file exists and a sweep can tell it from litter.
+    let named = match store
+        .query(&format!(
+            "SELECT ?r WHERE {{ <{}> pan:depthData ?d . ?d pan:modelReplyPath ?r }}",
+            put.iri
+        ))
+        .unwrap()
+    {
+        pan::QueryResults::Solutions(sols) => sols
+            .filter_map(|s| s.ok())
+            .filter_map(|s| match s.get("r") {
+                Some(oxigraph::model::Term::Literal(l)) => Some(l.value().to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    assert_eq!(named, vec![map_rel.replace(".png", ".json")]);
     assert_eq!(side["depth_png"], map_rel);
     assert!(
         side.get("depth_png_b64").is_none(),
