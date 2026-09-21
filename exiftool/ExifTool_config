@@ -67,6 +67,7 @@
     modelReplyPath => { },
     overlayPath => { },
     path => { },
+    pixelSha256Hash => { },
     polygon => { },
     precision => { },
     primaryGraph => { },

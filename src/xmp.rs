@@ -15,8 +15,8 @@
 //! ([`parse_packet`]).
 //!
 //! NON-NEGOTIABLE INVARIANT (ported with its test): stamping metadata into a
-//! PNG preserves the PIXELS exactly, so [`pixel_hash`] before == after.
-//! (`pixel_hash` is a pixel-equality instrument for pinning this invariant —
+//! PNG preserves the PIXELS exactly, so [`pixel_sha256`] before == after.
+//! (`pixel_sha256` hashes the decoded raster as the file has it —
 //! it is NOT an identity; identity is the assigned panId.)
 
 use anyhow::{anyhow, Context, Result};
@@ -238,7 +238,7 @@ pub fn build_pan_description(p: &ImagePacket) -> String {
 /// chunk. Non-XMP text chunks are preserved best-effort.
 ///
 /// CRITICAL for the stamp invariant: re-encoding preserves the PIXELS
-/// exactly, so `pixel_hash(output) == pixel_hash(input)` — a metadata edit
+/// exactly, so `pixel_sha256(output) == pixel_sha256(input)` — a metadata edit
 /// never touches the image. (The FILE bytes DO change.)
 pub fn write_packet_into_png_bytes(png_bytes: &[u8], packet: &str) -> Result<Vec<u8>> {
     // Chunk surgery, not re-encoding: every chunk the producer wrote (IDAT,
@@ -913,85 +913,42 @@ fn obj_term(t: &Term) -> ObjTerm {
     }
 }
 
-// ── Pixel hash — the stamp-invariant instrument (lifted verbatim from Pool) ──
+// ── Pixel hash ─────────────────────────────────────────────────────────────
 
-/// Compute a hash of a PNG's PIXELS, stable across XMP/metadata edits.
+/// `sha256` of a PNG's pixels, exactly as the file has them.
 ///
-/// NOT an identity — Pan's identity is the assigned panId. This exists to PIN
-/// the stamp invariant (stamping never touches the image): equal hash before
-/// and after = pixels untouched.
+/// The whole decoded raster goes into the hash: every channel including
+/// alpha, and both bytes of a 16-bit sample. Two files hash the same when
+/// their pixels are the same and differ when any pixel differs, so this
+/// recognises the same picture arriving again under another name, and it
+/// proves a metadata write never touched the image.
 ///
-/// CANONICAL CROSS-REPO DEFINITION (matches Pool + OpenIris byte-for-byte):
-/// `sha256` of the decoded pixel buffer **normalized to 8-bit RGB (no alpha),
-/// row-major top-to-bottom, 3 bytes/pixel in R,G,B order** — exactly PIL's
-/// `Image.open(png).convert("RGB").tobytes()`. Palette → expanded; grayscale →
-/// replicated to R=G=B; alpha → stripped; 16-bit → high byte (`>>8`).
-pub fn pixel_hash(png_bytes: &[u8]) -> Result<String> {
+/// The one thing that is resolved rather than hashed raw is a palette: an
+/// indexed PNG is expanded to its real colours first, along with sub-8-bit
+/// greyscale and a tRNS chunk, because the same picture saved with a
+/// different palette is still the same picture. Nothing is dropped and
+/// nothing is reduced.
+///
+/// NOT an identity. Identity is `pan:id`, assigned once at ingest.
+///
+/// Recorded in the graph and in the file as `pan:pixelSha256Hash`
+/// (pan.ttl 0.4.17, goodlux 2026-09-21).
+pub fn pixel_sha256(png_bytes: &[u8]) -> Result<String> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
-    // EXPAND: palette → RGB, sub-8-bit grayscale/tRNS → 8-bit. Leaves 16-bit
-    // as 16-bit and alpha as-is; we handle those two below to match PIL.
+    // EXPAND resolves a palette to real colours, widens sub-8-bit greyscale
+    // to 8-bit, and turns a tRNS chunk into a real alpha channel. It leaves
+    // 16-bit at 16-bit and alpha in place, which is what we want.
     decoder.set_transformations(png::Transformations::EXPAND);
-    let mut reader = decoder.read_info().context("pixel-hash: decode PNG info")?;
+    let mut reader = decoder.read_info().context("pixel hash: decode PNG info")?;
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let frame = reader
         .next_frame(&mut buf)
-        .context("pixel-hash: read PNG frame")?;
-    let data = &buf[..frame.buffer_size()];
-
-    let (color, depth) = (frame.color_type, frame.bit_depth);
-    let channels = match color {
-        png::ColorType::Grayscale => 1,
-        png::ColorType::GrayscaleAlpha => 2,
-        png::ColorType::Rgb => 3,
-        png::ColorType::Rgba => 4,
-        png::ColorType::Indexed => {
-            return Err(anyhow!("pixel-hash: unexpected Indexed color after EXPAND"))
-        }
-    };
-    let bytes_per_sample = if depth == png::BitDepth::Sixteen {
-        2
-    } else {
-        1
-    };
-    let stride = channels * bytes_per_sample;
-    if stride == 0 || data.len() % stride != 0 {
-        return Err(anyhow!(
-            "pixel-hash: buffer {} not divisible by stride {} (color={:?} depth={:?})",
-            data.len(),
-            stride,
-            color,
-            depth
-        ));
+        .context("pixel hash: read PNG frame")?;
+    if frame.color_type == png::ColorType::Indexed {
+        return Err(anyhow!("pixel hash: still indexed after expansion"));
     }
-
-    // Read one 8-bit sample: for 16-bit take the HIGH byte (PIL's >>8).
-    let sample8 = |px: &[u8], ch: usize| -> u8 {
-        if bytes_per_sample == 2 {
-            px[ch * 2] // big-endian high byte
-        } else {
-            px[ch]
-        }
-    };
-
-    let mut rgb: Vec<u8> = Vec::with_capacity(data.len() / stride * 3);
-    for px in data.chunks_exact(stride) {
-        let (r, g, b) = match color {
-            png::ColorType::Grayscale | png::ColorType::GrayscaleAlpha => {
-                let v = sample8(px, 0);
-                (v, v, v)
-            }
-            png::ColorType::Rgb | png::ColorType::Rgba => {
-                (sample8(px, 0), sample8(px, 1), sample8(px, 2))
-            }
-            png::ColorType::Indexed => unreachable!(),
-        };
-        rgb.push(r);
-        rgb.push(g);
-        rgb.push(b);
-    }
-
     let mut h = Sha256::new();
-    h.update(&rgb);
+    h.update(&buf[..frame.buffer_size()]);
     Ok(format!("sha256:{:x}", h.finalize()))
 }
 
@@ -1035,10 +992,10 @@ pub(crate) mod tests {
     fn stamp_preserves_pixels() {
         // THE invariant: a metadata edit never touches the image.
         let png = make_test_png(16, 16, 7);
-        let hash_before = pixel_hash(&png).unwrap();
+        let hash_before = pixel_sha256(&png).unwrap();
         let packet = simple_packet("abc123xy", "media/image/x.png", "2026-07-15T00:00:00Z");
         let stamped = write_packet_into_png_bytes(&png, &packet).unwrap();
-        let hash_after = pixel_hash(&stamped).unwrap();
+        let hash_after = pixel_sha256(&stamped).unwrap();
         assert_eq!(hash_before, hash_after, "stamping changed the pixels");
         assert_ne!(png, stamped, "file bytes should differ (packet embedded)");
     }

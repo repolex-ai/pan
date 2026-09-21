@@ -441,10 +441,11 @@ pub const RENDER_REQUEST_CHUNK: &str = "parameters";
 
 /// Fields Pan itself writes about a media object at ingest or at stage
 /// completion. A person may never set these by hand.
-pub const STRUCTURAL_FIELDS: [&str; 8] = [
+pub const STRUCTURAL_FIELDS: [&str; 9] = [
     "mediaPath",
     "mediaType",
     "sourceFile",
+    "pixelSha256Hash",
     "width",
     "height",
     "createdDate",
@@ -1190,6 +1191,23 @@ impl Pan {
             self.quad(&subject, "mediaType", &media_type),
             self.quad(&subject, "sourceFile", &source_file),
         ];
+
+        // What the picture is, as opposed to which file holds it: the
+        // sha256 of the decoded pixels normalised to 8-bit RGB (pan.ttl
+        // 0.4.17, goodlux 2026-09-21). The same definition Pool and OpenIris
+        // use, so one picture hashes the same in all three. Not an identity
+        // — that is pan:id — and not a gate: a file Pan cannot decode is
+        // still stored, it simply carries no hash.
+        if png {
+            match xmp::pixel_sha256(bytes) {
+                Ok(h) => quads.push(self.quad(&subject, "pixelSha256Hash", &h)),
+                Err(e) => tracing::warn!(
+                    store = %self.store_id,
+                    id = %id,
+                    "pixel sha256 not computed, image stored without one: {e:#}"
+                ),
+            }
+        }
 
         // Whatever XMP the file arrived with is THE metadata (Rob, 2026-09-04:
         // a producer writes its block into the image before handing it over;

@@ -1,12 +1,15 @@
-//! Pixel-hash cross-check against the canonical fixtures (carried from Pool).
+//! `pixel_sha256` hashes the pixels as the file has them, and these fixtures
+//! prove it drops nothing.
 //!
-//! `pixel_hash` pins the stamp invariant (stamping never touches the image).
-//! Two repos independently computing "the pixel hash" is a byte-drift
-//! landmine; these fixtures pin Pan's png-crate path to the eye's PIL path
-//! byte-for-byte (PIL 12.2.0). See tests/fixtures/pixelhash/MANIFEST.json
-//! (the manifest predates the CID→panId rename; its "cid" keys mean this hash).
+//! The three files are the same picture saved three ways: 8-bit RGB, the same
+//! with an alpha channel, and the same at 16 bits. They used to be required to
+//! hash IDENTICALLY, because the hash normalised everything down to 8-bit RGB
+//! to match another program byte for byte. goodlux ruled on 2026-09-21 that
+//! matching another program is not a requirement and the hash is of the
+//! pixels as they are, so the three must now hash DIFFERENTLY: alpha is real
+//! and the low byte of a 16-bit sample is real.
 
-use pan::xmp::pixel_hash;
+use pan::xmp::pixel_sha256;
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -16,21 +19,26 @@ fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(&p).unwrap_or_else(|e| panic!("read fixture {}: {e}", p.display()))
 }
 
-const EXPECTED: &str = "sha256:4570a542a91fe28e9a05cb49edf4123d2b71dea607085310cb38df196d018391";
-
 #[test]
-fn rgb8_matches_canonical_hash() {
-    assert_eq!(pixel_hash(&fixture("rgb8.png")).unwrap(), EXPECTED);
+fn alpha_and_bit_depth_are_hashed_not_discarded() {
+    let rgb8 = pixel_sha256(&fixture("rgb8.png")).unwrap();
+    let rgba8 = pixel_sha256(&fixture("rgba8.png")).unwrap();
+    let rgb16 = pixel_sha256(&fixture("rgb16.png")).unwrap();
+    assert_ne!(rgb8, rgba8, "an alpha channel must change the hash");
+    assert_ne!(rgb8, rgb16, "sixteen-bit samples must change the hash");
+    assert_ne!(rgba8, rgb16, "these are three different rasters");
+    for h in [&rgb8, &rgba8, &rgb16] {
+        assert!(
+            h.starts_with("sha256:"),
+            "hash is labelled with its algorithm: {h}"
+        );
+        assert_eq!(h.len(), "sha256:".len() + 64, "full sha256 digest: {h}");
+    }
 }
 
 #[test]
-fn rgba8_alpha_is_stripped_not_hashed() {
-    // LOAD-BEARING: rgba8 must equal rgb8 — if they differ, alpha leaked in.
-    assert_eq!(pixel_hash(&fixture("rgba8.png")).unwrap(), EXPECTED);
-}
-
-#[test]
-fn rgb16_downsamples_to_same_hash() {
-    // Exercises the 16→8 high-byte downsample (PIL's >>8).
-    assert_eq!(pixel_hash(&fixture("rgb16.png")).unwrap(), EXPECTED);
+fn the_same_bytes_hash_the_same_every_time() {
+    let a = pixel_sha256(&fixture("rgb8.png")).unwrap();
+    let b = pixel_sha256(&fixture("rgb8.png")).unwrap();
+    assert_eq!(a, b);
 }
