@@ -60,6 +60,7 @@
     localGraph => { },
     longCaption => { },
     maskPath => { },
+    mediaCreatedDate => { },
     mediaPath => { },
     mediaRoot => { },
     mediaType => { },

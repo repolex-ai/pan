@@ -441,7 +441,7 @@ pub const RENDER_REQUEST_CHUNK: &str = "parameters";
 
 /// Fields Pan itself writes about a media object at ingest or at stage
 /// completion. A person may never set these by hand.
-pub const STRUCTURAL_FIELDS: [&str; 9] = [
+pub const STRUCTURAL_FIELDS: [&str; 10] = [
     "mediaPath",
     "mediaType",
     "sourceFile",
@@ -449,6 +449,9 @@ pub const STRUCTURAL_FIELDS: [&str; 9] = [
     "width",
     "height",
     "createdDate",
+    // When the media itself was made, from its own metadata (pan.ttl
+    // 0.4.19, goodlux 2026-09-22). Recorded at ingest, never set by hand.
+    "mediaCreatedDate",
     "enrichmentCompleteDate",
     "renderRequestInformation",
 ];

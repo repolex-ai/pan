@@ -44,11 +44,23 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.18" .
+    owl:versionInfo "0.4.19" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.19 (2026-09-22, ruled by goodlux): WHEN THE MEDIA WAS MADE.
+#   pan:createdDate is when the Pan record was created. It has never meant
+#   when the media itself was made, and until now nothing in Pan held that.
+#   For media arriving from Horae the two are seconds apart; for the Pool
+#   corpus being migrated they are months apart.
+#   (1) + pan:mediaCreatedDate on pan:Media, at most one — when the media was
+#       made, as its own metadata says: a render time, a capture time. Image
+#       inherits it. Absent when the file carries no such date.
+#   (2) Comment only: pan:createdDate now says what it is not.
+#   Deliberately not done: no property for a previous store's identifier. The
+#   Pool content id does not come across; the migration keeps a mapping of
+#   where each file came from and where it landed, outside the graph.
 # v0.4.18 (2026-09-21, ruled by goodlux): THE GRAPH HAS A NAME.
 #   Every fact pand writes goes into one named graph, the same IRI in every
 #   store, decided on 2026-09-18 and left without a name until now. The name
@@ -835,8 +847,16 @@ pan:id a owl:ObjectProperty ;
 pan:createdDate a owl:DatatypeProperty ;
     owl:equivalentProperty subtexture:createdDate , git-lex:createdDate ;
     rdfs:label "created date" ;
-    rdfs:comment "When Pan created this record, RFC3339 system local time; the file spelling of git-lex:createdDate. Written by pand, never by hand." ;
+    rdfs:comment "When the Pan record was created, RFC3339 system local time; the file spelling of git-lex:createdDate. Not when the media was made; that is pan:mediaCreatedDate." ;
     rdfs:domain pan:Node ;
+    rdfs:range xsd:dateTime .
+
+# When the media itself was made, as distinct from when Pan recorded it. Read
+# from the media's own metadata: a render time, a capture time.
+pan:mediaCreatedDate a owl:DatatypeProperty ;
+    rdfs:label "media created date" ;
+    rdfs:comment "When the media was made, as its own metadata says: a render time, a capture time. RFC3339 system local time. Absent when the file carries no such date." ;
+    rdfs:domain pan:Media ;
     rdfs:range xsd:dateTime .
 
 # The file spelling of git-lex:description (same pattern as pan:id): a Pan
@@ -1301,6 +1321,7 @@ pan:Media rdfs:subClassOf
     # When Pan created this record and its id (RFC3339, system local time):
     # pan:createdDate, the universal via owl:equivalentProperty.
     [ a owl:Restriction ; owl:onProperty pan:createdDate ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:mediaCreatedDate ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:enrichmentCompleteDate ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
