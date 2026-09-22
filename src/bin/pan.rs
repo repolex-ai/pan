@@ -6,7 +6,7 @@
 //!   pan state <pan/Image/id>         → what has been done to it (per stage)
 //!   pan query [<user-id>] "<sparql>" → W3C results JSON
 //!   pan stores                       → the stores this machine's pand manages
-//!   pan set   <pan/Image/id> key=value … → write facts a person owns (rating=4 isPicked=true)
+//!   pan set   <pan/Image/id> key=value … → write any fact pan.ttl declares on an image (rating=4 isPicked=true)
 //!   pan unset <pan/Image/id> key …       → remove them
 //!   pan imageset create [<user-id>] "<description>" → <pan/ImageSet/id>
 //!   pan imageset list   [<user-id>]                 → every set in the store

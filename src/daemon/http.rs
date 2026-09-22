@@ -209,7 +209,7 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("search where-clause")
         || msg.contains("XMP")
         || msg.contains("ambiguous")
-        || msg.contains("not a property a person may set")
+        || msg.contains("not a property pan.ttl declares on an image")
         || msg.contains("nothing to set")
         || msg.contains("nothing to unset")
         || msg.contains("imageset file")

@@ -114,7 +114,7 @@ fn refusals_name_the_problem_and_write_nothing() {
         .unwrap_err()
         .to_string();
     assert!(
-        e.contains("vibe") && e.contains("settable: isPicked, isRejected, rating"),
+        e.contains("vibe") && e.contains("declared: ") && e.contains("rating"),
         "{e}"
     );
 
@@ -124,35 +124,52 @@ fn refusals_name_the_problem_and_write_nothing() {
         .to_string();
     assert!(e.contains("0 to 5"), "{e}");
 
-    let e = store
+    // A field the caption stage writes may be overwritten by hand: pan set
+    // accepts every property pan.ttl declares on an image (goodlux,
+    // 2026-09-22). A name the ontology does not declare is still refused.
+    store
         .set_fields(&id, &[("shortCaption".into(), serde_json::json!("mine"))])
-        .unwrap_err()
-        .to_string();
-    assert!(
-        e.contains("shortCaption") && e.contains("not a property a person may set"),
-        "{e}"
-    );
-
-    // One bad key refuses the whole request: the good key was not written.
+        .unwrap();
     let e = store
         .set_fields(
             &id,
-            &[
-                ("isRejected".into(), serde_json::json!(true)),
-                ("mediaPath".into(), serde_json::json!("x")),
-            ],
+            &[("favouriteColour".into(), serde_json::json!("teal"))],
         )
         .unwrap_err()
         .to_string();
-    assert!(e.contains("mediaPath"), "{e}");
     assert!(
-        pan_fact(&store, &id, "isRejected").is_empty(),
-        "nothing written when one key is refused"
+        e.contains("favouriteColour") && e.contains("not a property pan.ttl declares"),
+        "{e}"
     );
 
+    // A path that names no file cannot be written into the image, so the
+    // whole request is undone: the good key was not written either, and
+    // the old path still stands.
+    let old_path = pan_fact(&store, &id, "mediaPath");
+    let e = format!(
+        "{:#}",
+        store
+            .set_fields(
+                &id,
+                &[
+                    ("isRejected".into(), serde_json::json!(true)),
+                    ("mediaPath".into(), serde_json::json!("x")),
+                ],
+            )
+            .unwrap_err()
+    );
+    assert!(e.contains("nothing was changed"), "{e}");
+    assert!(
+        pan_fact(&store, &id, "isRejected").is_empty(),
+        "nothing written when the rewrite fails"
+    );
+    assert_eq!(pan_fact(&store, &id, "mediaPath"), old_path);
+
+    // Any declared field may be unset; an undeclared name is refused.
+    store.unset_fields(&id, &["longCaption".into()]).unwrap();
     let e = store
-        .unset_fields(&id, &["longCaption".into()])
+        .unset_fields(&id, &["vibe".into()])
         .unwrap_err()
         .to_string();
-    assert!(e.contains("longCaption"), "{e}");
+    assert!(e.contains("vibe"), "{e}");
 }

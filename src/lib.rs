@@ -456,7 +456,7 @@ pub const STRUCTURAL_FIELDS: [&str; 10] = [
     "renderRequestInformation",
 ];
 
-/// One property a person may set on a media object: its local name and the
+/// One property pan.ttl declares on a media object: its local name and the
 /// datatype the ontology declares for it (`xsd:integer`, `xsd:boolean`,
 /// `xsd:string`, `xsd:dateTime`, `xsd:decimal`, or a bounded datatype such
 /// as `pan:RatingValue`).
@@ -466,12 +466,13 @@ pub struct SettableField {
     pub range: String,
 }
 
-/// The properties a person may set with `pan set`, read from the compiled
-/// ontology: every `owl:DatatypeProperty` whose domain is pan:Media or
-/// pan:Image, minus the fields the caption stage owns (PERCEPTION_FIELDS)
-/// and the fields Pan itself writes (STRUCTURAL_FIELDS). Today that is
-/// rating, isPicked, isRejected (pan.ttl 0.3.8, goodlux 2026-09-16). A new
-/// settable field is declared in pan.ttl, never added here.
+/// The properties `pan set` accepts, read from the compiled ontology: every
+/// `owl:DatatypeProperty` whose domain is pan:Media or pan:Image. That
+/// includes the fields the caption stage writes and the fields pand writes
+/// at ingest: a person may overwrite any declared fact (goodlux, 2026-09-22;
+/// the previous store refused most of them and was the harder to use for
+/// it). What is checked is the value, against the declared type. A new
+/// field is declared in pan.ttl, never added here.
 pub fn settable_fields() -> Vec<SettableField> {
     let mut out = Vec::new();
     for chunk in PAN_ONTOLOGY_TTL.split("\npan:").skip(1) {
@@ -496,9 +497,6 @@ pub fn settable_fields() -> Vec<SettableField> {
         };
         let domain = token_after("rdfs:domain ").unwrap_or("");
         if domain != "pan:Media" && domain != "pan:Image" {
-            continue;
-        }
-        if PERCEPTION_FIELDS.contains(&local) || STRUCTURAL_FIELDS.contains(&local) {
             continue;
         }
         out.push(SettableField {
@@ -605,7 +603,7 @@ fn literal_for(
 fn not_settable(local: &str) -> anyhow::Error {
     let names: Vec<String> = settable_fields().into_iter().map(|f| f.local).collect();
     anyhow!(
-        "{local} is not a property a person may set; settable: {}",
+        "{local} is not a property pan.ttl declares on an image; declared: {}",
         names.join(", ")
     )
 }
@@ -803,13 +801,32 @@ mod perception_tests {
     }
 
     #[test]
-    fn settable_fields_are_exactly_the_curation_fields() {
+    fn settable_fields_are_every_declared_image_property() {
+        // goodlux, 2026-09-22: pan set accepts every property pan.ttl declares
+        // on an image, the curation fields and the ones pand or the caption
+        // stage write alike. Only the value is checked.
         let names: Vec<String> = settable_fields().into_iter().map(|f| f.local).collect();
-        assert_eq!(
-            names,
-            ["isPicked", "isRejected", "rating"],
-            "pan.ttl declares a new person-settable field: extend pan set's docs and this test"
-        );
+        for expected in [
+            "isPicked",
+            "isRejected",
+            "rating",
+            "shortCaption",
+            "mediaCreatedDate",
+            "mediaPath",
+        ] {
+            assert!(
+                names.contains(&expected.to_string()),
+                "{expected} missing from {names:?}"
+            );
+        }
+        // Properties declared on pan:Node rather than on an image are not in
+        // the list: model, path, producedDate, modelPromptPath.
+        for node_only in ["model", "path", "producedDate", "modelPromptPath"] {
+            assert!(
+                !names.contains(&node_only.to_string()),
+                "{node_only} is on pan:Node, not on an image"
+            );
+        }
         let rating = settable_fields()
             .into_iter()
             .find(|f| f.local == "rating")
@@ -2011,6 +2028,8 @@ impl Pan {
             .store
             .start_transaction()
             .context("start transaction")?;
+        let mut previous: Vec<Quad> = Vec::new();
+        let mut written: Vec<Quad> = Vec::with_capacity(literals.len());
         for (local, lit) in &literals {
             let old: Vec<Quad> = self
                 .store
@@ -2025,23 +2044,40 @@ impl Pan {
             for q in &old {
                 t.remove(q.as_ref());
             }
-            t.insert(
-                Quad::new(
-                    subject.clone(),
-                    pan_iri(local),
-                    lit.clone(),
-                    crate::config::pan_graph(),
-                )
-                .as_ref(),
+            let new = Quad::new(
+                subject.clone(),
+                pan_iri(local),
+                lit.clone(),
+                crate::config::pan_graph(),
             );
+            t.insert(new.as_ref());
+            previous.extend(old);
+            written.push(new);
         }
         t.commit().context("commit set")?;
-        self.restamp(id)
+        // The file is rewritten from the graph. If that fails — a mediaPath
+        // set to a file that is not there, a file that will not open — the
+        // graph goes back to what it said, so the two never disagree.
+        if let Err(e) = self.restamp(id) {
+            let mut t = self
+                .store
+                .start_transaction()
+                .context("start transaction")?;
+            for q in &written {
+                t.remove(q.as_ref());
+            }
+            for q in &previous {
+                t.insert(q.as_ref());
+            }
+            t.commit().context("restore after failed rewrite")?;
+            return Err(e.context("nothing was changed: the file could not be rewritten"));
+        }
+        Ok(())
     }
 
-    /// Remove facts a person set. Only settable fields may be unset; the
-    /// caption stage's fields and Pan's own are refused the same way `set`
-    /// refuses them. Unsetting a field that has no value is not an error.
+    /// Remove facts from a media object. Any property pan.ttl declares on an
+    /// image may be unset, the same set `set` accepts. Unsetting a field
+    /// that has no value is not an error.
     pub fn unset_fields(&self, id: &str, locals: &[String]) -> Result<()> {
         let Some(subject) = self.subject_for(id)? else {
             return Err(anyhow!("id not found: {id}"));
@@ -2585,9 +2621,16 @@ impl Pan {
         {
             fields.push(("sceneObjects".into(), xmp::FieldValue::Bag(objects)));
         }
+        // The rest of what pan.ttl declares on an image: the curation
+        // fields, and anything declared later. The two rosters above were
+        // placed already and are skipped here.
         for f in settable_fields() {
-            if let Some(v) = pan_field(&f.local) {
-                put(&mut fields, &f.local, v);
+            let local = f.local.as_str();
+            if STRUCTURAL_FIELDS.contains(&local) || PERCEPTION_FIELDS.contains(&local) {
+                continue;
+            }
+            if let Some(v) = pan_field(local) {
+                put(&mut fields, local, v);
             }
         }
         // The references Pan itself put on the image — imageset membership,

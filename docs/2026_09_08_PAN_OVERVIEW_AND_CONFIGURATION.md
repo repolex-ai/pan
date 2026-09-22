@@ -221,13 +221,15 @@ pan unset '<pan/Image/k7m2p9x4>' rating
 
 Setting overwrites: an image has at most one of each. Over HTTP the same
 request is `POST /media/{id}/set` with one JSON object keyed by property name,
-and `POST /media/{id}/unset` with a list of names. pand checks every key
-against pan.ttl before writing anything: a name that is not one of the three
-is refused with the list of what is allowed, and a value outside the declared
+and `POST /media/{id}/unset` with a list of names. The three above are the
+usual ones, but any property pan.ttl declares on an image can be set the
+same way, including the captions and scene fields the caption stage writes
+and the facts pand records at ingest. pand checks every key against pan.ttl
+before writing anything: a name the ontology does not declare is refused
+with the list of what it does declare, and a value outside the declared
 range (a rating of 6, a pick of `yes`) is refused naming the expected type.
-The fields the caption stage owns and the fields Pan writes itself cannot be
-set by hand. A new person-settable field is declared in pan.ttl first; the
-command reads the list from the ontology.
+A new field is declared in pan.ttl first; the command reads the list from
+the ontology.
 
 ### How a model answer becomes metadata
 

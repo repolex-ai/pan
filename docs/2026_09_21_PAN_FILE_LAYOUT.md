@@ -75,8 +75,7 @@ finds all of either, and neither side needs to know the other's folder names.
   are the same as the decoder saw, verified by the conversion's own test.
   The image carries `pan:sourceFile`, the path of the file it was made from:
   the `img/original/` file when the arrival was converted, its own path when
-  the arrival was already PNG. It is always present and pand writes it; it
-  cannot be set by hand.
+  the arrival was already PNG. It is always present and pand writes it.
 - **`img/jpg/`** — derived JPEG renditions. Today there is one, the 512 px
   thumbnail. Other sizes go in the same folder with their own suffix.
 - **`img/upscale/`** — upscaled renditions, named by their long edge like
