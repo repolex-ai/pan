@@ -17,10 +17,13 @@ For each Pool PNG, in path order:
      path; on any failure, leave it where it is;
   5. append one row to --archive/mapping.csv either way.
 
-Re-running skips every file the table already says was stored. Nothing here
-touches a file pand refused; the table says why, and a person decides.
+Re-running skips every file the table already says was stored. A file whose
+last row says "delivering" (the run died between sending and recording) is
+looked up in pand by its media date and Moment id before anything is sent
+again, so an interruption never stores a file twice. Nothing here touches a
+file pand refused; the table says why, and a person decides.
 """
-import argparse, csv, datetime as dt, json, os, re, struct, sys, urllib.request, urllib.error, zlib
+import argparse, csv, datetime as dt, json, os, re, signal, struct, sys, urllib.request, urllib.error, zlib
 
 PAN_NS = "https://repolex.ai/ontology/pan/"
 XMP_KEY = b"XML:com.adobe.xmp"
@@ -121,6 +124,22 @@ def prepare(packet, stem, keep_subs=False):
 
 
 # ── delivery ─────────────────────────────────────────────────────────────────
+def already_stored(pand, store, facts):
+    """The pan id of an image pand holds with this media date and Moment id,
+    or None. Used only for a file whose delivery was cut off unrecorded."""
+    moment = facts["old_moment_id"]
+    q = ('SELECT ?s WHERE { GRAPH ?g { ?s <%smediaCreatedDate> "%s" . %s } } LIMIT 2'
+         % (PAN_NS, facts["media_created_date"],
+            '?s <https://repolex.ai/ontology/copia/momentId> "%s" .' % moment if moment and not moment.startswith("sha256:") else
+            ('?s <%srelatedToId> <https://repolex.ai/copia/Moment/%s> .' % (PAN_NS, moment) if moment else "")))
+    req = urllib.request.Request("%s/query" % pand, data=json.dumps({"store": store, "query": q}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        hits = json.loads(r.read().decode())["results"]["bindings"]
+    if len(hits) == 1:
+        return hits[0]["s"]["value"]
+    return None
+
 def deliver(pand, store, png):
     req = urllib.request.Request("%s/stores/%s/media" % (pand, store), data=png, method="POST",
                                  headers={"Content-Type": "image/png"})
@@ -153,12 +172,20 @@ def main():
 
     os.makedirs(a.archive, exist_ok=True)
     mapping = os.path.join(a.archive, "mapping.csv")
-    done = set()
+    done, last = set(), {}
     if os.path.exists(mapping):
         with open(mapping, newline="") as f:
             for r in csv.DictReader(f):
+                last[r["source_path"]] = r["status"]
                 if r["status"] == "stored":
                     done.add(r["source_path"])
+    uncertain = {p for p, st in last.items() if st == "delivering"}
+    stop = {"now": False}
+    def on_signal(sig, frame):
+        print("stopping after the current file (signal %d)" % sig, flush=True)
+        stop["now"] = True
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
     files = []
     for dp, dn, fn in os.walk(a.source):
         dn.sort()
@@ -166,7 +193,7 @@ def main():
             if n.endswith(".png"):
                 files.append(os.path.join(dp, n))
     files.sort()
-    print("files: %d, already stored: %d" % (len(files), len(done)), flush=True)
+    print("files: %d, already stored: %d, uncertain: %d" % (len(files), len(done), len(uncertain)), flush=True)
 
     new_table = not os.path.exists(mapping)
     out = open(mapping, "a", newline="")
@@ -189,7 +216,7 @@ def main():
     for path in files:
         if path in done:
             continue
-        if a.limit and considered >= a.limit:
+        if stop["now"] or (a.limit and considered >= a.limit):
             break
         considered += 1
         rel = os.path.relpath(path, a.source)
@@ -222,7 +249,18 @@ def main():
         os.makedirs(os.path.dirname(side), exist_ok=True)
         with open(side, "w", encoding="utf-8") as f:
             f.write(packet)
-        res, err = deliver(a.pand, a.store, prepared)
+        res, err = None, None
+        if path in uncertain:
+            try:
+                found = already_stored(a.pand, a.store, facts)
+            except Exception as e:
+                row("refused", path, stem, facts, sidecar=side, reason="uncertain and pand could not be asked: %s" % e); continue
+            if found:
+                res = {"id": "<pan/Image/%s>" % found.rsplit("/", 1)[-1], "media_path": ""}
+                print("uncertain file was already in pand: %s -> %s" % (stem, found), flush=True)
+        if res is None:
+            row("delivering", path, stem, facts, sidecar=side)
+            res, err = deliver(a.pand, a.store, prepared)
         if err:
             row("refused", path, stem, facts, sidecar=side, reason=err)
             if err.startswith("pand unreachable"):
