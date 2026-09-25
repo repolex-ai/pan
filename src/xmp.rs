@@ -410,10 +410,14 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
     // particular producer happens to send (Rob, 2026-09-07); a wrong subject
     // in a producer's block is the producer's to fix.
     let git_lex_id = format!("{}id", crate::config::GIT_LEX_NS);
-    // The ONE pan: field a producer may write (pan.ttl v0.3.1; Rob ruled on
-    // 2026-09-04 that Horae sends pan:relatedToId=<copia/Moment/id>). Every other
+    // The pan: fields a producer may write: pan:relatedToId (pan.ttl v0.3.1;
+    // goodlux ruled on 2026-09-04 that Horae sends
+    // pan:relatedToId=<copia/Moment/id>) and pan:mediaCreatedDate (pan.ttl
+    // 0.4.19; goodlux, 2026-09-24: when the media was made is the producer's
+    // to say, and the Pool migration says it from the file name). Every other
     // pan: statement in an arriving file is a previous store's and stays out.
     let pan_related_to = format!("{PAN_NS}relatedToId");
+    let pan_media_created = format!("{PAN_NS}mediaCreatedDate");
     let git_lex_related_to = format!("{}relatedToId", crate::config::GIT_LEX_NS);
     let all: Vec<oxigraph::model::Quad> = store
         .iter()
@@ -423,7 +427,9 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
         .into_iter()
         .filter(|q| {
             let p = q.predicate.as_str();
-            p == pan_related_to || !(p.starts_with(PAN_NS) || p == git_lex_id)
+            p == pan_related_to
+                || p == pan_media_created
+                || !(p.starts_with(PAN_NS) || p == git_lex_id)
         })
         .map(|q| {
             // A reference written the git-lex way — `<copia/Moment/x>` as a

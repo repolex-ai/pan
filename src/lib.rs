@@ -177,9 +177,12 @@ pub fn gen_pan_id() -> String {
 }
 
 /// A caller-supplied id reaches filesystem paths — reject anything that is
-/// not a bare token before it touches `Path::join`.
+/// not a bare token before it touches `Path::join`. The length bound keeps
+/// `<id>.nq` and `YYYYMMDD-HHMMSS-<id>.png` under the 255-byte file name
+/// limit; a set named by a producer can be long (goodlux, 2026-09-24: the
+/// Pool's set names, up to about 100 characters, are the ImageSet ids).
 pub(crate) fn validate_pan_id(id: &str) -> Result<()> {
-    if id.is_empty() || id.len() > 64 {
+    if id.is_empty() || id.len() > 200 {
         return Err(anyhow!("invalid id {id:?}"));
     }
     if !id
@@ -366,6 +369,10 @@ pub struct PutResult {
     /// Statements read from the XMP the file arrived with (a producer's copia
     /// block, an Adobe block, …) and loaded into the graph.
     pub statements: usize,
+    /// Sets the file named with `pan:relatedToId <pan/ImageSet/id>` that did
+    /// not exist and were made for it (issue #69). Empty when every named
+    /// set already existed or none was named.
+    pub imagesets_made: Vec<String>,
 }
 
 /// How much of each kind a store holds, read from the graph alone: the
@@ -1279,6 +1286,61 @@ impl Pan {
         };
         quads.extend(arrived_statements.iter().cloned());
 
+        // pan:mediaCreatedDate from the file: at most one (pan.ttl 0.4.19),
+        // and a date the graph can order, RFC3339 with its zone. A file that
+        // says otherwise is refused whole; nothing is stored.
+        let media_created: Vec<&Quad> = arrived_statements
+            .iter()
+            .filter(|q| q.predicate.as_str() == format!("{PAN_NS}mediaCreatedDate"))
+            .collect();
+        if media_created.len() > 1 {
+            return Err(anyhow!(
+                "the file's XMP carries {} pan:mediaCreatedDate values; at most one is declared. Nothing was stored.",
+                media_created.len()
+            ));
+        }
+        if let Some(q) = media_created.first() {
+            let v = term_str(&q.object);
+            chrono::DateTime::parse_from_rfc3339(&v).map_err(|e| {
+                anyhow!(
+                    "the file's XMP pan:mediaCreatedDate {v:?} is not an RFC3339 date with a zone ({e}). Nothing was stored."
+                )
+            })?;
+        }
+
+        // Sets the file names that do not exist yet: `pan:relatedToId
+        // <pan/ImageSet/id>` on an arriving image makes the set (goodlux,
+        // 2026-09-22, issue #69). Made before the image lands, and unmade if
+        // it does not.
+        let named_sets: Vec<String> = {
+            let prefix = format!("{PAN_MEDIA_NS}{}/", imageset::IMAGESET_CLASS);
+            let mut ids: Vec<String> = arrived_statements
+                .iter()
+                .filter(|q| q.predicate.as_str() == format!("{PAN_NS}relatedToId"))
+                .filter_map(|q| match &q.object {
+                    Term::NamedNode(n) => n.as_str().strip_prefix(&prefix).map(str::to_string),
+                    _ => None,
+                })
+                .collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        };
+        let mut made_sets: Vec<String> = Vec::new();
+        for sid in &named_sets {
+            if self.imageset_subject(sid)?.is_none() {
+                if let Err(e) = self.imageset_create_with(sid, None) {
+                    for made in &made_sets {
+                        let _ = self.imageset_unmake(made);
+                    }
+                    return Err(e.context(format!(
+                        "the file names the set <pan/ImageSet/{sid}>, which could not be made. Nothing was stored."
+                    )));
+                }
+                made_sets.push(sid.clone());
+            }
+        }
+
         // The call that made the image, when the file carries one. A
         // diffusion user interface writes the whole request into a PNG text
         // chunk; Pan keeps it as one string and does not take it apart
@@ -1388,6 +1450,9 @@ impl Pan {
             Ok(())
         };
         if let Err(e) = land() {
+            for made in &made_sets {
+                let _ = self.imageset_unmake(made);
+            }
             let _ = fs::remove_file(&abs_path);
             if let Some(xmp::ThumbRef { path: rel, .. }) = &thumb {
                 let _ = fs::remove_file(self.layout.abs(rel));
@@ -1408,6 +1473,7 @@ impl Pan {
             height,
             thumbnail: thumb.is_some(),
             statements: arrived_statements.len(),
+            imagesets_made: made_sets,
         })
     }
 

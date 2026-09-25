@@ -214,6 +214,8 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("nothing to unset")
         || msg.contains("imageset file")
         || msg.contains("not a readable image")
+        || msg.contains("pan:mediaCreatedDate")
+        || msg.contains("could not be made")
     {
         ApiError(StatusCode::BAD_REQUEST, msg)
     } else {

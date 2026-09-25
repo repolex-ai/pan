@@ -226,10 +226,6 @@ impl Pan {
     /// anything is written if the file cannot be; removes the file if the
     /// graph refuses.
     pub fn imageset_create(&self, description: Option<&str>) -> Result<ImageSet> {
-        let description = description
-            .map(str::trim)
-            .filter(|d| !d.is_empty())
-            .map(String::from);
         let id = loop {
             let cand = gen_pan_id();
             if self.subject_for(&cand)?.is_none()
@@ -239,9 +235,28 @@ impl Pan {
                 break cand;
             }
         };
+        self.imageset_create_with(&id, description)
+    }
+
+    /// Make a set by the id the caller names (goodlux, 2026-09-22, issue
+    /// #69: an arriving image that names `<pan/ImageSet/id>` makes the set).
+    /// The id is the set's identity and its file name; a producer's long
+    /// name is fine. Refused when a set or a media object already has it.
+    pub fn imageset_create_with(&self, id: &str, description: Option<&str>) -> Result<ImageSet> {
+        validate_pan_id(id)?;
+        if self.imageset_subject(id)?.is_some() || self.imageset_file(id).exists() {
+            return Err(anyhow!("imageset {id} already exists"));
+        }
+        if self.subject_for(id)?.is_some() {
+            return Err(anyhow!("invalid imageset id {id:?}: a media object has it"));
+        }
+        let description = description
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(String::from);
         let p = ImageSet {
-            iri: imageset_iri(&id)?.into_string(),
-            id,
+            iri: imageset_iri(id)?.into_string(),
+            id: id.to_string(),
             description,
             created_date: now_local(),
         };
@@ -254,6 +269,36 @@ impl Pan {
             return Err(e);
         }
         Ok(p)
+    }
+
+    /// Take a set's node out of the graph and its file off disk. Members keep
+    /// their edge; this exists so an image that failed to land does not leave
+    /// the set it named behind.
+    pub(crate) fn imageset_unmake(&self, id: &str) -> Result<()> {
+        let node = imageset_iri(id)?;
+        let old: Vec<Quad> = self
+            .store
+            .quads_for_pattern(
+                Some((&node).into()),
+                None,
+                None,
+                Some(crate::config::pan_graph().as_ref()),
+            )
+            .collect::<std::result::Result<_, _>>()
+            .context("read imageset node")?;
+        let mut t = self
+            .store
+            .start_transaction()
+            .context("start transaction")?;
+        for q in &old {
+            t.remove(q.as_ref());
+        }
+        t.commit().context("commit imageset removal")?;
+        let path = self.imageset_file(id);
+        if path.exists() {
+            fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+        }
+        Ok(())
     }
 
     /// Every set in the graph, oldest first.

@@ -65,7 +65,10 @@ finds all of either, and neither side needs to know the other's folder names.
   XMP and the graph. On every open the store reads these files and rewrites
   the set nodes in the graph from them, so the graph is rebuilt from files
   alone. A file that says anything else, or describes a second node, stops
-  the store from opening.
+  the store from opening. A set comes to be either by request or on
+  arrival: an image whose XMP names `<pan/ImageSet/id>` makes the set if
+  none has that id. The id may be a producer's long name, up to 200
+  characters.
 - **`img/original/`** — the file exactly as it arrived, when it was not a
   PNG (JPEG, WebP, GIF, TIFF). Kept for the record. Nothing reads it again.
   A PNG arrival has no entry here.

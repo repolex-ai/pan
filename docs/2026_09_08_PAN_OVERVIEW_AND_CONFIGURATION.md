@@ -71,7 +71,15 @@ The image's XMP carries everything Pan knows about it under the `pan`
 namespace: id, creation time, path, type, the source file it was made from, size, the short and long
 descriptions, the scene objects, the scene fields, the thumbnail, and one
 reference per model run. What a producer wrote into the file before it
-arrived is kept untouched.
+arrived is kept untouched, and its statements load into the graph as written.
+
+Two `pan` fields a producer may write are honoured on arrival; every other
+`pan` statement in an arriving file belongs to a previous store and stays
+out. `pan:relatedToId` names what the image belongs to, a Moment or a set.
+`pan:mediaCreatedDate` says when the media itself was made, as an RFC3339
+date with its zone; a file whose value is not one is refused whole. A
+`pan:relatedToId` naming `<pan/ImageSet/id>` that does not exist yet makes
+the set, with that id, as the image lands.
 
 ## Pan as an indexer of existing media — planned
 
