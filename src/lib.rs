@@ -45,6 +45,7 @@ pub mod npy;
 pub mod pngchunk;
 pub mod thumbnail;
 pub mod wire;
+pub mod work;
 pub mod xmp;
 
 /// Take a mutex, recovering if a previous holder panicked.
@@ -96,7 +97,7 @@ pub fn write_ontology_copy(dir: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+pub(crate) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 /// Every spelling of the universal identity a Pan node may have been given
 /// by an earlier binary. Pan writes only `pan:id` (goodlux, 2026-09-17); the
 /// other two are `owl:equivalentProperty` bridges in pan.ttl and are what a
@@ -938,6 +939,12 @@ pub struct Pan {
     pub store_id: String,
     store: Store,
     indexes: Mutex<HashMap<String, VectorIndex>>,
+    /// The ladder's work list, built from the graph when first asked and
+    /// kept current by every write (issue #71). None until first use.
+    work: Mutex<Option<work::WorkIndex>>,
+    /// Bumped by every write to this store; the ready-mark pass runs only
+    /// when it moved (issue #71).
+    changes: std::sync::atomic::AtomicU64,
 }
 
 impl Pan {
@@ -969,6 +976,8 @@ impl Pan {
             store_id: store_id.to_string(),
             store,
             indexes: Mutex::new(HashMap::new()),
+            work: Mutex::new(None),
+            changes: std::sync::atomic::AtomicU64::new(0),
         };
         pan.declare_store()?;
         // The sets a person curated live in imagesets/*.xml; the graph is
@@ -1487,7 +1496,120 @@ impl Pan {
             t.insert(q.as_ref());
         }
         t.commit().context("commit transaction")?;
+        self.changed();
+        if let Some(w) = locked(&self.work).as_mut() {
+            w.apply_insert(quads);
+        }
         Ok(())
+    }
+
+    /// Note a write. What `changes()` reports moved.
+    fn changed(&self) {
+        self.changes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How many writes this store has taken since it was opened. A reader
+    /// that saw the same number last time has nothing new to look at.
+    pub fn changes(&self) -> u64 {
+        self.changes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The work list, built from the graph the first time it is needed.
+    /// Holds the lock while building so a write landing meanwhile is
+    /// applied after, never lost.
+    fn with_work<T>(&self, f: impl FnOnce(&work::WorkIndex) -> T) -> Result<T> {
+        let mut guard = locked(&self.work);
+        if guard.is_none() {
+            let t = std::time::Instant::now();
+            let built = self.build_work_index()?;
+            tracing::info!(
+                store = %self.store_id,
+                images = built.images(),
+                ms = t.elapsed().as_millis() as u64,
+                "work list built from the graph"
+            );
+            *guard = Some(built);
+        }
+        Ok(f(guard.as_ref().expect("built above")))
+    }
+
+    fn build_work_index(&self) -> Result<work::WorkIndex> {
+        let mut w = work::WorkIndex::default();
+        let rows = |q: &str| -> Result<Vec<QuerySolution>> {
+            let mut out = Vec::new();
+            if let QueryResults::Solutions(sols) = self.query(q)? {
+                for s in sols {
+                    out.push(s?);
+                }
+            }
+            Ok(out)
+        };
+        let get = |s: &QuerySolution, v: &str| s.get(v).map(term_str).unwrap_or_default();
+        for s in rows(
+            "SELECT ?s ?path ?type ?d WHERE { ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; pan:createdDate ?d }",
+        )? {
+            let iri = get(&s, "s");
+            w.add_image(work::ImageRow {
+                created_date: get(&s, "d"),
+                id: bare_id(&iri),
+                iri,
+                media_path: get(&s, "path"),
+                media_type: get(&s, "type"),
+            });
+        }
+        let refs = work::REF_LOCALS
+            .iter()
+            .map(|l| format!("pan:{l}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        for s in rows(&format!(
+            "SELECT ?s ?p ?m WHERE {{ ?s ?p ?e . ?e pan:model ?m . FILTER(?p IN ({refs})) }}"
+        ))? {
+            let p = get(&s, "p");
+            if let Some(local) = p.strip_prefix(PAN_NS) {
+                w.mark_done(local, &get(&s, "m"), &get(&s, "s"));
+            }
+        }
+        for s in rows("SELECT ?s WHERE { ?s pan:enrichmentCompleteDate ?r }")? {
+            w.mark_complete(&get(&s, "s"));
+        }
+        let scene: HashSet<String> = rows("SELECT DISTINCT ?s WHERE { ?s pan:sceneObjects ?o }")?
+            .iter()
+            .map(|s| get(s, "s"))
+            .collect();
+        let long: HashSet<String> = rows("SELECT DISTINCT ?s WHERE { ?s pan:longCaption ?o }")?
+            .iter()
+            .map(|s| get(s, "s"))
+            .collect();
+        for iri in scene.union(&long) {
+            w.set_needs(iri, scene.contains(iri), long.contains(iri));
+        }
+        Ok(w)
+    }
+
+    /// Re-read the two gate facts for one image from the graph, after a
+    /// write that may have set or removed them by hand.
+    fn refresh_needs(&self, id: &str) {
+        let Ok(Some(subject)) = self.subject_for(id) else {
+            return;
+        };
+        let has = |local: &str| -> bool {
+            self.store
+                .quads_for_pattern(
+                    Some((&subject).into()),
+                    Some(pan_iri(local).as_ref()),
+                    None,
+                    Some(crate::config::pan_graph().as_ref()),
+                )
+                .next()
+                .is_some()
+        };
+        let (scene, long) = (has("sceneObjects"), has("longCaption"));
+        self.changed();
+        if let Some(w) = locked(&self.work).as_mut() {
+            w.set_needs(subject.as_str(), scene, long);
+        }
     }
 
     // ── read ──────────────────────────────────────────────────────────────────
@@ -1668,51 +1790,13 @@ impl Pan {
         limit: usize,
         since: Option<&str>,
     ) -> Result<Vec<PendingItem>> {
-        // What a stage needs before it can run (goodlux, 2026-09-08):
-        // segmentation is prompted with the scene objects, and the embedding
-        // is built from the image AND its XMP, so both wait for the caption
-        // stage to have written its fields.
-        // Each is an EXISTS test, never a join: joined, an image with N
-        // scene objects came back N times and was handed to sam3 N times
-        // before the first result landed (issue #29, 2026-09-17: four
-        // references and 240 regions for 60). DISTINCT below is the second
-        // lock on the same door.
-        let needs = match ref_local {
-            "regionData" => "FILTER EXISTS { ?s pan:sceneObjects ?obj }",
-            "vectorData" => "FILTER EXISTS { ?s pan:longCaption ?ld }",
-            _ => "",
-        };
-        let model_lit = model.replace('\\', "\\\\").replace('"', "\\\"");
-        let floor = match since {
-            Some(s) => format!(
-                "FILTER(STR(?d) >= \"{}\")",
-                s.replace('\\', "\\\\").replace('"', "\\\"")
-            ),
-            None => String::new(),
-        };
-        let q = format!(
-            "SELECT DISTINCT ?s ?path ?type ?d WHERE {{
-               ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; pan:createdDate ?d .
-               {needs}
-               FILTER NOT EXISTS {{ ?s pan:{ref_local} ?e . ?e pan:model \"{model_lit}\" }}
-               {floor}
-             }} ORDER BY DESC(?d) ?s LIMIT {limit}"
-        );
-        let mut out = Vec::new();
-        if let QueryResults::Solutions(sols) = self.query(&q)? {
-            for s in sols {
-                let s = s?;
-                let get = |v: &str| s.get(v).map(term_str).unwrap_or_default();
-                let iri = get("s");
-                out.push(PendingItem {
-                    id: bare_id(&iri),
-                    iri,
-                    media_path: get("path"),
-                    media_type: get("type"),
-                });
-            }
-        }
-        Ok(out)
+        // Answered from the work list, not the graph (issue #71): the graph
+        // query sorted every unenriched image by date on every pass, 12.8 s
+        // on a store of 200,000. What a stage needs before it can run
+        // (goodlux, 2026-09-08) is the same: segmentation waits for the
+        // scene objects, the embedding for the long caption. One row per
+        // image, never a join (issue #29).
+        self.with_work(|w| w.pending(ref_local, model, limit, since))
     }
 
     /// Images that have every listed (reference, model) pair recorded but no
@@ -1722,24 +1806,7 @@ impl Pan {
         required: &[(String, String)],
         limit: usize,
     ) -> Result<Vec<String>> {
-        let mut q = String::from(
-            "SELECT ?s WHERE { ?s a pan:Image . FILTER NOT EXISTS { ?s pan:enrichmentCompleteDate ?r } ",
-        );
-        for (i, (link, model)) in required.iter().enumerate() {
-            let m = model.replace('\\', "\\\\").replace('"', "\\\"");
-            q.push_str(&format!("?s pan:{link} ?e{i} . ?e{i} pan:model \"{m}\" . "));
-        }
-        q.push_str(&format!("}} LIMIT {limit}"));
-        let mut out = Vec::new();
-        if let QueryResults::Solutions(sols) = self.query(&q)? {
-            for s in sols {
-                let s = s?;
-                if let Some(t) = s.get("s") {
-                    out.push(bare_id(&term_str(t)));
-                }
-            }
-        }
-        Ok(out)
+        self.with_work(|w| w.complete_candidates(required, limit))
     }
 
     /// Set `pan:enrichmentCompleteDate` now, once; a later call is a no-op. XMP refreshed.
@@ -2075,6 +2142,12 @@ impl Pan {
     /// overwrites. Graph and XMP change together: the restamp rewrites the
     /// image's packet.
     pub fn set_fields(&self, id: &str, fields: &[(String, serde_json::Value)]) -> Result<()> {
+        let r = self.set_fields_inner(id, fields);
+        self.refresh_needs(id);
+        r
+    }
+
+    fn set_fields_inner(&self, id: &str, fields: &[(String, serde_json::Value)]) -> Result<()> {
         let Some(subject) = self.subject_for(id)? else {
             return Err(anyhow!("id not found: {id}"));
         };
@@ -2145,6 +2218,12 @@ impl Pan {
     /// image may be unset, the same set `set` accepts. Unsetting a field
     /// that has no value is not an error.
     pub fn unset_fields(&self, id: &str, locals: &[String]) -> Result<()> {
+        let r = self.unset_fields_inner(id, locals);
+        self.refresh_needs(id);
+        r
+    }
+
+    fn unset_fields_inner(&self, id: &str, locals: &[String]) -> Result<()> {
         let Some(subject) = self.subject_for(id)? else {
             return Err(anyhow!("id not found: {id}"));
         };
@@ -2314,6 +2393,10 @@ impl Pan {
                     vi.dirty = true;
                 }
             }
+        }
+        self.changed();
+        if let Some(w) = locked(&self.work).as_mut() {
+            w.remove_image(subject.as_str());
         }
         Ok(())
     }

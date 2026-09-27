@@ -237,11 +237,24 @@ fn media_iri_bracket(iri: &str) -> String {
 async fn health(State(d): State<Shared>) -> Json<HealthResponse> {
     let counts: Vec<StoreCountsOut> = {
         let stores = d.stores.clone();
+        let d2 = d.clone();
         tokio::task::spawn_blocking(move || {
             stores
                 .iter()
                 .map(|s| {
-                    let c = s.pan.counts().unwrap_or_default();
+                    let fresh = crate::locked(&d2.counts_cache)
+                        .get(&s.entry.id)
+                        .filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(60))
+                        .map(|(_, c)| c.clone());
+                    let c = match fresh {
+                        Some(c) => c,
+                        None => {
+                            let c = s.pan.counts().unwrap_or_default();
+                            crate::locked(&d2.counts_cache)
+                                .insert(s.entry.id.clone(), (std::time::Instant::now(), c.clone()));
+                            c
+                        }
+                    };
                     StoreCountsOut {
                         store: s.entry.id.clone(),
                         images: c.images,

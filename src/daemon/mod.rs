@@ -64,6 +64,10 @@ pub struct Daemon {
     /// can see at a glance whether the thing that makes model calls is
     /// making them (Rob, 2026-09-04).
     pub counters: Counters,
+    /// store id → when its counts were last computed, and what they were.
+    /// A health check answers from here while the entry is under a minute
+    /// old (issue #71: seven count queries over 200,000 images took 7 s).
+    pub counts_cache: Mutex<HashMap<String, (Instant, crate::StoreCounts)>>,
     /// stage name → until when the WHOLE stage is held. Set when a call fails
     /// before reaching the model (connection refused/reset/timeout): the door
     /// is down, so walking the rest of the batch would only fail the same
@@ -236,6 +240,7 @@ impl Daemon {
             funnels,
             attempts: Mutex::new(HashMap::new()),
             counters: Counters::default(),
+            counts_cache: Mutex::new(HashMap::new()),
             stage_hold: Mutex::new(HashMap::new()),
             started: Instant::now(),
         })

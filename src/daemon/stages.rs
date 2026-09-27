@@ -93,7 +93,18 @@ pub async fn run(d: Arc<Daemon>) {
     {
         let d = d.clone();
         loops.spawn(async move {
+            // Only when a store took a write since the last pass (issue
+            // #71): the pass over a store of 200,000 cost 1.2 s every five
+            // seconds while nothing changed. Its own marks count as writes,
+            // so a pass that marked some runs again until nothing is left.
+            let mut seen: Option<u64> = None;
             loop {
+                let now: u64 = d.stores.iter().map(|s| s.pan.changes()).sum();
+                if seen == Some(now) {
+                    tokio::time::sleep(every).await;
+                    continue;
+                }
+                seen = Some(now);
                 let did = mark_enrichment_complete_pass(d.clone()).await;
                 if did == 0 {
                     tokio::time::sleep(every).await;
