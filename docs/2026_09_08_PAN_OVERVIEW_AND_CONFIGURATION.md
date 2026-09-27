@@ -49,8 +49,8 @@ kind, then by what the file is.
 
 <store root>/                          the store itself
 ├── pan.yml                            the store's own settings (today: its id)
-├── ImageSet/                          one N-Quads file per curated set
 └── _ignore/
+    ├── ImageSet/                      one N-Quads file per set
     ├── oxigraph/                      the graph: every fact about every file
     └── hnsw/<model>/                  the vector index, one per embedding model
 ```

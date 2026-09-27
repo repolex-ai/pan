@@ -62,9 +62,12 @@ fn a_set_is_a_file_and_a_node_and_membership_is_an_edge_from_the_image() {
     );
     assert_eq!(set.iri, format!("{}ImageSet/{}", pan::PAN_MEDIA_NS, set.id));
 
-    // The file: ImageSet/<id>.nq at the store root, the folder named for the
+    // The file: _ignore/ImageSet/<id>.nq in the pocket, the folder named for the
     // class, N-Quads in Pan's graph, the set's own facts only.
-    let file = dir.path().join("ImageSet").join(format!("{}.nq", set.id));
+    let file = dir
+        .path()
+        .join("_ignore/ImageSet")
+        .join(format!("{}.nq", set.id));
     let text = std::fs::read_to_string(&file).expect("the set has its own file");
     let ns = pan::PAN_NS;
     let node = format!("<{}>", set.iri);
@@ -222,7 +225,7 @@ fn the_graph_is_rebuilt_from_the_set_files_on_open() {
             created_date: "2026-09-16T10:00:00-07:00".into(),
         };
         std::fs::write(
-            dir.path().join("ImageSet/handmade.nq"),
+            dir.path().join("_ignore/ImageSet/handmade.nq"),
             pan::imageset::build_imageset_file(&edited).unwrap(),
         )
         .unwrap();
@@ -232,7 +235,9 @@ fn the_graph_is_rebuilt_from_the_set_files_on_open() {
             ..set.clone()
         };
         std::fs::write(
-            dir.path().join("ImageSet").join(format!("{}.nq", set.id)),
+            dir.path()
+                .join("_ignore/ImageSet")
+                .join(format!("{}.nq", set.id)),
             pan::imageset::build_imageset_file(&changed).unwrap(),
         )
         .unwrap();
@@ -259,7 +264,7 @@ fn the_graph_is_rebuilt_from_the_set_files_on_open() {
 fn a_set_file_whose_name_and_id_disagree_refuses_the_open() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("pan.yml"), "storage_id: test-store\n").unwrap();
-    std::fs::create_dir_all(dir.path().join("ImageSet")).unwrap();
+    std::fs::create_dir_all(dir.path().join("_ignore/ImageSet")).unwrap();
     let p = pan::ImageSet {
         id: "abcd2345".into(),
         iri: format!("{}ImageSet/abcd2345", pan::PAN_MEDIA_NS),
@@ -267,7 +272,7 @@ fn a_set_file_whose_name_and_id_disagree_refuses_the_open() {
         created_date: "2026-09-16T10:00:00-07:00".into(),
     };
     std::fs::write(
-        dir.path().join("ImageSet/other.nq"),
+        dir.path().join("_ignore/ImageSet/other.nq"),
         pan::imageset::build_imageset_file(&p).unwrap(),
     )
     .unwrap();

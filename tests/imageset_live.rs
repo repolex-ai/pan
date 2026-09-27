@@ -171,11 +171,13 @@ fn imagesets_work_through_a_running_pand_and_survive_a_restart() {
             .unwrap();
         assert!(set_a.starts_with("<pan/ImageSet/"), "{set_a}");
 
-        // The file is where it was decided to be: ImageSet/<id>.nq.
+        // The file is where it was decided to be: _ignore/ImageSet/<id>.nq.
         let bare = set_a
             .trim_start_matches("<pan/ImageSet/")
             .trim_end_matches('>');
-        let file = home.path().join(format!("alpha/ImageSet/{bare}.nq"));
+        let file = home
+            .path()
+            .join(format!("alpha/_ignore/ImageSet/{bare}.nq"));
         let text =
             std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
         assert!(text.contains("lora candidates"), "{text}");

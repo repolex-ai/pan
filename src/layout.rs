@@ -7,8 +7,8 @@
 //! ```text
 //! <root>/                          soul repo: <repo>/.pan   bare store: the dir itself
 //!   pan.yml                        committable config (optional)
-//!   ImageSet/<id>.nq               one file per curated set, the folder named for the class; committed, the graph is rebuilt from them
 //!   _ignore/                       machine-local pocket
+//!     ImageSet/<id>.nq             one file per set, the folder named for the class; the graph is rebuilt from them (moved into the pocket 2026-09-26)
 //!     oxigraph/                    the graph — always here, never relocated
 //!     hnsw/<model>/                vector index per embedding model — always here
 //!     media/                       DEFAULT media root; may live elsewhere (below)
@@ -85,7 +85,7 @@ impl PanLayout {
     pub const IMG_SUBDIR: &'static str = "img";
     /// `<kind>/enrichment/` — model output about the pictures.
     pub const ENRICHMENT_SUBDIR: &'static str = "enrichment";
-    /// `<root>/ImageSet/` — one file per curated set, named for the class.
+    /// `<root>/_ignore/ImageSet/` — one file per set, named for the class.
     pub const IMAGESET_SUBDIR: &'static str = "ImageSet";
     /// The five stage folders under `enrichment/`, which are also the stage
     /// part of every enrichment file name.

@@ -513,9 +513,11 @@ impl Pan {
 }
 
 impl PanLayout {
-    /// `<root>/ImageSet`.
+    /// `<root>/_ignore/ImageSet`: store data, not soul material (goodlux,
+    /// 2026-09-26, after the Pool migration put 1,893 three-line set files
+    /// into a soul repo's history). Sets are made and edited through Pan.
     pub fn imagesets_root(&self) -> PathBuf {
-        self.root.join(Self::IMAGESET_SUBDIR)
+        self.pocket.join(Self::IMAGESET_SUBDIR)
     }
 }
 

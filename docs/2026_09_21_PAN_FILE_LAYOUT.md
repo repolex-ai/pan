@@ -16,9 +16,9 @@ configured.
 ```
 <store root>/                       <repo>/.pan, or the bare store directory
 ├── pan.yml                         config (optional)
-├── ImageSet/                       one file per curated set, the folder named for the class; committed
-│   └── abcd2345.nq
 └── _ignore/                        machine-local, never committed
+    ├── ImageSet/                   one file per set, the folder named for the class
+    │   └── abcd2345.nq
     ├── oxigraph/                   the graph
     ├── hnsw/<model>/               the vector index per embedding model
     └── media/                      the media root, when no volume is configured
@@ -58,8 +58,9 @@ finds all of either, and neither side needs to know the other's folder names.
 
 ## Each folder
 
-- **`ImageSet/`** — one N-Quads file per set a person curates, named by
-  the set's id, in a folder named for the class. A set carries exactly its
+- **`_ignore/ImageSet/`** — one N-Quads file per set, named by the set's
+  id, in a folder named for the class. Store data, not committed: sets are
+  made and edited through Pan (goodlux, 2026-09-26). A set carries exactly its
   id, its description and its created date; it keeps no member list.
   Membership is `pan:relatedToId` on the image, written into the image's
   XMP and the graph. On every open the store reads these files and rewrites
