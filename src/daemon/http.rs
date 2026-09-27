@@ -242,11 +242,12 @@ async fn health(State(d): State<Shared>) -> Json<HealthResponse> {
             stores
                 .iter()
                 .map(|s| {
-                    let fresh = crate::locked(&d2.counts_cache)
+                    // From the cache the refresher keeps (issue #71); only a
+                    // store the refresher has not reached yet is counted here.
+                    let cached = crate::locked(&d2.counts_cache)
                         .get(&s.entry.id)
-                        .filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(60))
                         .map(|(_, c)| c.clone());
-                    let c = match fresh {
+                    let c = match cached {
                         Some(c) => c,
                         None => {
                             let c = s.pan.counts().unwrap_or_default();

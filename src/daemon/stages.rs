@@ -23,6 +23,7 @@
 //!             beside the record.
 
 use anyhow::{anyhow, Context, Result};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -87,6 +88,31 @@ pub async fn run(d: Arc<Daemon>) {
                 if did == 0 {
                     tokio::time::sleep(every).await;
                 }
+            }
+        });
+    }
+    {
+        // The counts a health check reports, recomputed off the request
+        // path once a minute (issue #71: seven count queries over 200,000
+        // images take 7 s). A store that took no write keeps its numbers.
+        let d = d.clone();
+        loops.spawn(async move {
+            let mut seen: HashMap<String, u64> = HashMap::new();
+            loop {
+                for store in d.stores.clone() {
+                    let now = store.pan.changes();
+                    let known = crate::locked(&d.counts_cache).contains_key(&store.entry.id);
+                    if known && seen.get(&store.entry.id) == Some(&now) {
+                        continue;
+                    }
+                    let s = store.clone();
+                    if let Ok(Ok(c)) = tokio::task::spawn_blocking(move || s.pan.counts()).await {
+                        crate::locked(&d.counts_cache)
+                            .insert(store.entry.id.clone(), (Instant::now(), c));
+                        seen.insert(store.entry.id.clone(), now);
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(60)).await;
             }
         });
     }
