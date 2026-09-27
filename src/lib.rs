@@ -1546,11 +1546,12 @@ impl Pan {
             Ok(out)
         };
         let get = |s: &QuerySolution, v: &str| s.get(v).map(term_str).unwrap_or_default();
+        let mut images = Vec::new();
         for s in rows(
             "SELECT ?s ?path ?type ?d WHERE { ?s a pan:Image ; pan:mediaPath ?path ; pan:mediaType ?type ; pan:createdDate ?d }",
         )? {
             let iri = get(&s, "s");
-            w.add_image(work::ImageRow {
+            images.push(work::ImageRow {
                 created_date: get(&s, "d"),
                 id: bare_id(&iri),
                 iri,
@@ -1558,6 +1559,7 @@ impl Pan {
                 media_type: get(&s, "type"),
             });
         }
+        w.add_images(images);
         let refs = work::REF_LOCALS
             .iter()
             .map(|l| format!("pan:{l}"))
