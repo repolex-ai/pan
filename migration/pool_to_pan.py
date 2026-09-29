@@ -23,7 +23,7 @@ looked up in pand by its media date and Moment id before anything is sent
 again, so an interruption never stores a file twice. Nothing here touches a
 file pand refused; the table says why, and a person decides.
 """
-import argparse, csv, datetime as dt, json, os, re, signal, struct, sys, urllib.request, urllib.error, zlib
+import argparse, csv, datetime as dt, json, os, re, shutil, signal, struct, sys, urllib.request, urllib.error, zlib
 
 PAN_NS = "https://repolex.ai/ontology/pan/"
 XMP_KEY = b"XML:com.adobe.xmp"
@@ -178,7 +178,7 @@ def main():
         with open(mapping, newline="") as f:
             for r in csv.DictReader(f):
                 last[r["source_path"]] = r["status"]
-                if r["status"] == "stored":
+                if r["status"] in ("stored", "stored-not-moved"):
                     done.add(r["source_path"])
     uncertain = {p for p, st in last.items() if st == "delivering"}
     stop = {"now": False}
@@ -272,7 +272,8 @@ def main():
         dst = os.path.join(a.exported, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         try:
-            os.rename(path, dst)
+            # Across volumes a rename is refused; shutil.move copies then deletes.
+            shutil.move(path, dst)
         except OSError as e:
             row("stored-not-moved", path, stem, facts, sidecar=side, pan_id=res.get("id", ""),
                 pan_media_path=res.get("media_path", ""), reason="move: %s" % e); continue
