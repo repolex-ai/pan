@@ -168,6 +168,7 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="stop after this many files considered")
     ap.add_argument("--dry-run", action="store_true", help="prepare only; write the prepared PNGs under --archive/dry-run")
     ap.add_argument("--keep-sub-descriptions", action="store_true")
+    ap.add_argument("--label", default="", help="sidecars go under --archive/xmp/<label>/; the mapping table is shared")
     a = ap.parse_args()
 
     os.makedirs(a.archive, exist_ok=True)
@@ -190,8 +191,10 @@ def main():
     for dp, dn, fn in os.walk(a.source):
         dn.sort()
         for n in sorted(fn):
-            if n.endswith(".png"):
-                files.append(os.path.join(dp, n))
+            full = os.path.join(dp, n)
+            # A link (the Pool's latest.png) points at a file already listed.
+            if n.endswith(".png") and not os.path.islink(full):
+                files.append(full)
     files.sort()
     print("files: %d, already stored: %d, uncertain: %d" % (len(files), len(done), len(uncertain)), flush=True)
 
@@ -245,7 +248,7 @@ def main():
                 f.write(prepared)
             row("dry-run", path, stem, facts, reason=dst); continue
         # The sidecar first: the packet as it was, before anything else happens.
-        side = os.path.join(a.archive, "xmp", os.path.splitext(rel)[0] + ".xmp")
+        side = os.path.join(a.archive, "xmp", a.label, os.path.splitext(rel)[0] + ".xmp")
         os.makedirs(os.path.dirname(side), exist_ok=True)
         with open(side, "w", encoding="utf-8") as f:
             f.write(packet)
