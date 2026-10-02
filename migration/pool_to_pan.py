@@ -17,6 +17,13 @@ For each Pool PNG, in path order:
      path; on any failure, leave it where it is;
   5. append one row to --archive/mapping.csv either way.
 
+Two sources that were never in the Pool need rules the Pool files did not
+(goodlux, 2026-10-02): --date-from birthtime takes pan:mediaCreatedDate from
+the file's creation time instead of its name; --set-from-name makes the set
+id from the file name (True9b__recline_side__bare__s3102 ->
+true9b-recline-side-bare); --no-xmp-ok gives a file with no XMP a packet
+holding only the pan Description, so it can still be stored.
+
 Re-running skips every file the table already says was stored. A file whose
 last row says "delivering" (the run died between sending and recording) is
 looked up in pand by its media date and Moment id before anything is sent
@@ -58,9 +65,18 @@ def read_xmp(cs):
 def with_xmp(b, cs, k, packet):
     data = XMP_KEY + b"\x00\x00\x00\x00\x00" + packet.encode("utf-8")
     out = b[:8]
+    placed = k is not None
     for j, (t, d) in enumerate(cs):
+        # A file with no XMP gets one before the pixel data, where readers look.
+        if not placed and t in (b"IDAT", b"IEND"):
+            out += chunk_bytes(b"iTXt", data); placed = True
         out += chunk_bytes(t, data if j == k else d)
     return out
+
+EMPTY_PACKET = ('<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
+                '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
+                ' <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+                ' </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end="w"?>')
 
 
 # ── the packet ───────────────────────────────────────────────────────────────
@@ -72,13 +88,27 @@ def field(packet, local):
 def xml_escape(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-def prepare(packet, stem, keep_subs=False):
-    """Return (new_packet, facts) or raise ValueError."""
+def date_from_name(stem):
     m = re.match(r"(\d{8})-(\d{6})-[0-9a-f]{8}$", stem)
     if not m:
         raise ValueError("file name is not YYYYMMDD-HHMMSS-cid8")
     utc = dt.datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").replace(tzinfo=dt.timezone.utc)
-    media_created = utc.astimezone().isoformat(timespec="seconds")
+    return utc.astimezone().isoformat(timespec="seconds")
+
+def date_from_birthtime(path):
+    return dt.datetime.fromtimestamp(os.stat(path).st_birthtime).astimezone().isoformat(timespec="seconds")
+
+def set_from_name(stem):
+    """True9b__recline_side__bare__s3102 -> true9b-recline-side-bare"""
+    sid = re.sub(r"_+", "-", re.sub(r"__s\d+$", "", stem)).lower()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", sid):
+        raise ValueError("file name does not make a set id: %r" % sid)
+    return sid
+
+def prepare(packet, stem, keep_subs=False, media_created=None, set_id=None):
+    """Return (new_packet, facts) or raise ValueError."""
+    if media_created is None:
+        media_created = date_from_name(stem)
 
     old_cid = field(packet, "cid") or field(packet, "Cid")
     pm = re.search(r"<pool:cid>([^<]*)</pool:cid>", packet)
@@ -88,7 +118,7 @@ def prepare(packet, stem, keep_subs=False):
     # Before August the Moment id was the content id itself.
     if not old_cid and moment and moment.startswith("sha256:"):
         old_cid = moment
-    in_set = field(packet, "inSetId")
+    in_set = field(packet, "inSetId") or set_id
     if in_set and not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", in_set):
         raise ValueError("copia:inSetId is not an id pand can use: %r" % in_set)
     if moment and not re.fullmatch(r"[A-Za-z0-9:_-]{1,200}", moment):
@@ -96,10 +126,10 @@ def prepare(packet, stem, keep_subs=False):
 
     # The root Description: the first one. Give it rdf:about="" if it has none.
     first = re.search(r"<rdf:Description\b([^>]*)>", packet)
-    if not first:
+    if not first and packet is not EMPTY_PACKET:
         raise ValueError("no rdf:Description in the packet")
-    attrs = first.group(1)
-    if "rdf:about=" not in attrs:
+    attrs = first.group(1) if first else ""
+    if first and "rdf:about=" not in attrs:
         packet = packet[:first.start()] + '<rdf:Description rdf:about=""' + attrs + ">" + packet[first.end():]
     # The pool: fields die.
     packet = re.sub(r"\s*<pool:\w+(?:\s[^>]*)?>[^<]*</pool:\w+>", "", packet)
@@ -169,6 +199,12 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="prepare only; write the prepared PNGs under --archive/dry-run")
     ap.add_argument("--keep-sub-descriptions", action="store_true")
     ap.add_argument("--label", default="", help="sidecars go under --archive/xmp/<label>/; the mapping table is shared")
+    ap.add_argument("--date-from", choices=["name", "birthtime"], default="name",
+                    help="where pan:mediaCreatedDate comes from: the file name (Pool files) or the file's creation time")
+    ap.add_argument("--set-from-name", action="store_true",
+                    help="the set id is the file name without its __s<seed> tail, lowercased, _ runs as - (used when the XMP names no set)")
+    ap.add_argument("--no-xmp-ok", action="store_true",
+                    help="a file with no XMP gets a packet holding only the pan Description instead of being skipped")
     a = ap.parse_args()
 
     os.makedirs(a.archive, exist_ok=True)
@@ -234,10 +270,15 @@ def main():
         except ValueError as e:
             row("skipped", path, stem, reason=str(e)); continue
         k, packet = read_xmp(cs)
+        had_xmp = packet is not None
         if packet is None:
-            row("skipped", path, stem, reason="no XMP in the file"); continue
+            if not a.no_xmp_ok:
+                row("skipped", path, stem, reason="no XMP in the file"); continue
+            packet = EMPTY_PACKET
         try:
-            new_packet, facts = prepare(packet, stem, a.keep_sub_descriptions)
+            media_created = date_from_birthtime(path) if a.date_from == "birthtime" else None
+            set_id = set_from_name(stem) if a.set_from_name else None
+            new_packet, facts = prepare(packet, stem, a.keep_sub_descriptions, media_created, set_id)
         except ValueError as e:
             row("skipped", path, stem, reason="prepare: %s" % e); continue
         prepared = with_xmp(b, cs, k, new_packet)
@@ -248,10 +289,12 @@ def main():
                 f.write(prepared)
             row("dry-run", path, stem, facts, reason=dst); continue
         # The sidecar first: the packet as it was, before anything else happens.
-        side = os.path.join(a.archive, "xmp", a.label, os.path.splitext(rel)[0] + ".xmp")
-        os.makedirs(os.path.dirname(side), exist_ok=True)
-        with open(side, "w", encoding="utf-8") as f:
-            f.write(packet)
+        side = ""
+        if had_xmp:
+            side = os.path.join(a.archive, "xmp", a.label, os.path.splitext(rel)[0] + ".xmp")
+            os.makedirs(os.path.dirname(side), exist_ok=True)
+            with open(side, "w", encoding="utf-8") as f:
+                f.write(packet)
         res, err = None, None
         if path in uncertain:
             try:
