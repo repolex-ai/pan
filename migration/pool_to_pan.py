@@ -57,9 +57,13 @@ def chunk_bytes(t, data):
     return struct.pack(">I", len(data)) + t + data + struct.pack(">I", zlib.crc32(t + data) & 0xffffffff)
 
 def read_xmp(cs):
+    """The XMP packet and the index of its chunk. Usually iTXt; a shared
+    screenshot from June 2026 carried it in tEXt, which pand also reads."""
     for k, (t, d) in enumerate(cs):
         if t == b"iTXt" and d.startswith(XMP_KEY + b"\x00"):
             return k, d.split(b"\x00", 5)[-1].decode("utf-8")
+        if t == b"tEXt" and d.startswith(XMP_KEY + b"\x00"):
+            return k, d.split(b"\x00", 1)[1].decode("latin-1")
     return None, None
 
 def with_xmp(b, cs, k, packet):
