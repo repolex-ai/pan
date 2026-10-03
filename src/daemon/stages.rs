@@ -146,8 +146,12 @@ pub async fn run(d: Arc<Daemon>) {
 }
 
 /// One pass of the ready mark over every store: an object whose every
-/// configured stage has a record is ready as configured; say when. With no
-/// stages configured, ingest IS ready. Returns how many were marked.
+/// enabled stage has a record is complete; say when. With no stage enabled
+/// nothing is marked (the rule lives in `WorkIndex::complete_candidates`):
+/// the old reading of an empty requirement as "complete" wrote the date on
+/// 204,922 images at arrival during the Pool migration (goodlux,
+/// 2026-10-03: the value should never have been set). Returns how many
+/// were marked.
 pub async fn mark_enrichment_complete_pass(d: Arc<Daemon>) -> usize {
     let mut done = 0usize;
     let required: Vec<(String, String)> = d

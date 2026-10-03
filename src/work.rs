@@ -261,6 +261,11 @@ impl WorkIndex {
     /// Images with a record for every required (reference, model) pair and
     /// no ready mark yet.
     pub fn complete_candidates(&self, required: &[(String, String)], limit: usize) -> Vec<String> {
+        // Nothing required means nothing has been done, not that everything
+        // has: with no stage enabled no image is complete (goodlux, 2026-10-03).
+        if required.is_empty() {
+            return Vec::new();
+        }
         let sets: Vec<Option<&HashSet<String>>> = required
             .iter()
             .map(|(l, m)| self.done.get(&(l.clone(), m.clone())))
@@ -375,10 +380,9 @@ mod tests {
         assert!(w.complete_candidates(&req, 5).is_empty());
         w.mark_done("poseData", "m", "https://repolex.ai/pan/Image/aaa");
         assert_eq!(w.complete_candidates(&req, 5), ["aaa"]);
-        assert_eq!(
-            w.complete_candidates(&[], 5),
-            ["aaa"],
-            "no stages: ingest is ready"
+        assert!(
+            w.complete_candidates(&[], 5).is_empty(),
+            "no stage enabled: nothing is complete"
         );
         w.mark_complete("https://repolex.ai/pan/Image/aaa");
         assert!(w.complete_candidates(&req, 5).is_empty());
