@@ -352,6 +352,14 @@ pub struct IndexStats {
     pub count: usize,
 }
 
+/// What [`Pan::rename_namespace`] did: how many images had their file
+/// rewritten and how many facts moved.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct RenameReport {
+    pub images: usize,
+    pub quads: usize,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PutResult {
     /// The assigned identity, bare — new on EVERY put.
@@ -2629,25 +2637,139 @@ impl Pan {
         let Some(subject) = self.subject_for(id)? else {
             return Err(anyhow!("id not found: {id}"));
         };
-        let facts = self.facts_for(id)?;
+        self.restamp_subject(&subject, None)
+    }
+
+    /// Rewrite one image's XMP from the graph. The producer's own
+    /// Descriptions are kept as they are in the file; `rename`, when given,
+    /// is a namespace IRI to replace throughout that kept text, so a
+    /// namespace renamed in the graph is renamed in the file too.
+    fn restamp_subject(&self, subject: &NamedNode, rename: Option<(&str, &str)>) -> Result<()> {
+        let facts = Self::facts_of(&self.store, subject)?;
         let Some(media_path) = facts
             .iter()
             .find(|(p, _)| p == &format!("{PAN_NS}mediaPath"))
             .and_then(|(_, v)| v.first())
         else {
-            return Err(anyhow!("id not found: {id}"));
+            return Err(anyhow!("id not found: {subject}"));
         };
         let abs = self.layout.abs(media_path);
         let bytes = fs::read(&abs).with_context(|| format!("read media {}", abs.display()))?;
         if !xmp::is_png(&bytes) {
             return Ok(()); // non-PNG media carries no XMP (v1)
         }
-        let existing = xmp::read_xmp_packet_from_bytes(&bytes).unwrap_or(None);
-        let pan_desc = xmp::build_pan_description(&self.image_packet_from(&self.store, &subject)?);
+        let mut existing = xmp::read_xmp_packet_from_bytes(&bytes).unwrap_or(None);
+        if let (Some(text), Some((from, to))) = (existing.as_mut(), rename) {
+            *text = text.replace(from, to);
+        }
+        let pan_desc = xmp::build_pan_description(&self.image_packet_from(&self.store, subject)?);
         let packet = xmp::compose_packet(existing.as_deref(), &pan_desc);
         let written = xmp::write_packet_into_png_bytes(&bytes, &packet)?;
         write_atomic(&abs, &written).with_context(|| format!("write media {}", abs.display()))?;
         Ok(())
+    }
+
+    /// Move every fact in this store from one namespace to another: a
+    /// predicate or IRI object under `from` becomes the same name under `to`,
+    /// in the graph and in each image's XMP. Written for the copia facts
+    /// that arrived under an older spelling of the copia namespace (goodlux,
+    /// 2026-10-03: set them to the current one). One image at a time, graph
+    /// then file; a file that cannot be rewritten has its facts put back and
+    /// the call stops there, so no image ever disagrees with its own file.
+    pub fn rename_namespace(&self, from: &str, to: &str) -> Result<RenameReport> {
+        if from.is_empty() || to.is_empty() {
+            return Err(anyhow!("both namespaces must be given"));
+        }
+        if from == to {
+            return Err(anyhow!("the two namespaces are the same: {from}"));
+        }
+        let g = crate::config::pan_graph();
+        let mut by_subject: HashMap<NamedOrBlankNode, Vec<Quad>> = HashMap::new();
+        for q in self
+            .store
+            .quads_for_pattern(None, None, None, Some(g.as_ref()))
+        {
+            let q = q.context("scan graph")?;
+            let hit_p = q.predicate.as_str().starts_with(from);
+            let hit_o = matches!(&q.object, Term::NamedNode(n) if n.as_str().starts_with(from));
+            if hit_p || hit_o {
+                by_subject.entry(q.subject.clone()).or_default().push(q);
+            }
+        }
+        let moved = |iri: &NamedNode| -> Result<NamedNode> {
+            match iri.as_str().strip_prefix(from) {
+                Some(rest) => NamedNode::new(format!("{to}{rest}"))
+                    .map_err(|e| anyhow!("{to}{rest} is not an IRI: {e}")),
+                None => Ok(iri.clone()),
+            }
+        };
+        let image_type = NamedNode::new(format!("{PAN_NS}Image")).expect("pan:Image");
+        let mut report = RenameReport::default();
+        let mut subjects: Vec<_> = by_subject.into_iter().collect();
+        subjects.sort_by_key(|a| a.0.to_string());
+        for (subject, old) in subjects {
+            let mut new = Vec::with_capacity(old.len());
+            for q in &old {
+                let object = match &q.object {
+                    Term::NamedNode(n) => Term::NamedNode(moved(n)?),
+                    other => other.clone(),
+                };
+                new.push(Quad::new(
+                    q.subject.clone(),
+                    moved(&q.predicate)?,
+                    object,
+                    q.graph_name.clone(),
+                ));
+            }
+            let mut t = self
+                .store
+                .start_transaction()
+                .context("start transaction")?;
+            for q in &old {
+                t.remove(q.as_ref());
+            }
+            for q in &new {
+                t.insert(q.as_ref());
+            }
+            t.commit().context("commit rename")?;
+            report.quads += old.len();
+            let NamedOrBlankNode::NamedNode(node) = &subject else {
+                continue;
+            };
+            let is_image = self
+                .store
+                .quads_for_pattern(
+                    Some(node.into()),
+                    Some(NamedNode::new(RDF_TYPE).expect("rdf:type").as_ref()),
+                    Some((&image_type).into()),
+                    Some(g.as_ref()),
+                )
+                .next()
+                .is_some();
+            if !is_image {
+                continue;
+            }
+            if let Err(e) = self.restamp_subject(node, Some((from, to))) {
+                let mut t = self
+                    .store
+                    .start_transaction()
+                    .context("start transaction")?;
+                for q in &new {
+                    t.remove(q.as_ref());
+                }
+                for q in &old {
+                    t.insert(q.as_ref());
+                }
+                t.commit().context("restore after failed rewrite")?;
+                return Err(e.context(format!(
+                    "{node}: the file could not be rewritten; its facts were put back and the rename stopped there                      ({} images and {} facts before it were renamed and stand)",
+                    report.images, report.quads - old.len()
+                )));
+            }
+            report.images += 1;
+        }
+        self.changed();
+        Ok(report)
     }
 
     /// Pan's own block for one object, read from `store` (the live store on

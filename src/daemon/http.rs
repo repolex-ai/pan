@@ -180,6 +180,25 @@ pub struct ImageSetMemberBody {
     pub media: String,
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct RenameNamespaceBody {
+    /// The namespace IRI the facts are under now, e.g. `https://repolex.ai/ontology/kit/copia/`.
+    pub from: String,
+    /// The namespace IRI they move to, e.g. `https://repolex.ai/ontology/copia/`.
+    pub to: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct RenameNamespaceResponse {
+    pub store: String,
+    pub from: String,
+    pub to: String,
+    /// Images whose XMP was rewritten.
+    pub images: usize,
+    /// Facts moved to the new namespace.
+    pub quads: usize,
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct ErrorBody {
     pub error: String,
@@ -210,6 +229,8 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("XMP")
         || msg.contains("ambiguous")
         || msg.contains("not a property pan.ttl declares on an image")
+        || msg.contains("namespaces must be given")
+        || msg.contains("namespaces are the same")
         || msg.contains("nothing to set")
         || msg.contains("nothing to unset")
         || msg.contains("imageset file")
@@ -940,6 +961,30 @@ async fn create_imageset_in(
     ))
 }
 
+#[utoipa::path(post, path = "/stores/{id}/rename-namespace", tag = "media", params(("id" = String, Path, description = "Store id")),
+    request_body(content = RenameNamespaceBody, description = "Move every fact under one namespace IRI to another, in the graph and in each image's XMP"),
+    responses((status = 200, body = RenameNamespaceResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn rename_namespace(
+    State(d): State<Shared>,
+    AxPath(store_id): AxPath<String>,
+    Json(body): Json<RenameNamespaceBody>,
+) -> Result<Json<RenameNamespaceResponse>, ApiError> {
+    let store = d.store_for(Some(&store_id)).map_err(map_err)?;
+    let s2 = store.clone();
+    let (from, to) = (body.from.clone(), body.to.clone());
+    let r = tokio::task::spawn_blocking(move || s2.pan.rename_namespace(&from, &to))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(map_err)?;
+    Ok(Json(RenameNamespaceResponse {
+        store: store.entry.id.clone(),
+        from: body.from,
+        to: body.to,
+        images: r.images,
+        quads: r.quads,
+    }))
+}
+
 fn locate_imageset(d: &Daemon, given: &str) -> Result<(Arc<super::StoreHandle>, String), ApiError> {
     let id = bare_id(given);
     let store = d.locate_imageset(&id).map_err(map_err)?.ok_or_else(|| {
@@ -1039,9 +1084,9 @@ async fn imageset_member(
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
     paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_sparql_get, store_sparql_post,
-          imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove),
+          imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove, rename_namespace),
     components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody,
-                       ImageSetResponse, ImageSetCreateBody, ImageSetMemberBody)),
+                       ImageSetResponse, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse)),
     tags(
         (name = "meta", description = "Daemon + store status"),
         (name = "media", description = "Deliver, read, describe, delete"),
@@ -1073,6 +1118,7 @@ pub fn router(d: Shared) -> Router {
             get(store_imagesets).post(create_store_imageset),
         )
         .route("/stores/{id}/media", post(deliver_to))
+        .route("/stores/{id}/rename-namespace", post(rename_namespace))
         .route(
             "/stores/{id}/sparql",
             get(store_sparql_get).post(store_sparql_post),

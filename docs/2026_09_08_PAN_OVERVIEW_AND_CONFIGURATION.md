@@ -239,6 +239,20 @@ range (a rating of 6, a pick of `yes`) is refused naming the expected type.
 A new field is declared in pan.ttl first; the command reads the list from
 the ontology.
 
+### Moving facts from one namespace to another
+
+A producer's facts are loaded as written, so a producer that changes the
+spelling of its namespace leaves a store with the same field under two
+IRIs. `POST /stores/{id}/rename-namespace` with `{"from": "…", "to": "…"}`
+moves every fact in that store whose predicate (or IRI value) sits under
+`from` to the same name under `to`, in the graph and in each image's XMP,
+one image at a time. The answer says how many images were rewritten and how
+many facts moved; running it again does nothing. An image whose file cannot
+be rewritten has its facts put back and the call stops there, so no image
+disagrees with its own file. Added for the copia facts that arrived under
+`https://repolex.ai/ontology/kit/copia/` before the namespace settled on
+`https://repolex.ai/ontology/copia/` (goodlux, 2026-10-03).
+
 ### How a model answer becomes metadata
 
 The caption prompt asks the model for one JSON object whose keys are Pan
