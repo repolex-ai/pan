@@ -216,6 +216,7 @@ def main():
                     help="the set id is the file name without its __s<seed> tail, lowercased, _ runs as - (used when the XMP names no set)")
     ap.add_argument("--set-pattern", action="append", default=[],
                     help="with --set-from-name: a regex whose group 1 is the set id; may repeat, first match wins")
+    ap.add_argument("--set", default="", help="one fixed set id for every file in this run (used when the XMP names no set)")
     ap.add_argument("--no-xmp-ok", action="store_true",
                     help="a file with no XMP gets a packet holding only the pan Description instead of being skipped")
     a = ap.parse_args()
@@ -290,7 +291,7 @@ def main():
             packet = EMPTY_PACKET
         try:
             media_created = date_from_birthtime(path) if a.date_from == "birthtime" else None
-            set_id = set_from_name(stem, a.set_pattern) if a.set_from_name else None
+            set_id = set_from_name(stem, a.set_pattern) if a.set_from_name else (a.set or None)
             new_packet, facts = prepare(packet, stem, a.keep_sub_descriptions, media_created, set_id)
         except ValueError as e:
             row("skipped", path, stem, reason="prepare: %s" % e); continue
