@@ -98,9 +98,20 @@ def date_from_name(stem):
 def date_from_birthtime(path):
     return dt.datetime.fromtimestamp(os.stat(path).st_birthtime).astimezone().isoformat(timespec="seconds")
 
-def set_from_name(stem):
-    """True9b__recline_side__bare__s3102 -> true9b-recline-side-bare"""
-    sid = re.sub(r"_+", "-", re.sub(r"__s\d+$", "", stem)).lower()
+def set_from_name(stem, patterns=()):
+    """True9b__recline_side__bare__s3102 -> true9b-recline-side-bare. With
+    --set-pattern, the first pattern that matches gives the id as its group 1:
+    083559_r16-sit-window-morning-coffee -> sit-window-morning-coffee."""
+    if patterns:
+        for pat in patterns:
+            m = re.match(pat, stem)
+            if m:
+                raw = m.group(1); break
+        else:
+            raise ValueError("file name matches no --set-pattern: %r" % stem)
+    else:
+        raw = re.sub(r"__s\d+$", "", stem)
+    sid = re.sub(r"_+", "-", raw).lower()
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", sid):
         raise ValueError("file name does not make a set id: %r" % sid)
     return sid
@@ -203,6 +214,8 @@ def main():
                     help="where pan:mediaCreatedDate comes from: the file name (Pool files) or the file's creation time")
     ap.add_argument("--set-from-name", action="store_true",
                     help="the set id is the file name without its __s<seed> tail, lowercased, _ runs as - (used when the XMP names no set)")
+    ap.add_argument("--set-pattern", action="append", default=[],
+                    help="with --set-from-name: a regex whose group 1 is the set id; may repeat, first match wins")
     ap.add_argument("--no-xmp-ok", action="store_true",
                     help="a file with no XMP gets a packet holding only the pan Description instead of being skipped")
     a = ap.parse_args()
@@ -277,7 +290,7 @@ def main():
             packet = EMPTY_PACKET
         try:
             media_created = date_from_birthtime(path) if a.date_from == "birthtime" else None
-            set_id = set_from_name(stem) if a.set_from_name else None
+            set_id = set_from_name(stem, a.set_pattern) if a.set_from_name else None
             new_packet, facts = prepare(packet, stem, a.keep_sub_descriptions, media_created, set_id)
         except ValueError as e:
             row("skipped", path, stem, reason="prepare: %s" % e); continue
