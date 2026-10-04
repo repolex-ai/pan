@@ -81,3 +81,40 @@ fn embed_work_list_is_one_row_per_image() {
     assert_eq!(pending.len(), 1, "one row for one captioned image");
     assert_eq!(pending[0].id, a);
 }
+
+/// 2026-10-04: with the work list already built, a caption landing on an
+/// image never reached it, so segment and embed saw nothing new until the
+/// list was rebuilt at the next restart. An hour of captions, six embeddings.
+#[test]
+fn a_caption_written_after_the_work_list_is_built_is_seen_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Pan::open(dir.path()).unwrap();
+    let put = store.put(&make_png(9), Some("image/png")).unwrap();
+    // Build the list first: nothing is captioned yet, so nothing is pending.
+    assert!(store
+        .pending_for("vectorData", "qwen3-vl-embedding-2b", 16, None)
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .pending_for("regionData", "facebook/sam3", 16, None)
+        .unwrap()
+        .is_empty());
+    let p = Perception::parse(
+        "{\"shortCaption\": \"s\", \"longCaption\": \"a long description\", \"sceneObjects\": [\"wolf\"]}",
+    )
+    .unwrap();
+    store.set_perception(&put.id, &p).unwrap();
+    let embed = store
+        .pending_for("vectorData", "qwen3-vl-embedding-2b", 16, None)
+        .unwrap();
+    assert_eq!(
+        embed.len(),
+        1,
+        "the embed pass sees the captioned image without a rebuild"
+    );
+    assert_eq!(embed[0].id, put.id);
+    let segment = store
+        .pending_for("regionData", "facebook/sam3", 16, None)
+        .unwrap();
+    assert_eq!(segment.len(), 1, "so does the segment pass");
+}

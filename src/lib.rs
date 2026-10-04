@@ -2136,6 +2136,12 @@ impl Pan {
             t.insert(self.quad(&subject, local, value).as_ref());
         }
         t.commit().context("commit perception")?;
+        // The work list gates segmentation on the scene objects and the
+        // embedding on the long caption; it has to hear that they exist now,
+        // or both passes sit idle until the list is next rebuilt (found
+        // 2026-10-04: an hour of captions landing with no segment or embed
+        // following).
+        self.refresh_needs(id);
         self.restamp(id)
     }
 
