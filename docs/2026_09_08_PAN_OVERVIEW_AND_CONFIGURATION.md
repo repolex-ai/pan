@@ -239,6 +239,21 @@ range (a rating of 6, a pick of `yes`) is refused naming the expected type.
 A new field is declared in pan.ttl first; the command reads the list from
 the ontology.
 
+### Running one stage again for one image
+
+```sh
+pan redo '<pan/Image/k7m2p9x4>' embed
+```
+
+forgets that stage's result for that image: the reference, its records,
+the files they name (record, server reply, vector, depth map, overlays,
+masks), the vector index entry for embed, and the completion date. The
+image's XMP is rewritten without the reference, and the stage picks the
+image up again on its next pass. The caption's own fields stay on the image
+when the embed stage is redone; redoing caption replaces them when the new
+caption lands. Over HTTP: `POST /media/{id}/redo` with `{"stage": "embed"}`;
+stages are caption, embed, segment, pose, depth.
+
 ### Moving facts from one namespace to another
 
 A producer's facts are loaded as written, so a producer that changes the

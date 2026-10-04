@@ -199,6 +199,23 @@ pub struct RenameNamespaceResponse {
     pub quads: usize,
 }
 
+#[derive(Deserialize, ToSchema)]
+pub struct RedoBody {
+    /// The stage to run again for this image: caption, embed, segment, pose or depth.
+    pub stage: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct RedoResponse {
+    pub id: String,
+    pub store: String,
+    pub stage: String,
+    /// Files of the old result removed beside the image.
+    pub files_removed: usize,
+    /// Facts of the old result removed from the graph.
+    pub facts_removed: usize,
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct ErrorBody {
     pub error: String,
@@ -231,6 +248,7 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("not a property pan.ttl declares on an image")
         || msg.contains("namespaces must be given")
         || msg.contains("namespaces are the same")
+        || msg.contains("is not a stage reference")
         || msg.contains("nothing to set")
         || msg.contains("nothing to unset")
         || msg.contains("imageset file")
@@ -500,6 +518,39 @@ async fn unset_fields(
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(map_err)?;
     facts_response(&store, &id).map(Json)
+}
+
+#[utoipa::path(post, path = "/media/{id}/redo", tag = "media", params(("id" = String, Path)),
+    request_body(content = RedoBody, description = "Forget one stage's result for this image so the stage runs it again"),
+    responses((status = 200, body = RedoResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn redo(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+    Json(body): Json<RedoBody>,
+) -> Result<Json<RedoResponse>, ApiError> {
+    let (store, id) = locate(&d, &given)?;
+    let Some(link) = stages::link_for(&body.stage) else {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{} is not a stage; one of caption, embed, segment, pose, depth",
+                body.stage
+            ),
+        ));
+    };
+    let s2 = store.clone();
+    let id2 = id.clone();
+    let r = tokio::task::spawn_blocking(move || s2.pan.forget_enrichment(&id2, link))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(map_err)?;
+    Ok(Json(RedoResponse {
+        id: bracket_iri(&format!("{}Image/{id}", crate::PAN_MEDIA_NS)),
+        store: store.entry.id.clone(),
+        stage: body.stage,
+        files_removed: r.files_removed,
+        facts_removed: r.facts_removed,
+    }))
 }
 
 fn facts_response(store: &Arc<super::StoreHandle>, id: &str) -> Result<FactsResponse, ApiError> {
@@ -1084,9 +1135,9 @@ async fn imageset_member(
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
     paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_sparql_get, store_sparql_post,
-          imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove, rename_namespace),
+          imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove, rename_namespace, redo),
     components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody,
-                       ImageSetResponse, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse)),
+                       ImageSetResponse, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse, RedoBody, RedoResponse)),
     tags(
         (name = "meta", description = "Daemon + store status"),
         (name = "media", description = "Deliver, read, describe, delete"),
@@ -1107,6 +1158,7 @@ pub fn router(d: Shared) -> Router {
         .route("/media/{id}/state", get(get_state))
         .route("/media/{id}/set", post(set_fields))
         .route("/media/{id}/unset", post(unset_fields))
+        .route("/media/{id}/redo", post(redo))
         .route("/query", post(query))
         .route("/search", post(search))
         .route("/imagesets", get(imagesets).post(create_imageset))

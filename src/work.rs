@@ -100,6 +100,18 @@ impl WorkIndex {
             .insert(iri.to_string());
     }
 
+    /// Forget one stage's result for an image, so the stage runs it again;
+    /// the image is no longer complete either.
+    pub fn forget(&mut self, ref_local: &str, model: &str, iri: &str) {
+        if let Some(set) = self
+            .done
+            .get_mut(&(ref_local.to_string(), model.to_string()))
+        {
+            set.remove(iri);
+        }
+        self.complete.remove(iri);
+    }
+
     pub fn mark_complete(&mut self, iri: &str) {
         self.complete.insert(iri.to_string());
     }

@@ -352,6 +352,13 @@ pub struct IndexStats {
     pub count: usize,
 }
 
+/// What [`Pan::forget_enrichment`] removed.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct ForgetReport {
+    pub files_removed: usize,
+    pub facts_removed: usize,
+}
+
 /// What [`Pan::rename_namespace`] did: how many images had their file
 /// rewritten and how many facts moved.
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -2371,7 +2378,17 @@ impl Pan {
         }
         t.commit().context("commit delete")?;
 
-        // Vector index entries, across every index on disk.
+        self.remove_from_indexes(id)?;
+        self.changed();
+        if let Some(w) = locked(&self.work).as_mut() {
+            w.remove_image(subject.as_str());
+        }
+        Ok(())
+    }
+
+    /// Take an image out of every vector index on disk, loading an index
+    /// only if its key map says the image is in it.
+    fn remove_from_indexes(&self, id: &str) -> Result<()> {
         validate_pan_id(id)?;
         let index_names: Vec<String> = fs::read_dir(&self.layout.hnsw_root)
             .map(|rd| {
@@ -2406,11 +2423,134 @@ impl Pan {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Forget one stage's result for one image so the stage runs it again:
+    /// the reference node, the records it holds, every file they name (the
+    /// record file, the server's reply, the vector, the depth map, the
+    /// overlays, the masks), the vector index entry when the stage is embed,
+    /// and the completion date, since the image is no longer complete. The
+    /// image's XMP is rewritten without the reference. Written for redoing
+    /// embeddings after the text they are built from changes (goodlux,
+    /// 2026-10-04). `ref_local` is the reference property: vectorData,
+    /// captionData, regionData, poseData or depthData.
+    pub fn forget_enrichment(&self, id: &str, ref_local: &str) -> Result<ForgetReport> {
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
+        let refs = [
+            "vectorData",
+            "captionData",
+            "regionData",
+            "poseData",
+            depth::REF_LOCAL,
+        ];
+        if !refs.contains(&ref_local) {
+            return Err(anyhow!(
+                "{ref_local} is not a stage reference; one of {}",
+                refs.join(", ")
+            ));
+        }
+        let facts = self.facts_for(id)?;
+        let nodes: Vec<String> = facts
+            .iter()
+            .find(|(p, _)| p == &format!("{PAN_NS}{ref_local}"))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        let mut report = ForgetReport::default();
+        if nodes.is_empty() {
+            return Ok(report);
+        }
+        let g = crate::config::pan_graph();
+        let mut rels: Vec<String> = Vec::new();
+        let mut linked: Vec<NamedNode> = Vec::new();
+        let mut models: Vec<String> = Vec::new();
+        for v in &nodes {
+            let Ok(node) = NamedNode::new(v.as_str()) else {
+                continue;
+            };
+            models.extend(self.node_field(v, "model")?);
+            for field in ["path", "modelReplyPath"] {
+                rels.extend(self.node_field(v, field)?);
+            }
+            let items: Vec<NamedNode> = self
+                .store
+                .quads_for_pattern(
+                    Some((&node).into()),
+                    Some(pan_iri("item").as_ref()),
+                    None,
+                    Some(g.as_ref()),
+                )
+                .filter_map(|q| q.ok())
+                .filter_map(|q| match q.object {
+                    Term::NamedNode(n) => Some(n),
+                    _ => None,
+                })
+                .collect();
+            for item in items {
+                for field in ["vectorPath", "depthMapPath", "overlayPath", "maskPath"] {
+                    rels.extend(self.node_field(item.as_str(), field)?);
+                }
+                linked.push(item);
+            }
+            linked.push(node);
+        }
+        rels.sort();
+        rels.dedup();
+        // Graph first, then files: a file left behind is litter, a fact left
+        // behind would make the stage think the work is done.
+        let mut t = self
+            .store
+            .start_transaction()
+            .context("start transaction")?;
+        for s in &linked {
+            let qs: Vec<Quad> = self
+                .store
+                .quads_for_pattern(Some(s.into()), None, None, Some(g.as_ref()))
+                .collect::<std::result::Result<_, _>>()
+                .context("scan for forget")?;
+            for q in &qs {
+                t.remove(q.as_ref());
+            }
+            report.facts_removed += qs.len();
+        }
+        for local in [ref_local, "enrichmentCompleteDate"] {
+            let qs: Vec<Quad> = self
+                .store
+                .quads_for_pattern(
+                    Some((&subject).into()),
+                    Some(pan_iri(local).as_ref()),
+                    None,
+                    Some(g.as_ref()),
+                )
+                .collect::<std::result::Result<_, _>>()
+                .context("scan for forget")?;
+            for q in &qs {
+                t.remove(q.as_ref());
+            }
+            report.facts_removed += qs.len();
+        }
+        t.commit().context("commit forget")?;
+        for rel in &rels {
+            let abs = self.layout.abs(rel);
+            if abs.exists() {
+                fs::remove_file(&abs).with_context(|| format!("remove {}", abs.display()))?;
+                report.files_removed += 1;
+            }
+        }
+        if ref_local == "vectorData" {
+            self.remove_from_indexes(id)?;
+        }
         self.changed();
         if let Some(w) = locked(&self.work).as_mut() {
-            w.remove_image(subject.as_str());
+            for m in &models {
+                w.forget(ref_local, m, subject.as_str());
+            }
         }
-        Ok(())
+        self.refresh_needs(id);
+        self.restamp(id)?;
+        Ok(report)
     }
 
     // ── vectors + search (the crown jewel, lifted from Pool) ──────────────────

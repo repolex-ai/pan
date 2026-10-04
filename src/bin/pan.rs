@@ -8,6 +8,7 @@
 //!   pan stores                       → the stores this machine's pand manages
 //!   pan set   <pan/Image/id> key=value … → write any fact pan.ttl declares on an image (rating=4 isPicked=true)
 //!   pan unset <pan/Image/id> key …       → remove them
+//!   pan redo  <pan/Image/id> embed
 //!   pan imageset create [<user-id>] "<description>" → <pan/ImageSet/id>
 //!   pan imageset list   [<user-id>]                 → every set in the store
 //!   pan imageset show   <pan/ImageSet/id>           → its facts and its media
@@ -32,6 +33,7 @@ fn usage() -> ! {
            pan stores\n  \
            pan set   <pan/Image/id> rating=4 isPicked=true isRejected=false\n  \
            pan unset <pan/Image/id> rating\n  \
+           pan redo  <pan/Image/id> embed\n  \
            pan imageset create [<user-id>] \"<description>\"\n  \
            pan imageset list   [<user-id>]\n  \
            pan imageset show   <pan/ImageSet/id>\n  \
@@ -212,6 +214,19 @@ fn main() -> Result<()> {
             let v = check(
                 c.post(format!("{base}/media/{}/unset", encode_id(id)))
                     .json(&keys)
+                    .send()
+                    .map_err(not_running)?,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+            Ok(())
+        }
+        "redo" => {
+            let [id, stage] = rest.as_slice() else {
+                usage()
+            };
+            let v = check(
+                c.post(format!("{base}/media/{}/redo", encode_id(id)))
+                    .json(&serde_json::json!({ "stage": stage }))
                     .send()
                     .map_err(not_running)?,
             )?;
