@@ -1639,11 +1639,9 @@ impl Pan {
 
     /// All facts on the object's subject: full-IRI predicate → values. Empty =
     /// unknown id.
-    /// The text the embedding is built from, beside the image itself
-    /// (goodlux, 2026-09-20): the two captions, the scene fields, the two
-    /// scores and their critiques, and the render request the file arrived
-    /// with. Nothing else — the packet that used to be sent whole was mostly
-    /// markup, paths, identifiers and dates.
+    /// The text the embedding is built from, beside the image itself: the
+    /// two captions and the render request the file arrived with. Nothing
+    /// else (goodlux, 2026-10-04).
     pub fn embedding_text(&self, id: &str) -> Result<String> {
         let facts = self.facts_for(id)?;
         let value = |local: &str| -> Vec<String> {
@@ -1665,15 +1663,13 @@ impl Pan {
                 }
             }
         };
+        // Captions and the render request only (goodlux, 2026-10-04). The
+        // scene fields are expected to change and would date every vector
+        // built from them; the scores and critiques are graph facts to
+        // query on, not text the picture is about. A change to the render
+        // request text means re-embedding the images it touches.
         put("shortCaption", value("shortCaption"));
         put("longCaption", value("longCaption"));
-        put("sceneObjects", vec![value("sceneObjects").join(", ")]);
-        for f in SCENE_FIELDS {
-            put(f, value(f));
-        }
-        for f in JUDGEMENT_FIELDS {
-            put(f, value(f));
-        }
         put(
             "renderRequestInformation",
             value("renderRequestInformation"),

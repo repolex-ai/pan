@@ -264,6 +264,8 @@ The model's raw answer is kept verbatim in the caption record beside the
 image.
 
 The order of the stages follows from the data. Segmentation is prompted with
-`sceneObjects`, and the embedding is built from the image and its complete
-XMP together, so both wait until the caption stage has written its fields.
+`sceneObjects`, and the embedding is built from the image together with its
+two captions and the render request the file arrived with (the scene fields,
+scores and critiques stay out of it), so both wait until the caption stage
+has written its fields.
 Pose needs nothing and runs at once.
