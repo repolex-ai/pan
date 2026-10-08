@@ -142,14 +142,12 @@ stores:                                  # every store this daemon serves, in pr
 default: ~/.pan                          # where `pan store <file>` lands when no store is named
 media_volume: /Volumes/p02/_pan          # media root = <volume>/<6-char id>/pan; omit to keep media in the store
 port: 7401
-batch: 4                                 # images per stage per store per pass
-interval_secs: 5                         # pause between passes when nothing is pending
 backfill_since: "2026-09-07T04:15:45-07:00"   # images created before this are not sent to models
 log_keep_days: 30                        # days of model-call log files kept under logs/calls/
 models:
   caption:
     url: http://127.0.0.1:1215/percept/vlm
-    model: qwen/qwen3.8-27b
+    model: qwen/qwen3.8-27b              # the provider's own name, sent as written; Pan labels records qwen3-8-27b
     prompt: caption.md                   # a file in ~/.config/pan/prompts/
     extra_body: { ... }                  # provider settings passed through untouched
     enabled: true
@@ -161,8 +159,9 @@ models:
 Every stage is optional. A missing config file means one store at `~/.pan`
 and no model stages.
 
-A pass sends its `batch` of images to the stage's one address at once and
-records what comes back. Pan does not count what the server can take and
+A pass sends four images to the stage's one address at once and records
+what comes back, then rests five seconds; that is Pan's own pace, the same
+for every server. Pan does not count what the server can take and
 has no second address for a stage: a call the server refuses (429, 503, a
 timeout) is asked for again on a later pass, and a server that cannot be
 reached at all holds the stage for a few seconds before the next try
@@ -181,8 +180,8 @@ said: no image bytes, no answer text.
 - `status` is the HTTP status, or null when no answer came back at all.
 - `request_bytes` is the payload (image plus text or JSON body), not the
   wire size.
-- `outcome` is one of `recorded` (the answer was written), `backend_down` (no node
-  up, the stage held), `quota` (the provider account is out of credit, the
+- `outcome` is one of `recorded` (the answer was written), `unreachable` (the
+  server could not be reached, the stage held), `quota` (the provider account is out of credit, the
   stage held), `transient` (asked again later), `terminal` (this image is
   never asked again by this stage).
 

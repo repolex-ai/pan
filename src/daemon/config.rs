@@ -69,11 +69,11 @@ pub struct ModelEndpoint {
     #[serde(default = "default_polygon_verts")]
     pub polygon_verts: u32,
     /// Provider-side request fields for a captioning endpoint, sent VERBATIM
-    /// as the `extra_body` form field; Iris merges them into the
-    /// provider's request body untouched (m3rc, 2026-09-05). Qwen's thinking
+    /// as the `extra_body` form field; the server merges them into the
+    /// provider's request body untouched. Qwen's thinking
     /// switch lives here — `chat_template_kwargs: {enable_thinking: false}` —
     /// and so do `max_tokens` / `temperature`. Pan has no opinion about the
-    /// contents and Iris has none either. Absent = nothing sent.
+    /// contents. Absent = nothing sent.
     pub extra_body: Option<serde_json::Value>,
     /// Test mode (Rob, 2026-09-03): `enabled: false` keeps the stage declared
     /// but pand never calls it — ingest still lands, `pan state` says "off",
@@ -82,7 +82,7 @@ pub struct ModelEndpoint {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     /// `Authorization` header value for `url` (e.g. `Bearer …`), when the
-    /// endpoint is a node reached directly rather than Iris. Absent =
+    /// endpoint wants one. Absent =
     /// no header.
     pub auth: Option<String>,
 }
@@ -97,6 +97,10 @@ pub struct Target {
 }
 
 impl ModelEndpoint {
+    /// The name Pan writes on records and files for this model; see [`label_of`].
+    pub fn label(&self) -> String {
+        label_of(&self.model)
+    }
     pub fn target(&self) -> Target {
         Target {
             url: self.url.clone(),
@@ -132,11 +136,6 @@ struct ConfigYml {
     port: Option<u16>,
     #[serde(default)]
     models: BTreeMap<String, ModelEndpoint>,
-    /// Seconds between two passes of the stage ladder over every store.
-    interval_secs: Option<u64>,
-    /// How many images one stage handles per pass per store. Bounded so one
-    /// store with a backlog cannot starve the others.
-    batch: Option<usize>,
     backfill_since: Option<String>,
     /// How many days of model-call log files to keep under
     /// `<config dir>/logs/calls/`. Absent = 30.
@@ -155,8 +154,6 @@ pub struct DaemonConfig {
     pub port: u16,
     /// stage name → endpoint. Known stage names: embed, caption, sam3, pose.
     pub models: BTreeMap<String, ModelEndpoint>,
-    pub interval_secs: u64,
-    pub batch: usize,
     /// The backfill floor: images created BEFORE this (RFC 3339, local offset,
     /// same shape as pan:createdDate) are never handed to a stage. Newest
     /// first still applies above it. Absent = no floor, walk everything.
@@ -262,7 +259,27 @@ pub fn resolve_prompt(prompts_dir: &Path, name: &str) -> (String, PathBuf) {
     (name.to_string(), prompts_dir.join(name))
 }
 
-/// A model's name, which has to survive being a file name: lowercase letters,
+/// Pan's label for a model, derived from the name the provider wants on the
+/// wire: the part after the last `/`, lowercased, with every run of
+/// characters that are not letters or digits turned into one dash.
+/// `qwen/qwen3.8-27b` is `qwen3-8-27b`; `prism-ml/ternary-bonsai-2-27b` is
+/// `ternary-bonsai-2-27b`. The label is what lands in file names and on
+/// every record; the wire name is sent to the server as written (goodlux,
+/// 2026-10-08: any OpenAI-style provider, no special spelling for Pan).
+pub fn label_of(model: &str) -> String {
+    let tail = model.rsplit('/').next().unwrap_or(model);
+    let mut out = String::with_capacity(tail.len());
+    for c in tail.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// A model's label, which has to survive being a file name: lowercase letters,
 /// digits and single dashes between them. No periods, no spaces, no slashes,
 /// no underscores, and never empty (goodlux, 2026-09-18).
 pub fn check_model_name(name: &str) -> std::result::Result<(), String> {
@@ -369,7 +386,7 @@ impl DaemonConfig {
                     prompts_dir.display(),
                 ));
             }
-            check_model_name(&m.model).map_err(|e| {
+            check_model_name(&label_of(&m.model)).map_err(|e| {
                 anyhow!(
                     "{}: stage {stage} has model: {:?} — {e}",
                     path.display(),
@@ -406,8 +423,6 @@ impl DaemonConfig {
             bind: DEFAULT_BIND.to_string(),
             port: yml.port.unwrap_or(DEFAULT_PORT),
             models,
-            interval_secs: yml.interval_secs.unwrap_or(5),
-            batch: yml.batch.unwrap_or(8),
             backfill_since: yml.backfill_since.filter(|s| !s.trim().is_empty()),
             log_keep_days: yml
                 .log_keep_days
@@ -541,27 +556,22 @@ mod tests {
         assert!(DaemonConfig::load_from(&p).is_err(), "fallback is refused");
     }
 
-    /// The name is what lands in a file name, so it may hold only what a file
-    /// name may hold. The wire string `qwen/qwen3.8-27b` is exactly what must
-    /// never reach one (goodlux, 2026-09-18).
+    /// The label is what lands in a file name, so it may hold only what a file
+    /// name may hold; it is derived from the provider's own spelling.
     #[test]
-    fn a_model_name_is_lowercase_digits_and_dashes() {
+    fn the_label_is_derived_from_the_wire_name() {
+        assert_eq!(label_of("qwen/qwen3.8-27b"), "qwen3-8-27b");
+        assert_eq!(
+            label_of("prism-ml/ternary-bonsai-2-27b"),
+            "ternary-bonsai-2-27b"
+        );
+        assert_eq!(label_of("sam3"), "sam3");
+        assert_eq!(label_of("Depth_Anything V2.base"), "depth-anything-v2-base");
         for good in ["qwen3-8-27b", "sam3", "rtmw-x-l", "depth-anything-v2-base"] {
             assert!(check_model_name(good).is_ok(), "{good} should be allowed");
         }
-        for bad in [
-            "qwen3.8-27b",
-            "qwen/qwen3.8-27b",
-            "depth anything",
-            "Depth-Anything",
-            "depth_anything",
-            "-sam3",
-            "sam3-",
-            "sam--3",
-            "",
-        ] {
-            assert!(check_model_name(bad).is_err(), "{bad:?} should be refused");
-        }
+        assert!(check_model_name("").is_err());
+        assert!(check_model_name("a--b").is_err());
     }
 
     /// The old shape put the endpoint's string in `model:` and pand wrote it

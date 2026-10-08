@@ -693,7 +693,7 @@ async fn get_state(
                 terminal: None,
             },
             Some(ep) if !ep.enabled => StageStatus {
-                status: if models.iter().any(|m| m == &ep.model) {
+                status: if models.iter().any(|m| *m == ep.label()) {
                     "done".into()
                 } else {
                     "off".into()
@@ -703,7 +703,7 @@ async fn get_state(
                 terminal: None,
             },
             Some(ep) => {
-                if models.iter().any(|m| m == &ep.model) {
+                if models.iter().any(|m| *m == ep.label()) {
                     StageStatus {
                         status: "done".into(),
                         models,
@@ -895,7 +895,7 @@ async fn search(
         d.cfg
             .models
             .get(stages::STAGE_EMBED)
-            .map(|m| m.model.clone())
+            .map(|m| m.label())
             .unwrap_or_else(|| store.pan.cfg.index_id.clone())
     });
     let k = body.k.unwrap_or(10);

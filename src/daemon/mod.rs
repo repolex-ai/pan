@@ -12,9 +12,9 @@
 //! missing, done, and recorded, one image at a time.
 
 pub mod calllog;
+pub mod client;
 pub mod config;
 pub mod http;
-pub mod iris;
 pub mod registry;
 pub mod stages;
 
@@ -52,7 +52,7 @@ pub struct Daemon {
     pub cfg: DaemonConfig,
     pub stores: Vec<Arc<StoreHandle>>,
     pub default_id: String,
-    pub iris: iris::Iris,
+    pub client: client::ModelClient,
     /// (store id, media id, stage) → last failed attempt.
     pub attempts: Mutex<HashMap<(String, String, String), Attempt>>,
     pub started: Instant,
@@ -65,7 +65,7 @@ pub struct Daemon {
     /// old (issue #71: seven count queries over 200,000 images took 7 s).
     pub counts_cache: Mutex<HashMap<String, (Instant, crate::StoreCounts)>>,
     /// stage name → until when the WHOLE stage is held. Set when a call fails
-    /// before reaching the model (connection refused/reset/timeout): the door
+    /// before reaching the model (connection refused/reset/timeout): the server
     /// is down, so walking the rest of the batch would only fail the same
     /// way, image after image (2026-09-05: 42 failed calls in 90 s against a
     /// dark :1215). One try per stage per hold, then the batch resumes.
@@ -139,7 +139,7 @@ impl Daemon {
             cfg,
             stores,
             default_id,
-            iris: iris::Iris::new(),
+            client: client::ModelClient::new(),
             attempts: Mutex::new(HashMap::new()),
             counters: Counters::default(),
             counts_cache: Mutex::new(HashMap::new()),

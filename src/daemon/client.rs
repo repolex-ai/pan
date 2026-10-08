@@ -1,12 +1,14 @@
-//! The model client — pand's ONE funnel to Iris (the eye), or anything that
-//! speaks its shape. Contract measured from iris/src/iris/server.py on
-//! 2026-09-03; every route is multipart with an `image` file field.
+//! The model client: how pand calls a model server. Captions go as an
+//! OpenAI chat-completions request to any server that speaks it; the
+//! perception routes (embed, pose, segment, depth) are multipart with an
+//! `image` file field. Pan knows nothing about what stands behind an
+//! address (goodlux, 2026-10-08).
 //!
-//! Outcomes are three-valued, because the eye is: a real result, a TERMINAL
-//! refusal (422 — these bytes will never caption; stop asking), or a
-//! TRANSIENT failure (5xx / unreachable / timeout — ask again later). A 200
-//! with an empty body is how `POST /percept/pose` and `POST /percept/segment` report internal
-//! failure, so "200" is never read as "worked" — the fields are.
+//! Outcomes are three-valued: a real result, a TERMINAL refusal (422 —
+//! these bytes will never caption; stop asking), or a TRANSIENT failure
+//! (4xx/5xx refusal, unreachable, timeout — ask again later). A 200 with an
+//! empty body is how a pose or segment server reports internal failure, so
+//! "200" is never read as "worked" — the fields are.
 
 use anyhow::{anyhow, Context, Result};
 use reqwest::multipart::{Form, Part};
@@ -50,7 +52,7 @@ pub struct SeeEmbed {
     pub dim: usize,
     #[serde(rename = "sceneObjects", default)]
     pub scene_objects: Vec<String>,
-    /// Everything else the eye said (scene* tags, model-keyed caption copy).
+    /// Everything else the server said (scene* tags, model-keyed caption copy).
     /// Kept, not dropped — nothing is written from it until the vocabulary
     /// for it is declared (open with Rob, 2026-09-03).
     #[serde(flatten)]
@@ -108,11 +110,11 @@ struct SegmentResponse {
 }
 
 #[derive(Clone)]
-pub struct Iris {
+pub struct ModelClient {
     client: reqwest::Client,
 }
 
-impl Iris {
+impl ModelClient {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
@@ -170,7 +172,7 @@ impl Iris {
         self.finish(url, resp, start, request_bytes, meter).await
     }
 
-    /// `POST` a JSON body. Used where Iris forwards Pan's bytes to a
+    /// `POST` a JSON body. Used where the server forwards Pan's bytes to a
     /// provider untouched and hands back the provider's own status + body.
     async fn post_json(
         &self,
@@ -266,7 +268,7 @@ impl Iris {
             .map_err(|e| CallError::Transient(format!("{url}: response not JSON: {e}")))
     }
 
-    /// `/percept/embed` on Iris (:1215): the image as a file part and the
+    /// `/percept/embed` on the server (:1215): the image as a file part and the
     /// text to embed WITH it as the `text` string part; ONE joint vector of
     /// pixels and text comes back (m3rc, 2026-09-08). Pan sends the file's
     /// complete XMP packet as the text (goodlux, 2026-09-08). The model
@@ -305,15 +307,15 @@ impl Iris {
         Ok(out)
     }
 
-    /// `POST /percept/vlm` (m3rc's door, 2026-09-05, third and final shape —
-    /// Rob: Iris must not massage anything): the body IS the OpenAI
+    /// `POST /percept/vlm` (the server, 2026-09-05, third and final shape —
+    /// Rob: the server must not massage anything): the body IS the OpenAI
     /// chat-completions request the provider should see. Pan builds it, the
     /// door adds the Authorization header, forwards the bytes, and returns
     /// the provider's response body and status as-is. Pan reads
     /// `choices[0].message.content` itself. `extra_body` (config) is merged
     /// into the top level verbatim — that is where `provider`,
     /// `chat_template_kwargs.enable_thinking`, `max_tokens` live.
-    // Eight inputs because that is the chat request's contract with Iris;
+    // Eight inputs because that is the chat request's contract with the server;
     // a struct would only rename them.
     #[allow(clippy::too_many_arguments)]
     pub async fn vlm(
@@ -378,7 +380,7 @@ impl Iris {
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("pose shape: {e}")))
     }
 
-    /// `/percept/depth` (m3rc's Iris → Depth Anything V2 on Salad, percept-v1.7,
+    /// `/percept/depth` (m3rc's the server → Depth Anything V2 on the server, percept-v1.7,
     /// 2026-09-16): image → one normalized 8-bit map plus its raw range. The
     /// answer is handed back whole; `crate::depth` reads it.
     pub async fn depth(
@@ -396,7 +398,7 @@ impl Iris {
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("depth shape: {e}")))
     }
 
-    /// `/percept/segment` (m3rc's Iris → SAM3 on Salad): `prompts` is one
+    /// `/percept/segment` (m3rc's the server → SAM3 on the server): `prompts` is one
     /// comma-separated string of nouns. Returns the parsed regions AND the
     /// whole response as it came, so the caller can keep everything the
     /// server said (area, verts, provenance) beside the record.
@@ -439,7 +441,7 @@ impl Iris {
     }
 }
 
-impl Default for Iris {
+impl Default for ModelClient {
     fn default() -> Self {
         Self::new()
     }
@@ -521,7 +523,7 @@ mod tests {
 }
 
 /// The OpenAI chat-completions request a caption provider sees, built by Pan
-/// and forwarded by Iris byte for byte. One user message: the image as a
+/// and forwarded by the server byte for byte. One user message: the image as a
 /// data URL, then the prompt. `extra_body` keys land at the top level as
 /// given; they may not override `model` or `messages`.
 pub fn build_chat_request(

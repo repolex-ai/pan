@@ -94,8 +94,6 @@ stores:
   - ~/.pan                               # Standalone workstation store
 default: ~/projects/creative-studio/.pan
 port: 7401
-interval_secs: 5                         # Polling interval between background worker passes
-batch: 8                                 # Images per stage per pass
 models:                                  # External perception model stages (optional)
   embed:
     url: http://127.0.0.1:1215/see_embed

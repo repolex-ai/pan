@@ -27,7 +27,7 @@ pub const DEFAULT_KEEP_DAYS: u32 = 30;
 pub const CALLS_SUBDIR: &str = "logs/calls";
 
 /// What the HTTP layer measured about one call. Filled in by the client
-/// (`iris.rs`) where the bytes and the clock are; read by the stage where
+/// (`client.rs`) where the bytes and the clock are; read by the stage where
 /// the outcome is known.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CallMeta {
@@ -80,7 +80,7 @@ pub struct CallLine<'a> {
     pub status: Option<u16>,
     pub latency_ms: u64,
     pub response_bytes: u64,
-    /// `recorded`, `backend_down`, `quota`, `transient`, `terminal`.
+    /// `recorded`, `unreachable`, `quota`, `transient`, `terminal`.
     pub outcome: &'a str,
     pub error: Option<&'a str>,
     /// Chat-completions replies only; null elsewhere and when the server
@@ -234,8 +234,8 @@ mod tests {
         log.record(&line);
         log.record(&CallLine {
             status: None,
-            outcome: "backend_down",
-            error: Some("503 backend_down"),
+            outcome: "unreachable",
+            error: Some("connection refused"),
             ..line
         });
         let today = Local::now().format("%Y-%m-%d").to_string();
@@ -288,7 +288,7 @@ mod tests {
             lines[1]["status"].is_null(),
             "no answer = null status, not 0"
         );
-        assert_eq!(lines[1]["error"], "503 backend_down");
+        assert_eq!(lines[1]["error"], "connection refused");
         assert!(lines[0]["time"].as_str().unwrap().contains('T'), "RFC3339");
     }
 

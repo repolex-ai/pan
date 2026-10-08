@@ -9,7 +9,7 @@
 //! stage's query.
 //!
 //! Stages are addressed only by the url in the config. The five Pan uses
-//! today are Iris's, 2026-09-18: POST /percept/vlm (OpenAI chat completions),
+//! today are the server's, 2026-09-18: POST /percept/vlm (OpenAI chat completions),
 //! and POST /percept/embed, /percept/pose, /percept/depth and
 //! /percept/segment (an image upload, JSON back).
 //!
@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::calllog::{CallLine, Meter};
-use super::iris::{self, CallError};
+use super::client::{self, CallError};
 use super::{Daemon, StoreHandle};
 use crate::enrich::EnrichmentRecord;
 use crate::{gen_pan_id, PendingItem};
@@ -58,12 +58,12 @@ pub fn link_for(stage: &str) -> Option<&'static str> {
 
 /// Run the ladder forever: ONE independent loop per enabled stage, plus one
 /// for the ready mark. A stage that is slow (captions with thinking on), held
-/// (its door down), or breathing (busy) delays nobody else — every other
+/// (its server down), or breathing (busy) delays nobody else — every other
 /// stage keeps walking its own pending list (Rob, 2026-09-07). They share the
 /// one writer: model calls are async and hold no lock; only the short write
 /// after each answer touches the graph, and oxigraph serializes those.
 pub async fn run(d: Arc<Daemon>) {
-    let every = Duration::from_secs(d.cfg.interval_secs);
+    let every = PASS_INTERVAL;
     let mut loops = tokio::task::JoinSet::new();
     for stage in [
         STAGE_EMBED,
@@ -157,12 +157,12 @@ pub async fn mark_enrichment_complete_pass(d: Arc<Daemon>) -> usize {
     let required: Vec<(String, String)> = d
         .cfg
         .active_models()
-        .filter_map(|(stage, ep)| link_for(stage).map(|l| (l.to_string(), ep.model.clone())))
+        .filter_map(|(stage, ep)| link_for(stage).map(|l| (l.to_string(), ep.label())))
         .collect();
     for store in d.stores.clone() {
         let s = store.clone();
         let req = required.clone();
-        let batch = d.cfg.batch * 4;
+        let batch = BATCH * 4;
         match tokio::task::spawn_blocking(move || -> Result<usize> {
             let mut n = 0;
             for id in s.pan.enrichment_complete_candidates(&req, batch)? {
@@ -212,18 +212,22 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
     done + mark_enrichment_complete_pass(d).await
 }
 
+/// How many images one pass of a stage picks up and sends at once, and how
+/// long a stage rests between passes. Pan's own pace, the same for every
+/// server; nothing about any server is read or configured (goodlux,
+/// 2026-10-08).
+pub const BATCH: usize = 4;
+pub const PASS_INTERVAL: Duration = Duration::from_secs(5);
+
 /// How long a whole stage waits after a call failed before reaching the model
-/// (connection refused / reset / timeout, or Iris on :1215 answering
-/// `backend_down`). One try per hold; the server being down is not a fact
-/// about the image. 5 s matches Iris's own roster refresh (`percept.refresh_s`,
-/// 20 s -> 5 s, goodlux 2026-09-07): a failed call marks a Salad node down at
-/// Iris until its next refresh, so that interval is the whole gap Pan sees.
+/// (connection refused / reset / timeout). One try per hold; the server
+/// being down is not a fact about the image.
 const SERVER_DOWN_HOLD: Duration = Duration::from_secs(5);
 
 /// How long a whole stage waits after the provider answers `402`: the account
 /// is out of credit, and credit does not come back in seconds. One try per
 /// hold, so the log says so every ten minutes instead of every two seconds
-/// (2026-09-08: 667 calls against an empty Phala account in 80 minutes).
+/// (2026-09-08: 667 calls against an empty provider account in 80 minutes).
 const QUOTA_HOLD: Duration = Duration::from_secs(600);
 
 async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str) -> Result<usize> {
@@ -245,12 +249,12 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
     }
     let target = ep.target();
     let link = link_for(stage).ok_or_else(|| anyhow!("unknown stage {stage}"))?;
-    let batch = d.cfg.batch;
+    let batch = BATCH;
     // Ask for more than the batch so items on hold do not starve the ones
     // behind them; then take the first `batch` that are not holding.
     let pending: Vec<PendingItem> = {
         let s = store.clone();
-        let model = ep.model.clone();
+        let model = ep.label();
         let since = d.cfg.backfill_since.clone();
         tokio::task::spawn_blocking(move || {
             s.pan.pending_for(link, &model, batch * 4, since.as_deref())
@@ -312,7 +316,7 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
             Ok(()) => {
                 d.clear_attempt(&store.entry.id, &item.id, stage);
                 log_call("recorded", None);
-                tracing::info!(store = %store.entry.id, id = %item.id, stage, model = %ep.model, "recorded");
+                tracing::info!(store = %store.entry.id, id = %item.id, stage, model = %ep.label(), "recorded");
             }
             Err(e) => {
                 let (msg, terminal) = match e.downcast_ref::<CallError>() {
@@ -323,19 +327,17 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                 tracing::warn!(store = %store.entry.id, id = %item.id, stage, terminal, "stage failed: {msg}");
                 // Failed before reaching the model: the SERVER is down, not the
                 // image. Hold the address and drop the rest of this batch.
-                // `backend_down` (m3rc, 2026-09-05) means NO node is up — same thing.
                 let server_down = !terminal
                     && (msg.contains("error sending request")
                         || msg.contains("connection")
-                        || msg.contains("timed out")
-                        || msg.contains("backend_down"));
+                        || msg.contains("timed out"));
                 let quota = !terminal && msg.contains("402 quota exceeded");
                 let outcome = if terminal {
                     "terminal"
                 } else if quota {
                     "quota"
                 } else if server_down {
-                    "backend_down"
+                    "unreachable"
                 } else {
                     "transient"
                 };
@@ -396,16 +398,16 @@ async fn run_one(
             d.counters
                 .model_calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.embed(t, &bytes, media_type, &text, meter).await?;
+            let r = d.client.embed(t, &bytes, media_type, &text, meter).await?;
             let s = store.clone();
             let id = item.id.clone();
-            let model = ep.model.clone();
+            let model = ep.label();
             tokio::task::spawn_blocking(move || -> Result<()> {
                 // One index per embedding model: the model name IS the index
                 // name, so a second embedder never lands in the first one's
                 // space and search defaults to whatever pand embeds with.
                 // Everything the server said besides the vector rides along:
-                // its HF model id, precision, provider … (m3rc's Salad answers
+                // its HF model id, precision, provider … (some servers' answers
                 // label themselves). precision/provider land on the record.
                 s.pan
                     .write_embedding(&id, &model, &model, &r.vector, &r.extra)
@@ -414,8 +416,8 @@ async fn run_one(
             .await??;
         }
         STAGE_CAPTION => {
-            // `/percept/vlm` (m3rc, 2026-09-05): image + prompt → text. The
-            // prompt is config and required — Pan supplies it, Iris never
+            // `/percept/vlm` : image + prompt → text. The
+            // prompt is config and required — Pan supplies it, the server never
             // does (Rob, 2026-09-05); the model recorded is the one the SERVER
             // names in its answer, falling back to config only if it is silent.
             let Some(prompt) = ep.prompt.as_deref().filter(|p| !p.trim().is_empty()) else {
@@ -428,7 +430,7 @@ async fn run_one(
             // The caption provider gets PIXELS ONLY: a same-size, high-quality
             // JPEG re-encoded from the stored image, so neither Horae's copia
             // block nor Pan's own XMP reaches a third-party model (Rob,
-            // 2026-09-05; see `wire.rs`). This is Pan's job, not Iris's.
+            // 2026-09-05; see `wire.rs`). This is Pan's job, not the server's.
             let wire = {
                 let b = bytes.clone();
                 tokio::task::spawn_blocking(move || crate::wire::caption_copy(&b)).await??
@@ -437,7 +439,7 @@ async fn run_one(
                 .model_calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let r = d
-                .iris
+                .client
                 .vlm(
                     t,
                     &ep.model,
@@ -470,7 +472,7 @@ async fn run_one(
                 tracing::warn!(
                     store = %store.entry.id,
                     id = %item.id,
-                    model = %ep.model,
+                    model = %ep.label(),
                     "caption answer had keys pan.ttl does not declare; dropped, the rest stored: {}",
                     perception.dropped_keys.join(", ")
                 );
@@ -484,7 +486,7 @@ async fn run_one(
             // string (`qwen/qwen3.8-27b`); that is the request's business, not
             // a second name for the model (goodlux, 2026-09-18). A mismatch is
             // worth knowing about, so it is logged, not written down.
-            let model = ep.model.clone();
+            let model = ep.label();
             let text = r.text.clone();
             tokio::task::spawn_blocking(move || {
                 write_perception(&s, &id, &model, &text, &perception)
@@ -495,14 +497,14 @@ async fn run_one(
             d.counters
                 .model_calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let r = d.iris.pose(t, &bytes, media_type, meter).await?;
+            let r = d.client.pose(t, &bytes, media_type, meter).await?;
             if r.keypoints.is_empty() {
                 // The eye reports "no people" and "I failed" the same way (200
                 // {}). Record a zero-count run so the image is not asked
                 // forever; the count says what was found.
                 let s = store.clone();
                 let id = item.id.clone();
-                let model = ep.model.clone();
+                let model = ep.label();
                 tokio::task::spawn_blocking(move || {
                     s.pan
                         .write_enrichment(&id, "pose", "poseData", &model, &[], Default::default())
@@ -514,7 +516,7 @@ async fn run_one(
             let overlay = r.skeleton_png()?;
             let s = store.clone();
             let id = item.id.clone();
-            let model = ep.model.clone();
+            let model = ep.label();
             tokio::task::spawn_blocking(move || -> Result<()> {
                 let mut overlay_rel: Option<String> = None;
                 if let Some(png) = overlay {
@@ -531,7 +533,7 @@ async fn run_one(
                     .iter()
                     .map(|person| {
                         let mut rec = EnrichmentRecord::new(gen_pan_id(), "Pose", &model)
-                            .field("keypoints", iris::keypoints_literal(person));
+                            .field("keypoints", client::keypoints_literal(person));
                         if let Some(o) = &overlay_rel {
                             rec = rec.field("overlayPath", o);
                         }
@@ -564,7 +566,7 @@ async fn run_one(
             }
             let s = store.clone();
             let id = item.id.clone();
-            let model = ep.model.clone();
+            let model = ep.label();
             if prompts.is_empty() {
                 tokio::task::spawn_blocking(move || {
                     s.pan
@@ -592,7 +594,7 @@ async fn run_one(
                 polygon_verts: ep.polygon_verts,
             };
             let (regions, raw) = d
-                .iris
+                .client
                 .segment(t, &bytes, media_type, &request, meter)
                 .await?;
             tokio::task::spawn_blocking(move || -> Result<()> {
@@ -646,7 +648,7 @@ async fn run_one(
             d.counters
                 .model_calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let answer = d.iris.depth(t, &bytes, media_type, meter).await?;
+            let answer = d.client.depth(t, &bytes, media_type, meter).await?;
             if answer.is_empty() {
                 return Err(
                     CallError::Transient("depth: node answered without a map".into()).into(),
@@ -654,7 +656,7 @@ async fn run_one(
             }
             let s = store.clone();
             let id = item.id.clone();
-            let model = ep.model.clone();
+            let model = ep.label();
             tokio::task::spawn_blocking(move || {
                 s.pan.write_depth(&id, &model, &answer).map(|_| ())
             })
@@ -695,7 +697,7 @@ fn write_perception(
 /// The `stage failed: caption answer: …` text when the model's reply did not
 /// parse: the parser's own words, then what the server said about the reply
 /// (why it stopped, how many tokens in and out) and the first 200 characters
-/// of the content. Asked for by m3rc (2026-09-18): `length` means the 2048
+/// of the content. Needed because: `length` means the 2048
 /// token window ran out; `stop` with prose means sampling wandered.
 fn caption_failure_message(
     parse_error: &str,
