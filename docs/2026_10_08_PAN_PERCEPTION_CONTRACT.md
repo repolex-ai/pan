@@ -81,12 +81,13 @@ Request fields: `image` only.
 Answer:
 
 ```json
-{"depth_png_b64": "<base64 PNG>", "min": 0.42, "max": 17.9,
+{"depth_png_b64": "<base64 PNG>", "min": 0.0031, "max": 0.98,
  "width": 1024, "height": 1536,
  "model": "depth-anything-v2-base", "precision": "fp16", "provider": "salad"}
 ```
 
 - `depth_png_b64` (required): an 8-bit greyscale PNG the size of the image,
   255 nearest, 0 farthest.
-- `min`, `max`: the raw depth range the map was normalised from.
+- `min`, `max`: the relative depth range the map was normalised from, in
+  the model's own units, larger meaning nearer; not metres.
 - `width`, `height`, `model`, `precision`, `provider`: optional, recorded.
