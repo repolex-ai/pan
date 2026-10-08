@@ -159,9 +159,9 @@ models:
 Every stage is optional. A missing config file means one store at `~/.pan`
 and no model stages.
 
-A pass sends four images to the stage's one address at once and records
-what comes back, then rests five seconds; that is Pan's own pace, the same
-for every server. Pan does not count what the server can take and
+A pass sends one image to the stage's one address, waits for the answer,
+records it and takes the next; a stage rests five seconds only when
+nothing is pending. The same for every server. Pan does not count what the server can take and
 has no second address for a stage: a call the server refuses (429, 503, a
 timeout) is asked for again on a later pass, and a server that cannot be
 reached at all holds the stage for a few seconds before the next try

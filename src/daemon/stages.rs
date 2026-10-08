@@ -212,11 +212,10 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
     done + mark_enrichment_complete_pass(d).await
 }
 
-/// How many images one pass of a stage picks up and sends at once, and how
-/// long a stage rests between passes. Pan's own pace, the same for every
-/// server; nothing about any server is read or configured (goodlux,
-/// 2026-10-08).
-pub const BATCH: usize = 4;
+/// A pass sends one image, waits for the answer, records it, and takes the
+/// next; a stage rests only when nothing is pending. Nothing about any
+/// server is read or configured (goodlux, 2026-10-08).
+pub const BATCH: usize = 1;
 pub const PASS_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How long a whole stage waits after a call failed before reaching the model
