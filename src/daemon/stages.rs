@@ -162,7 +162,7 @@ pub async fn mark_enrichment_complete_pass(d: Arc<Daemon>) -> usize {
     for store in d.stores.clone() {
         let s = store.clone();
         let req = required.clone();
-        let batch = BATCH * 4;
+        let batch = IN_FLIGHT * 4;
         match tokio::task::spawn_blocking(move || -> Result<usize> {
             let mut n = 0;
             for id in s.pan.enrichment_complete_candidates(&req, batch)? {
@@ -212,10 +212,12 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
     done + mark_enrichment_complete_pass(d).await
 }
 
-/// A pass sends one image, waits for the answer, records it, and takes the
-/// next; a stage rests only when nothing is pending. Nothing about any
-/// server is read or configured (goodlux, 2026-10-08).
-pub const BATCH: usize = 1;
+/// How many requests a pass keeps in flight to its address: a fixed small
+/// number, the shape of any standard client. As each answer comes back the
+/// next image is sent; a refused call is tried again later; a stage rests
+/// only when nothing is pending. Nothing about any server is read or
+/// configured (settled with the Iris side, 2026-10-08).
+pub const IN_FLIGHT: usize = 4;
 pub const PASS_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How long a whole stage waits after a call failed before reaching the model
@@ -248,7 +250,7 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
     }
     let target = ep.target();
     let link = link_for(stage).ok_or_else(|| anyhow!("unknown stage {stage}"))?;
-    let batch = BATCH;
+    let batch = IN_FLIGHT * 4;
     // Ask for more than the batch so items on hold do not starve the ones
     // behind them; then take the first `batch` that are not holding.
     let pending: Vec<PendingItem> = {
@@ -265,14 +267,17 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
         .filter(|p| d.holding(&store.entry.id, &p.id, stage).is_none())
         .take(batch)
         .collect();
-    // The whole batch is sent at once; Pan does not count what the server
-    // can take (goodlux, 2026-10-08: send, and if a call is refused send it
-    // again later). Results are handled as they land.
+    // IN_FLIGHT requests out at a time; the next image goes as an answer
+    // comes back. Pan does not count what the server can take: a refused
+    // call is sent again later. Results are handled as they land.
     let n = work.len();
+    let slots = Arc::new(tokio::sync::Semaphore::new(IN_FLIGHT));
     let mut set = tokio::task::JoinSet::new();
     for item in work {
         let (d, store, ep, target) = (d.clone(), store.clone(), ep.clone(), target.clone());
+        let slots = slots.clone();
         set.spawn(async move {
+            let _slot = slots.acquire_owned().await.expect("semaphore never closes");
             // The client measures the call into `meter`; the outcome is only
             // known here, after the write — so the log line is written where
             // both meet, below. No model call = nothing measured = no line.
