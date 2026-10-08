@@ -331,6 +331,17 @@ impl DaemonConfig {
     }
 
     pub fn load_from(path: &Path) -> Result<Self> {
+        Self::load_from_with(path, None, true)
+    }
+
+    /// The same loader with two things a check can set: where the prompt
+    /// files are (default: `prompts/` beside the file) and whether the
+    /// shipped prompts are written there first (a check writes nothing).
+    pub fn load_from_with(
+        path: &Path,
+        prompts_dir: Option<&Path>,
+        install_defaults: bool,
+    ) -> Result<Self> {
         let yml: ConfigYml = if path.exists() {
             let raw = std::fs::read_to_string(path)
                 .with_context(|| format!("read {}", path.display()))?;
@@ -351,8 +362,13 @@ impl DaemonConfig {
         let mut models = yml.models;
         // The shipped prompts land before anything reads one, so a fresh
         // machine works with no setup. Unchanged ones are left alone.
-        let prompts_dir = path.parent().unwrap_or(Path::new(".")).join("prompts");
-        install_default_prompts(&prompts_dir)?;
+        let prompts_dir = match prompts_dir {
+            Some(d) => d.to_path_buf(),
+            None => path.parent().unwrap_or(Path::new(".")).join("prompts"),
+        };
+        if install_defaults {
+            install_default_prompts(&prompts_dir)?;
+        }
         // The five stages pand runs. A block under any other name would be
         // read and then never run, so it is refused here: a stage that goes
         // quiet is worse than a pand that will not start.

@@ -46,9 +46,11 @@ fn main() -> Result<()> {
             Ok(())
         }
         ["status"] => status(),
+        ["check-config"] => check_config(None),
+        ["check-config", file] => check_config(Some(file)),
         _ => {
             eprintln!(
-                "usage: pand | pand restart | pand stop | pand status\n  (no flags; configure in {})",
+                "usage: pand | pand restart | pand stop | pand status | pand check-config [file]\n  (no flags; configure in {})",
                 pan::daemon::config::config_dir()
                     .join("config.yml")
                     .display()
@@ -324,4 +326,49 @@ fn stop_all() {
 extern "C" {
     #[link_name = "getuid"]
     fn libc_getuid() -> u32;
+}
+
+/// Run the start-time loader over a config file without starting anything,
+/// so an editor can check a file before it replaces the live one (w3bl0rd,
+/// 2026-10-08). Prompt names are looked up in the real prompts folder, so
+/// a candidate written anywhere checks the same as the live file would.
+/// Prints what passed and exits 0, or the loader's own message and exits 1.
+fn check_config(file: Option<&str>) -> Result<()> {
+    let dir = pan::daemon::config::config_dir();
+    let path = match file {
+        Some(f) => std::path::PathBuf::from(f),
+        None => dir.join("config.yml"),
+    };
+    if !path.exists() {
+        eprintln!("{}: no such file", path.display());
+        std::process::exit(1);
+    }
+    match pan::daemon::config::DaemonConfig::load_from_with(
+        &path,
+        Some(&dir.join("prompts")),
+        false,
+    ) {
+        Ok(cfg) => {
+            let on: Vec<String> = cfg
+                .active_models()
+                .map(|(stage, ep)| format!("{stage} ({})", ep.model))
+                .collect();
+            println!(
+                "ok: {} — {} store(s), port {}, passes on: {}",
+                path.display(),
+                cfg.stores.len(),
+                cfg.port,
+                if on.is_empty() {
+                    "none".to_string()
+                } else {
+                    on.join(", ")
+                }
+            );
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("{e:#}");
+            std::process::exit(1);
+        }
+    }
 }
