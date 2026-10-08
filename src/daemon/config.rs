@@ -81,60 +81,28 @@ pub struct ModelEndpoint {
     /// record (the graph is the queue). Default true.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    /// How many calls to this endpoint may be in flight at once across ALL
-    /// stores. pand is the one funnel for model traffic on the machine.
-    #[serde(default = "default_concurrency")]
-    pub concurrency: usize,
     /// `Authorization` header value for `url` (e.g. `Bearer …`), when the
     /// endpoint is a node reached directly rather than Iris. Absent =
     /// no header.
     pub auth: Option<String>,
-    /// Where this stage goes while its primary is unreachable (connection
-    /// refused / reset / timeout / `503 backend_down`): the same model behind
-    /// a different address — a Salad node called directly when Iris
-    /// is down. Used ONLY during a primary hold; the primary is probed again
-    /// when the hold expires. Rob, 2026-09-05: Iris stays primary because
-    /// it balances the two nodes; the direct node is what Pan runs on when
-    /// Iris is down.
-    pub fallback: Option<Fallback>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Fallback {
-    pub url: String,
-    pub auth: Option<String>,
-}
-
-/// One address a stage's calls go to: a URL and, optionally, the
-/// `Authorization` header it wants.
+/// The one address a stage's calls go to: a URL and, optionally, the
+/// `Authorization` header it wants. One address per stage, nothing behind
+/// it that Pan knows about (goodlux, 2026-10-08).
 #[derive(Debug, Clone)]
 pub struct Target {
     pub url: String,
     pub auth: Option<String>,
-    /// `"primary"` or `"fallback"` — for the log line only.
-    pub via: &'static str,
 }
 
 impl ModelEndpoint {
-    pub fn primary(&self) -> Target {
+    pub fn target(&self) -> Target {
         Target {
             url: self.url.clone(),
             auth: self.auth.clone(),
-            via: "primary",
         }
     }
-    pub fn fallback_target(&self) -> Option<Target> {
-        self.fallback.as_ref().map(|f| Target {
-            url: f.url.clone(),
-            auth: f.auth.clone(),
-            via: "fallback",
-        })
-    }
-}
-
-fn default_concurrency() -> usize {
-    1
 }
 
 /// The segmentation node's own defaults, so Pan sends what the node would
@@ -408,12 +376,6 @@ impl DaemonConfig {
                     m.model
                 )
             })?;
-            if m.concurrency == 0 {
-                return Err(anyhow!(
-                    "{}: model concurrency must be at least 1",
-                    path.display()
-                ));
-            }
             if let Some(name) = m.prompt.take() {
                 let prompts = path.parent().unwrap_or(Path::new(".")).join("prompts");
                 let (rel, file) = resolve_prompt(&prompts, name.trim());
@@ -482,7 +444,7 @@ mod tests {
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "stores:\n  - /souls/a\n  - ~/.pan\ndefault: /souls/a\nport: 7402\nmodels:\n  embed:\n    url: http://127.0.0.1:1215/percept/embed\n    model: qwen-vl-2b\n    concurrency: 2\n",
+            "stores:\n  - /souls/a\n  - ~/.pan\ndefault: /souls/a\nport: 7402\nmodels:\n  embed:\n    url: http://127.0.0.1:1215/percept/embed\n    model: qwen-vl-2b\n",
         )
         .unwrap();
         let cfg = DaemonConfig::load_from(&p).unwrap();
@@ -493,7 +455,6 @@ mod tests {
         );
         assert_eq!(cfg.default, Some(PathBuf::from("/souls/a")));
         assert_eq!(cfg.port, 7402);
-        assert_eq!(cfg.models["embed"].concurrency, 2);
         assert!(cfg.models["embed"].enabled, "enabled defaults to true");
     }
 
@@ -557,35 +518,27 @@ mod tests {
     }
 
     #[test]
-    fn fallback_and_auth_parse_and_become_targets() {
+    fn auth_parses_and_becomes_the_target() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("config.yml");
         std::fs::write(
             &p,
-            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n    fallback:\n      url: https://node.example/pose\n      auth: Bearer abc\n",
+            "models:\n  pose:\n    url: https://node.example/pose\n    model: rtmw\n    auth: Bearer abc\n",
         )
         .unwrap();
         let c = DaemonConfig::load_from(&p).unwrap();
-        let ep = &c.models["pose"];
-        let prim = ep.primary();
+        let t = c.models["pose"].target();
         assert_eq!(
-            (prim.url.as_str(), prim.auth.as_deref(), prim.via),
-            ("http://door/percept/pose", None, "primary")
+            (t.url.as_str(), t.auth.as_deref()),
+            ("https://node.example/pose", Some("Bearer abc"))
         );
-        let fb = ep.fallback_target().unwrap();
-        assert_eq!(
-            (fb.url.as_str(), fb.auth.as_deref(), fb.via),
-            ("https://node.example/pose", Some("Bearer abc"), "fallback")
-        );
-        // Without a fallback there is no fallback target — the stage waits.
+        // A second address for a stage is not a thing Pan has.
         std::fs::write(
             &p,
-            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n",
+            "models:\n  pose:\n    url: http://door/percept/pose\n    model: rtmw\n    fallback:\n      url: https://node.example/pose\n",
         )
         .unwrap();
-        assert!(DaemonConfig::load_from(&p).unwrap().models["pose"]
-            .fallback_target()
-            .is_none());
+        assert!(DaemonConfig::load_from(&p).is_err(), "fallback is refused");
     }
 
     /// The name is what lands in a file name, so it may hold only what a file

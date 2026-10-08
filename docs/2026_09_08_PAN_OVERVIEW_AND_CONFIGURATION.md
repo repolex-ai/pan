@@ -152,15 +152,21 @@ models:
     model: qwen/qwen3.8-27b
     prompt: caption.md                   # a file in ~/.config/pan/prompts/
     extra_body: { ... }                  # provider settings passed through untouched
-    concurrency: 2                       # a ceiling; the window opens and closes with the server's answers
     enabled: true
-  embed:  { url: ..., model: qwen3-vl-embedding-2b, concurrency: 2 }
-  pose:   { url: ..., model: rtmw-x-l,  concurrency: 2 }
-  segment: { url: ..., model: sam3, concurrency: 2, enabled: false }
+  embed:  { url: ..., model: qwen3-vl-embedding-2b }
+  pose:   { url: ..., model: rtmw-x-l }
+  segment: { url: ..., model: sam3, enabled: false }
 ```
 
 Every stage is optional. A missing config file means one store at `~/.pan`
 and no model stages.
+
+A pass sends its `batch` of images to the stage's one address at once and
+records what comes back. Pan does not count what the server can take and
+has no second address for a stage: a call the server refuses (429, 503, a
+timeout) is asked for again on a later pass, and a server that cannot be
+reached at all holds the stage for a few seconds before the next try
+(goodlux, 2026-10-08).
 
 ### The model-call log, `~/.config/pan/logs/calls/`
 
@@ -169,15 +175,13 @@ current local day. The line holds what happened, never what was sent or
 said: no image bytes, no answer text.
 
 ```json
-{"time":"2026-09-16T10:42:07.318-07:00","store":"700c5bd4a969723107c1b92b83c0f1ec1497d9d4","id":"ygjjmvkw","stage":"caption","model":"qwen/qwen3.8-27b","url":"http://127.0.0.1:1215/percept/vlm","via":"primary","request_bytes":812344,"status":200,"latency_ms":9412,"response_bytes":3120,"outcome":"recorded","error":null}
+{"time":"2026-09-16T10:42:07.318-07:00","store":"700c5bd4a969723107c1b92b83c0f1ec1497d9d4","id":"ygjjmvkw","stage":"caption","model":"qwen/qwen3.8-27b","url":"http://127.0.0.1:1215/percept/vlm","request_bytes":812344,"status":200,"latency_ms":9412,"response_bytes":3120,"outcome":"recorded","error":null}
 ```
 
-- `via` is `primary` or `fallback`.
 - `status` is the HTTP status, or null when no answer came back at all.
 - `request_bytes` is the payload (image plus text or JSON body), not the
   wire size.
-- `outcome` is one of `recorded` (the answer was written), `busy` (every
-  node's queue was full, asked again in seconds), `backend_down` (no node
+- `outcome` is one of `recorded` (the answer was written), `backend_down` (no node
   up, the stage held), `quota` (the provider account is out of credit, the
   stage held), `transient` (asked again later), `terminal` (this image is
   never asked again by this stage).

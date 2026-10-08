@@ -101,7 +101,6 @@ models:                                  # External perception model stages (opt
     url: http://127.0.0.1:1215/see_embed
     model: qwen3-vl-embedding-2b-8bit
     caption_model: qwen3.5-9b-mlx-8bit
-    concurrency: 1
   pose:
     url: http://127.0.0.1:1215/see_pose
     model: rtmw-x-l

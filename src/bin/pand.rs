@@ -199,14 +199,6 @@ fn status() -> Result<()> {
                 h["images_stored"].as_u64().unwrap_or(0),
                 h["model_calls"].as_u64().unwrap_or(0)
             );
-            if let Some(w) = h["windows"].as_object() {
-                let mut ws: Vec<String> = w
-                    .iter()
-                    .map(|(k, v)| format!("{k} {}", v.as_str().unwrap_or("?")))
-                    .collect();
-                ws.sort();
-                println!("  in flight (window/ceiling): {}", ws.join(", "));
-            }
             if let Some(rows) = h["counts"].as_array() {
                 println!(
                     "  {:<8} {:>7} {:>7} {:>8} {:>7} {:>6} {:>7}",

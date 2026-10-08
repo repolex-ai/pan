@@ -59,8 +59,6 @@ pub struct HealthResponse {
     pub model_calls: u64,
     /// Per store: images and how many of them have each derived record.
     pub counts: Vec<StoreCountsOut>,
-    /// Per stage: calls in flight allowed right now / the configured ceiling.
-    pub windows: HashMap<String, String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -311,12 +309,6 @@ async fn health(State(d): State<Shared>) -> Json<HealthResponse> {
         .await
         .unwrap_or_default()
     };
-    let windows: HashMap<String, String> = d
-        .funnels
-        .iter()
-        .filter(|(k, _)| d.cfg.models.get(*k).map(|m| m.enabled).unwrap_or(false))
-        .map(|(k, l)| (k.clone(), format!("{}/{}", l.window(), l.ceiling())))
-        .collect();
     Json(HealthResponse {
         ok: true,
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -348,7 +340,6 @@ async fn health(State(d): State<Shared>) -> Json<HealthResponse> {
             .model_calls
             .load(std::sync::atomic::Ordering::Relaxed),
         counts,
-        windows,
     })
 }
 

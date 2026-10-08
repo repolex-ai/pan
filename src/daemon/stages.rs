@@ -226,10 +226,6 @@ const SERVER_DOWN_HOLD: Duration = Duration::from_secs(5);
 /// (2026-09-08: 667 calls against an empty Phala account in 80 minutes).
 const QUOTA_HOLD: Duration = Duration::from_secs(600);
 
-/// How long a stage breathes after `503 busy` (every node's queue full) before
-/// its next pass. Seconds, not minutes: Iris asks for a retry in seconds.
-const BUSY_WAIT: Duration = Duration::from_secs(5);
-
 async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str) -> Result<usize> {
     let ep = d
         .cfg
@@ -237,29 +233,17 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
         .get(stage)
         .cloned()
         .ok_or_else(|| anyhow!("stage {stage} not configured"))?;
-    // Which address this pass calls. A hold on the primary sends the stage to
-    // its fallback (if it has one); a hold on both means wait. The primary is
-    // probed again the moment its hold expires, so Iris gets the traffic
-    // back as soon as it is up.
-    let held = |key: &str| -> bool {
-        crate::locked(&d.stage_hold)
-            .get(key)
-            .map(|u| *u > Instant::now())
-            .unwrap_or(false)
-    };
-    let fallback_key = format!("{stage}/fallback");
-    let target = if !held(stage) {
-        ep.primary()
-    } else if let Some(fb) = ep.fallback_target().filter(|_| !held(&fallback_key)) {
-        fb
-    } else {
+    // The one address this pass calls. While it is held (a call failed
+    // before reaching the model), the pass waits; it is probed again the
+    // moment the hold expires.
+    let held = crate::locked(&d.stage_hold)
+        .get(stage)
+        .map(|u| *u > Instant::now())
+        .unwrap_or(false);
+    if held {
         return Ok(0);
-    };
-    let hold_key: String = if target.via == "fallback" {
-        fallback_key
-    } else {
-        stage.to_string()
-    };
+    }
+    let target = ep.target();
     let link = link_for(stage).ok_or_else(|| anyhow!("unknown stage {stage}"))?;
     let batch = d.cfg.batch;
     // Ask for more than the batch so items on hold do not starve the ones
@@ -278,24 +262,22 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
         .filter(|p| d.holding(&store.entry.id, &p.id, stage).is_none())
         .take(batch)
         .collect();
-    // Every item in the batch is spawned at once; the stage's Limiter decides
-    // how many are actually in flight. Results are handled as they land.
+    // The whole batch is sent at once; Pan does not count what the server
+    // can take (goodlux, 2026-10-08: send, and if a call is refused send it
+    // again later). Results are handled as they land.
     let n = work.len();
     let mut set = tokio::task::JoinSet::new();
     for item in work {
         let (d, store, ep, target) = (d.clone(), store.clone(), ep.clone(), target.clone());
         set.spawn(async move {
-            let permit = d.funnels[stage].acquire().await;
             // The client measures the call into `meter`; the outcome is only
             // known here, after the write — so the log line is written where
             // both meet, below. No model call = nothing measured = no line.
             let meter = Meter::new();
             let result = run_one(&d, &store, stage, &ep, &target, &item, &meter).await;
-            drop(permit);
             (item, result, meter.take())
         });
     }
-    let mut saw_busy = false;
     while let Some(joined) = set.join_next().await {
         let (item, result, meta) = match joined {
             Ok(x) => x,
@@ -314,7 +296,6 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                     stage,
                     model: &ep.model,
                     url: &m.url,
-                    via: target.via,
                     request_bytes: m.request_bytes,
                     status: m.status,
                     latency_ms: m.latency_ms,
@@ -330,25 +311,13 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
         match result {
             Ok(()) => {
                 d.clear_attempt(&store.entry.id, &item.id, stage);
-                d.funnels[stage].on_success();
                 log_call("recorded", None);
-                tracing::info!(store = %store.entry.id, id = %item.id, stage, model = %ep.model, via = target.via, window = d.funnels[stage].window(), "recorded");
+                tracing::info!(store = %store.entry.id, id = %item.id, stage, model = %ep.model, "recorded");
             }
             Err(e) => {
-                if let Some(CallError::Busy(m)) = e.downcast_ref::<CallError>() {
-                    // Every node's queue is full: the window was too wide.
-                    // Narrow it; no attempt is recorded, the image stays
-                    // pending and is asked again next pass.
-                    saw_busy = true;
-                    d.funnels[stage].on_busy();
-                    log_call("busy", Some(m));
-                    tracing::info!(store = %store.entry.id, id = %item.id, stage, window = d.funnels[stage].window(), "door busy: {m}");
-                    continue;
-                }
                 let (msg, terminal) = match e.downcast_ref::<CallError>() {
                     Some(CallError::Terminal(m)) => (m.clone(), true),
                     Some(CallError::Transient(m)) => (m.clone(), false),
-                    Some(CallError::Busy(m)) => (m.clone(), false),
                     None => (format!("{e:#}"), false),
                 };
                 tracing::warn!(store = %store.entry.id, id = %item.id, stage, terminal, "stage failed: {msg}");
@@ -374,25 +343,17 @@ async fn run_stage(d: Arc<Daemon>, store: Arc<StoreHandle>, stage: &'static str)
                 d.record_attempt(&store.entry.id, &item.id, stage, msg, terminal);
                 if quota {
                     crate::locked(&d.stage_hold)
-                        .insert(hold_key.clone(), Instant::now() + QUOTA_HOLD);
+                        .insert(stage.to_string(), Instant::now() + QUOTA_HOLD);
                     tracing::warn!(stage, url = %target.url, "provider account out of credit — holding the stage for {}s; add credits at the provider", QUOTA_HOLD.as_secs());
                     set.abort_all();
                 } else if server_down {
                     crate::locked(&d.stage_hold)
-                        .insert(hold_key.clone(), Instant::now() + SERVER_DOWN_HOLD);
-                    let next = if target.via == "primary" && ep.fallback.is_some() {
-                        "switching to fallback"
-                    } else {
-                        "waiting"
-                    };
-                    tracing::warn!(stage, url = %target.url, via = target.via, "endpoint unreachable — holding it for {}s, {next}", SERVER_DOWN_HOLD.as_secs());
+                        .insert(stage.to_string(), Instant::now() + SERVER_DOWN_HOLD);
+                    tracing::warn!(stage, url = %target.url, "endpoint unreachable — holding it for {}s, waiting", SERVER_DOWN_HOLD.as_secs());
                     set.abort_all();
                 }
             }
         }
-    }
-    if saw_busy {
-        tokio::time::sleep(BUSY_WAIT).await;
     }
     Ok(n)
 }

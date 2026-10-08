@@ -76,13 +76,11 @@ pub struct CallLine<'a> {
     pub stage: &'a str,
     pub model: &'a str,
     pub url: &'a str,
-    /// `primary` or `fallback`.
-    pub via: &'a str,
     pub request_bytes: u64,
     pub status: Option<u16>,
     pub latency_ms: u64,
     pub response_bytes: u64,
-    /// `recorded`, `busy`, `backend_down`, `quota`, `transient`, `terminal`.
+    /// `recorded`, `backend_down`, `quota`, `transient`, `terminal`.
     pub outcome: &'a str,
     pub error: Option<&'a str>,
     /// Chat-completions replies only; null elsewhere and when the server
@@ -223,7 +221,6 @@ mod tests {
             stage: "caption",
             model: "qwen/qwen3.8-27b",
             url: "http://127.0.0.1:1215/percept/vlm",
-            via: "primary",
             request_bytes: 812_344,
             status: Some(200),
             latency_ms: 9_412,
@@ -258,7 +255,6 @@ mod tests {
             "\"stage\"",
             "\"model\"",
             "\"url\"",
-            "\"via\"",
             "\"request_bytes\"",
             "\"status\"",
             "\"latency_ms\"",

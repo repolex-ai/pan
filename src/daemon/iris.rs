@@ -20,12 +20,8 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(900);
 
 #[derive(Debug)]
 pub enum CallError {
-    /// Retry later: the eye is down or timed out.
+    /// Retry later: the server is down, full, or timed out.
     Transient(String),
-    /// Retry in SECONDS, not minutes: every node's queue is full right now
-    /// (m3rc's door, 2026-09-05: `503 {"reason":"busy"}` — max_queue 2 per
-    /// node per model). Nothing is wrong with the image or Iris.
-    Busy(String),
     /// The server refused the request itself (a 4xx), or pand could not
     /// build it. Waits the ordinary backoff and is asked again; it is never
     /// held for good (goodlux, 2026-09-21).
@@ -36,7 +32,6 @@ impl std::fmt::Display for CallError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CallError::Transient(m) => write!(f, "transient: {m}"),
-            CallError::Busy(m) => write!(f, "busy: {m}"),
             CallError::Terminal(m) => write!(f, "terminal: {m}"),
         }
     }
@@ -239,31 +234,11 @@ impl Iris {
                 body.chars().take(300).collect::<String>()
             )));
         }
-        // TOO MANY REQUESTS: the server is up and saying slow down. Pan
-        // narrows this stage's window and asks for the same image again. That
-        // is what 429 means anywhere, so any endpoint gets the behaviour with
-        // nothing agreed in advance.
-        if status.as_u16() == 429 {
+        // The server is up and will not take the request now (429, 503): the
+        // image is asked for again on a later pass. Pan reads nothing more
+        // into it (goodlux, 2026-10-08: send; if refused, send again later).
+        if status.as_u16() == 429 || status.as_u16() == 503 {
             let short = body.chars().take(300).collect::<String>();
-            return Err(CallError::Busy(format!("{url}: 429: {short}")));
-        }
-        if status.as_u16() == 503 {
-            let short = body.chars().take(300).collect::<String>();
-            // A plain 503 says the server cannot take the request at all: hold
-            // the address and come back later. Nothing in the body is needed.
-            //
-            // Iris is the exception, and only until it answers 429: it returns
-            // 503 for a full queue too, and tells the two apart with
-            // `{"reason": "busy"}` in the body. Read while it is there. An
-            // endpoint that sends no such field loses nothing but the
-            // narrowing.
-            let queue_full = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(str::to_owned))
-                .is_some_and(|r| r == "busy");
-            if queue_full {
-                return Err(CallError::Busy(format!("{url}: 503 busy: {short}")));
-            }
             return Err(CallError::Transient(format!("{url}: {status}: {short}")));
         }
         if status.as_u16() == 402 {
