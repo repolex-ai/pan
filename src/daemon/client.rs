@@ -59,7 +59,7 @@ pub struct SeeEmbed {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// `/percept/vlm` (m3rc, 2026-09-05): image + prompt → `text`, and the
+/// Captions: image + prompt → `text`, and the
 /// `model` / `provider` that answered. Unknown fields are kept, never dropped.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Vlm {
@@ -380,8 +380,8 @@ impl ModelClient {
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("pose shape: {e}")))
     }
 
-    /// `/percept/depth` (m3rc's the server → Depth Anything V2 on the server, percept-v1.7,
-    /// 2026-09-16): image → one normalized 8-bit map plus its raw range. The
+    /// `depth`: image → one normalized 8-bit map plus its raw range
+    /// (docs/2026_10_08_PAN_PERCEPTION_CONTRACT.md). The
     /// answer is handed back whole; `crate::depth` reads it.
     pub async fn depth(
         &self,
@@ -398,7 +398,7 @@ impl ModelClient {
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("depth shape: {e}")))
     }
 
-    /// `/percept/segment` (m3rc's the server → SAM3 on the server): `prompts` is one
+    /// `segment` (docs/2026_10_08_PAN_PERCEPTION_CONTRACT.md): `prompts` is one
     /// comma-separated string of nouns. Returns the parsed regions AND the
     /// whole response as it came, so the caller can keep everything the
     /// server said (area, verts, provenance) beside the record.
