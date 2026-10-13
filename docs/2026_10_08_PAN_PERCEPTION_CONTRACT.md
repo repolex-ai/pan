@@ -19,7 +19,7 @@ below are what pand sends today (`src/daemon/client.rs`).
 - Any other `4xx` or `5xx` means "not now": Pan asks again later. A server
   that cannot be reached at all holds the stage for a few seconds.
 - A `200` with an empty or unreadable body is a failure, asked again later.
-- Pan sends a fixed four requests at a time and never asks what the server
+- Pan sends a fixed six requests at a time and never asks what the server
   can take.
 
 ## embed

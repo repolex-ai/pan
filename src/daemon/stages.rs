@@ -216,8 +216,9 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
 /// number, the shape of any standard client. As each answer comes back the
 /// next image is sent; a refused call is tried again later; a stage rests
 /// only when nothing is pending. Nothing about any server is read or
-/// configured (settled with the Iris side, 2026-10-08).
-pub const IN_FLIGHT: usize = 4;
+/// configured (settled with the Iris side, 2026-10-08). Six since
+/// 2026-10-13: four left a caption server with free slots idle.
+pub const IN_FLIGHT: usize = 6;
 pub const PASS_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How long a whole stage waits after a call failed before reaching the model

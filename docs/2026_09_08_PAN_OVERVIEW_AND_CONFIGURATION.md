@@ -159,7 +159,7 @@ models:
 Every stage is optional. A missing config file means one store at `~/.pan`
 and no model stages.
 
-A pass keeps four requests in flight to the stage's one address, sending
+A pass keeps six requests in flight to the stage's one address, sending
 the next image as each answer comes back, and rests five seconds only when
 nothing is pending. A fixed number, the same for every server; Pan never
 asks or learns what a server can take. Pan does not count what the server can take and
