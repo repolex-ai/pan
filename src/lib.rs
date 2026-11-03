@@ -486,7 +486,8 @@ pub const STRUCTURAL_FIELDS: [&str; 10] = [
     "height",
     "createdDate",
     // When the media itself was made, from its own metadata (pan.ttl
-    // 0.4.19, goodlux 2026-09-22). Recorded at ingest, never set by hand.
+    // 0.4.19, goodlux 2026-09-22). Recorded at ingest; like every declared
+    // image field it may be set or added afterwards.
     "mediaCreatedDate",
     "enrichmentCompleteDate",
     "renderRequestInformation",

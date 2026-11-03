@@ -489,7 +489,7 @@ async fn ingest(
 }
 
 #[utoipa::path(post, path = "/media/{id}/set", tag = "media", params(("id" = String, Path)),
-    request_body(content = HashMap<String, serde_json::Value>, description = "One JSON object keyed by property local name; only the person-settable fields of pan.ttl (rating, isPicked, isRejected)"),
+    request_body(content = HashMap<String, serde_json::Value>, description = "One JSON object keyed by property local name: any datatype property pan.ttl declares on an image (rating, isPicked, isRejected, the caption fields, the ingest fields); the value is checked against the declared type"),
     responses((status = 200, body = FactsResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
 async fn set_fields(
     State(d): State<Shared>,
