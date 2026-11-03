@@ -81,6 +81,15 @@ date with its zone; a file whose value is not one is refused whole. A
 `pan:relatedToId` naming `<pan/ImageSet/id>` that does not exist yet makes
 the set, with that id, as the image lands.
 
+A producer can also add statements to an image that is already stored, the
+same RDF/XML it would have written into the file before delivery:
+`POST /media/{id}/xmp` with the `rdf:Description` elements as the body,
+`Content-Type: application/rdf+xml`. They are read with the rules above,
+appended to the file's XMP as written beside the Descriptions already there,
+and loaded into the graph. Nothing a producer wrote earlier is edited. A
+`pan` field a producer may not write is refused by name, so nothing is
+dropped in silence; a second `pan:mediaCreatedDate` is refused whole.
+
 ## Pan as an indexer of existing media — planned
 
 A store can point at media that already exists, wherever it is, and index it

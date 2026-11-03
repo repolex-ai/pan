@@ -73,6 +73,21 @@ pub struct StoreCountsOut {
     pub depths: u64,
 }
 
+/// What `POST /media/{id}/xmp` did.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct XmpAdded {
+    /// `<pan/Image/k7m2p9x4>` — the image, bracket form.
+    pub id: String,
+    /// Statements the body carried.
+    pub statements: usize,
+    /// Of those, how many the graph did not already have.
+    pub inserted: usize,
+    /// rdf:Description elements appended to the file's XMP.
+    pub descriptions: usize,
+    /// Sets made because the body named them.
+    pub imagesets_made: Vec<String>,
+}
+
 /// The receipt for one stored file.
 #[derive(Serialize, ToSchema)]
 pub struct Delivered {
@@ -509,6 +524,59 @@ async fn unset_fields(
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(map_err)?;
     facts_response(&store, &id).map(Json)
+}
+
+/// Add a producer's statements to a stored image: RDF/XML, one or more
+/// `<rdf:Description>` elements, exactly what the producer would have
+/// written into the file before delivery. They are appended to the file's
+/// XMP as written and loaded into the graph with an arriving file's rules.
+#[utoipa::path(post, path = "/media/{id}/xmp", tag = "media", params(("id" = String, Path)),
+    request_body(content = String, content_type = "application/rdf+xml", description = "One or more rdf:Description elements (or a whole rdf:RDF), the producer's own namespaces declared on them; rdf:about=\"\" is this image. The only pan: fields a producer may write are pan:relatedToId and pan:mediaCreatedDate."),
+    responses((status = 200, body = XmpAdded), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn add_xmp(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<XmpAdded>, ApiError> {
+    let (store, id) = locate(&d, &given)?;
+    let declared = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    if !(declared.is_empty()
+        || declared == "application/rdf+xml"
+        || declared == "application/xml"
+        || declared == "text/xml")
+    {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            format!("Content-Type {declared} is not RDF/XML. The body is the rdf:Description elements themselves, Content-Type application/rdf+xml."),
+        ));
+    }
+    let fragment = String::from_utf8(body.to_vec())
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, format!("XMP to add is not UTF-8: {e}")))?;
+    if fragment.trim().is_empty() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "empty body: send the rdf:Description elements to add".into(),
+        ));
+    }
+    let s2 = store.clone();
+    let id2 = id.clone();
+    let added = tokio::task::spawn_blocking(move || s2.pan.add_xmp(&id2, &fragment))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(map_err)?;
+    tracing::info!(store = %store.entry.id, id = %id, statements = added.statements, inserted = added.inserted, "xmp added");
+    Ok(Json(XmpAdded {
+        id: media_iri_bracket(&added.iri),
+        statements: added.statements,
+        inserted: added.inserted,
+        descriptions: added.descriptions,
+        imagesets_made: added.imagesets_made,
+    }))
 }
 
 #[utoipa::path(post, path = "/media/{id}/redo", tag = "media", params(("id" = String, Path)),
@@ -1126,7 +1194,7 @@ async fn imageset_member(
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
     paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_sparql_get, store_sparql_post,
-          imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove, rename_namespace, redo),
+          imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove, rename_namespace, redo, add_xmp),
     components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody,
                        ImageSetResponse, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse, RedoBody, RedoResponse)),
     tags(
@@ -1150,6 +1218,7 @@ pub fn router(d: Shared) -> Router {
         .route("/media/{id}/set", post(set_fields))
         .route("/media/{id}/unset", post(unset_fields))
         .route("/media/{id}/redo", post(redo))
+        .route("/media/{id}/xmp", post(add_xmp))
         .route("/query", post(query))
         .route("/search", post(search))
         .route("/imagesets", get(imagesets).post(create_imageset))

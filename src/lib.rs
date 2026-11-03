@@ -367,6 +367,19 @@ pub struct RenameReport {
     pub quads: usize,
 }
 
+/// What `add_xmp` did: the statements the fragment carried, how many were
+/// new to the graph (the rest were already there), the Description
+/// elements appended to the file, and any sets made on the way.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AddedXmp {
+    pub id: String,
+    pub iri: String,
+    pub statements: usize,
+    pub inserted: usize,
+    pub descriptions: usize,
+    pub imagesets_made: Vec<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PutResult {
     /// The assigned identity, bare — new on EVERY put.
@@ -2770,6 +2783,184 @@ impl Pan {
         p
     }
 
+    // ── producer statements added after arrival ───────────────────────────────
+
+    /// Add a producer's statements to a stored image: the RDF/XML it would
+    /// have written into the file before delivery, arriving later. One or
+    /// more `<rdf:Description>` elements, read with the same rules as an
+    /// arriving file (`rdf:about=""` is this image; named subjects stay
+    /// themselves; pan:relatedToId and pan:mediaCreatedDate are the only
+    /// pan: fields a producer may write; a bracket reference becomes an
+    /// edge). The elements are appended to the file's XMP as written, beside
+    /// whatever Descriptions are already there — Pan edits no producer's
+    /// block, it adds the new one — and the statements land in the graph.
+    /// Graph first, then the file; a file that cannot be rewritten puts the
+    /// graph back, so the two never disagree. Written for the Horae images
+    /// delivered before Horae sent its dates (goodlux, 2026-11-02: the dates
+    /// go into the images and into the graph).
+    pub fn add_xmp(&self, id: &str, fragment: &str) -> Result<AddedXmp> {
+        let r = self.add_xmp_inner(id, fragment);
+        self.refresh_needs(id);
+        r
+    }
+
+    fn add_xmp_inner(&self, id: &str, fragment: &str) -> Result<AddedXmp> {
+        let Some(subject) = self.subject_for(id)? else {
+            return Err(anyhow!("id not found: {id}"));
+        };
+        let facts = Self::facts_of(&self.store, &subject)?;
+        let Some(media_path) = facts
+            .iter()
+            .find(|(p, _)| p == &format!("{PAN_NS}mediaPath"))
+            .and_then(|(_, v)| v.first())
+        else {
+            return Err(anyhow!("id not found: {subject}"));
+        };
+        let abs = self.layout.abs(media_path);
+        let bytes = fs::read(&abs).with_context(|| format!("read media {}", abs.display()))?;
+        if !xmp::is_png(&bytes) {
+            return Err(anyhow!(
+                "XMP cannot be added to {id}: the stored media is not a PNG and carries no XMP"
+            ));
+        }
+        let (quads, descriptions) = xmp::load_fragment_statements(fragment, subject.as_str())?;
+
+        // pan:mediaCreatedDate: at most one on the image, counting what the
+        // graph already says, and a date the graph can order (pan.ttl
+        // 0.4.19) — the same rule an arriving file meets.
+        let pred_media_created = format!("{PAN_NS}mediaCreatedDate");
+        let mut dates: Vec<String> = facts
+            .iter()
+            .filter(|(p, _)| p == &pred_media_created)
+            .flat_map(|(_, v)| v.iter().cloned())
+            .collect();
+        for q in quads
+            .iter()
+            .filter(|q| q.predicate.as_str() == pred_media_created && q.subject == subject.clone().into())
+        {
+            let v = term_str(&q.object);
+            chrono::DateTime::parse_from_rfc3339(&v).map_err(|e| {
+                anyhow!(
+                    "XMP to add: pan:mediaCreatedDate {v:?} is not an RFC3339 date with a zone ({e}). Nothing was added."
+                )
+            })?;
+            dates.push(v);
+        }
+        dates.sort();
+        dates.dedup();
+        if dates.len() > 1 {
+            return Err(anyhow!(
+                "XMP to add would leave {id} with {} pan:mediaCreatedDate values ({}); at most one is declared. Nothing was added.",
+                dates.len(),
+                dates.join(", ")
+            ));
+        }
+
+        // A set named by pan:relatedToId that does not exist yet is made,
+        // as on arrival, and unmade if the statements do not land.
+        let named_sets: Vec<String> = {
+            let prefix = format!("{PAN_MEDIA_NS}{}/", imageset::IMAGESET_CLASS);
+            let mut ids: Vec<String> = quads
+                .iter()
+                .filter(|q| q.predicate.as_str() == format!("{PAN_NS}relatedToId"))
+                .filter_map(|q| match &q.object {
+                    Term::NamedNode(n) => n.as_str().strip_prefix(&prefix).map(str::to_string),
+                    _ => None,
+                })
+                .collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        };
+        let mut made_sets: Vec<String> = Vec::new();
+        for sid in &named_sets {
+            if self.imageset_subject(sid)?.is_none() {
+                if let Err(e) = self.imageset_create_with(sid, None) {
+                    for made in &made_sets {
+                        let _ = self.imageset_unmake(made);
+                    }
+                    return Err(e.context(format!(
+                        "the XMP names the set <pan/ImageSet/{sid}>, which could not be made. Nothing was added."
+                    )));
+                }
+                made_sets.push(sid.clone());
+            }
+        }
+
+        // Graph: only what is new is inserted, so an undo removes exactly that.
+        let fresh: Vec<Quad> = quads
+            .iter()
+            .filter(|q| {
+                !self
+                    .store
+                    .contains(q.as_ref())
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        let undo = |why: anyhow::Error| -> anyhow::Error {
+            if let Ok(mut t) = self.store.start_transaction() {
+                for q in &fresh {
+                    t.remove(q.as_ref());
+                }
+                let _ = t.commit();
+            }
+            for made in &made_sets {
+                let _ = self.imageset_unmake(made);
+            }
+            why
+        };
+        {
+            let mut t = self
+                .store
+                .start_transaction()
+                .context("start transaction")?;
+            for q in &fresh {
+                t.insert(q.as_ref());
+            }
+            t.commit().context("commit added XMP")?;
+        }
+
+        // File: the new Descriptions go in beside the ones already there,
+        // then Pan's block is re-authored from the graph as on any write.
+        let land = || -> Result<()> {
+            let existing = xmp::read_xmp_packet_from_bytes(&bytes).unwrap_or(None);
+            let mut kept: Vec<String> = match &existing {
+                Some(prev) => xmp::split_descriptions(prev)
+                    .into_iter()
+                    .filter(|(pan_authored, _)| !pan_authored)
+                    .map(|(_, e)| e)
+                    .collect(),
+                None => Vec::new(),
+            };
+            kept.extend(descriptions.iter().cloned());
+            let carried = format!(
+                "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">{}</rdf:RDF>",
+                kept.join("\n")
+            );
+            let pan_desc = xmp::build_pan_description(&self.image_packet_from(&self.store, &subject)?);
+            let packet = xmp::compose_packet(Some(&carried), &pan_desc);
+            let written = xmp::write_packet_into_png_bytes(&bytes, &packet)?;
+            write_atomic(&abs, &written).with_context(|| format!("write media {}", abs.display()))?;
+            Ok(())
+        };
+        if let Err(e) = land() {
+            return Err(undo(e).context("nothing was added: the file could not be rewritten"));
+        }
+        if let Some(w) = locked(&self.work).as_mut() {
+            w.apply_insert(&fresh);
+        }
+        self.changed();
+        Ok(AddedXmp {
+            id: id.to_string(),
+            iri: subject.into_string(),
+            statements: quads.len(),
+            inserted: fresh.len(),
+            descriptions: descriptions.len(),
+            imagesets_made: made_sets,
+        })
+    }
+
     // ── XMP (graph → the image's own packet) ──────────────────────────────────
 
     /// Rewrite the image's XMP from the CURRENT graph: Pan's block is
@@ -3228,5 +3419,92 @@ mod locked_tests {
         g.push(3);
         drop(g);
         assert_eq!(*locked(&m), vec![1, 2, 3]);
+    }
+}
+
+#[cfg(test)]
+mod add_xmp_tests {
+    use super::*;
+
+    fn tiny_png() -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(8, 8, |x, y| image::Rgba([x as u8, y as u8, 7, 255]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    fn graph_has(pan: &Pan, s: &str, p: &str, o: &str) -> bool {
+        let q = format!("ASK {{ GRAPH ?g {{ <{s}> <{p}> {o} }} }}");
+        matches!(pan.query(&q), Ok(QueryResults::Boolean(true)))
+    }
+
+    #[test]
+    fn producer_dates_land_in_file_and_graph_after_arrival() {
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let put = pan.put(&tiny_png(), Some("image/png")).unwrap();
+        let moment = "https://repolex.ai/copia/Moment/abc123";
+        let fragment = format!(
+            "<rdf:Description rdf:about=\"\" xmlns:pan=\"{PAN_NS}\"><pan:mediaCreatedDate>2026-11-01T03:58:12-08:00</pan:mediaCreatedDate></rdf:Description>\
+             <rdf:Description rdf:about=\"{moment}\" xmlns:copia=\"https://repolex.ai/ontology/copia/\"><copia:renderRequestDate>2026-09-19T23:23:45-07:00</copia:renderRequestDate></rdf:Description>"
+        );
+        let added = pan.add_xmp(&put.id, &fragment).unwrap();
+        assert_eq!(added.statements, 2);
+        assert_eq!(added.inserted, 2);
+        assert_eq!(added.descriptions, 2);
+        assert!(graph_has(&pan, &put.iri, &format!("{PAN_NS}mediaCreatedDate"), "\"2026-11-01T03:58:12-08:00\""));
+        assert!(graph_has(&pan, moment, "https://repolex.ai/ontology/copia/renderRequestDate", "\"2026-09-19T23:23:45-07:00\""));
+        // The file carries both: the producer's Description as written, and
+        // Pan's own block re-authored with the date.
+        let bytes = fs::read(pan.layout.abs(&put.media_path)).unwrap();
+        let packet = xmp::read_xmp_packet_from_bytes(&bytes).unwrap().unwrap();
+        assert!(packet.contains("<copia:renderRequestDate>2026-09-19T23:23:45-07:00</copia:renderRequestDate>"), "{packet}");
+        assert_eq!(packet.matches("renderRequestDate").count(), 2, "one open, one close tag: {packet}");
+        let parts = xmp::split_descriptions(&packet);
+        let pan_block = parts.iter().find(|(p, _)| *p).map(|(_, e)| e.clone()).unwrap();
+        assert!(pan_block.contains("<pan:mediaCreatedDate>2026-11-01T03:58:12-08:00</pan:mediaCreatedDate>"), "{pan_block}");
+        assert_eq!(parts.iter().filter(|(p, _)| !*p).count(), 2, "two producer Descriptions kept: {packet}");
+        // Saying it again changes nothing and is not an error.
+        let again = pan.add_xmp(&put.id, &fragment).unwrap();
+        assert_eq!(again.inserted, 0);
+        let bytes = fs::read(pan.layout.abs(&put.media_path)).unwrap();
+        let packet2 = xmp::read_xmp_packet_from_bytes(&bytes).unwrap().unwrap();
+        assert_eq!(xmp::split_descriptions(&packet2).iter().filter(|(p, _)| !*p).count(), 4, "appended as written, each time: {packet2}");
+    }
+
+    #[test]
+    fn a_second_media_created_date_is_refused_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let put = pan.put(&tiny_png(), Some("image/png")).unwrap();
+        let one = format!("<rdf:Description rdf:about=\"\" xmlns:pan=\"{PAN_NS}\"><pan:mediaCreatedDate>2026-11-01T03:58:12-08:00</pan:mediaCreatedDate></rdf:Description>");
+        pan.add_xmp(&put.id, &one).unwrap();
+        let two = format!("<rdf:Description rdf:about=\"\" xmlns:pan=\"{PAN_NS}\"><pan:mediaCreatedDate>2026-11-02T00:00:00-08:00</pan:mediaCreatedDate></rdf:Description>");
+        let err = pan.add_xmp(&put.id, &two).unwrap_err().to_string();
+        assert!(err.contains("pan:mediaCreatedDate"), "{err}");
+        assert!(!graph_has(&pan, &put.iri, &format!("{PAN_NS}mediaCreatedDate"), "\"2026-11-02T00:00:00-08:00\""));
+        let bad = format!("<rdf:Description rdf:about=\"\" xmlns:pan=\"{PAN_NS}\"><pan:mediaCreatedDate>yesterday</pan:mediaCreatedDate></rdf:Description>");
+        let dir2 = tempfile::tempdir().unwrap();
+        let pan2 = Pan::open(dir2.path()).unwrap();
+        let put2 = pan2.put(&tiny_png(), Some("image/png")).unwrap();
+        let err = pan2.add_xmp(&put2.id, &bad).unwrap_err().to_string();
+        assert!(err.contains("RFC3339"), "{err}");
+    }
+
+    #[test]
+    fn pan_fields_a_producer_may_not_write_are_refused_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let put = pan.put(&tiny_png(), Some("image/png")).unwrap();
+        let fragment = format!("<rdf:Description rdf:about=\"\" xmlns:pan=\"{PAN_NS}\"><pan:shortCaption>a cat</pan:shortCaption><pan:mediaCreatedDate>2026-11-01T03:58:12-08:00</pan:mediaCreatedDate></rdf:Description>");
+        let err = pan.add_xmp(&put.id, &fragment).unwrap_err().to_string();
+        assert!(err.contains(&format!("{PAN_NS}shortCaption")), "{err}");
+        assert!(!graph_has(&pan, &put.iri, &format!("{PAN_NS}mediaCreatedDate"), "\"2026-11-01T03:58:12-08:00\""), "nothing landed");
+        let err = pan.add_xmp(&put.id, "<rdf:Description rdf:about=\"\"><pan:x>oops").unwrap_err().to_string();
+        assert!(err.contains("RDF/XML") || err.contains("rdf:Description"), "{err}");
+        let err = pan.add_xmp(&put.id, "").unwrap_err().to_string();
+        assert!(err.contains("rdf:Description"), "{err}");
     }
 }

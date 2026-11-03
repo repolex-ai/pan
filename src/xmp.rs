@@ -362,6 +362,78 @@ pub fn compose_packet(existing: Option<&str>, pan_description: &str) -> String {
 /// repair, never store what the graph cannot say). No `<rdf:RDF>` at all is
 /// also an error: an XMP chunk with no RDF is not XMP.
 pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigraph::model::Quad>> {
+    let all = parse_producer_quads(packet, media_iri)?;
+    // Pan's own Description is already out. What is left out here is only
+    // what must never travel between stores: pan: vocabulary (a previous
+    // store's paths and records) and a git-lex:id some older writer put in
+    // the file (identity of that store, never this object's). Everything else a
+    // producer asserts loads as written — Pan builds no rules around what a
+    // particular producer happens to send (Rob, 2026-09-07); a wrong subject
+    // in a producer's block is the producer's to fix.
+    let kept: Vec<oxigraph::model::Quad> = all
+        .into_iter()
+        .filter(|q| producer_predicate_allowed(q.predicate.as_str()))
+        .collect();
+    Ok(finish_producer_quads(kept))
+}
+
+/// Statements a producer adds to an image that is ALREADY stored: the same
+/// RDF/XML it would have written into the file before delivery, one or more
+/// `<rdf:Description>` elements (a bare fragment, or a whole `<rdf:RDF>`),
+/// read with the same rules as an arriving file. Returns the quads for the
+/// graph and the Description elements verbatim, for the file. Unlike an
+/// arriving file, a statement Pan would drop is refused here, by name: a
+/// deliberate write that lands nowhere must not look like it landed.
+pub fn load_fragment_statements(
+    fragment: &str,
+    media_iri: &str,
+) -> Result<(Vec<oxigraph::model::Quad>, Vec<String>)> {
+    let packet = if find_rdf_open(fragment).is_some() {
+        fragment.to_string()
+    } else {
+        format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">{fragment}</rdf:RDF></x:xmpmeta>"
+        )
+    };
+    let descriptions: Vec<String> = {
+        let parts = split_descriptions(&packet);
+        if parts.is_empty() {
+            return Err(anyhow!(
+                "XMP to add has no rdf:Description element; send one or more, as a producer writes them into the file"
+            ));
+        }
+        if parts.iter().any(|(pan_authored, _)| *pan_authored) {
+            return Err(anyhow!(
+                "XMP to add contains Pan's own Description (one naming a pan Image identity); only a producer's statements may be added"
+            ));
+        }
+        parts.into_iter().map(|(_, e)| e.trim().to_string()).collect()
+    };
+    let all = parse_producer_quads(&packet, media_iri)?;
+    let mut refused: Vec<String> = all
+        .iter()
+        .map(|q| q.predicate.as_str().to_string())
+        .filter(|p| !producer_predicate_allowed(p))
+        .collect();
+    refused.sort();
+    refused.dedup();
+    if !refused.is_empty() {
+        return Err(anyhow!(
+            "XMP to add carries {} that a producer may not write (pan: fields other than pan:relatedToId and pan:mediaCreatedDate are Pan's own); nothing was added",
+            refused.join(", ")
+        ));
+    }
+    if all.is_empty() {
+        return Err(anyhow!("XMP to add says nothing: no statement in it; nothing was added"));
+    }
+    Ok((finish_producer_quads(all), descriptions))
+}
+
+/// Every statement in a packet's producer Descriptions (Pan's own left out),
+/// parsed with the real RDF/XML parser, `rdf:about=""` resolving to the
+/// media IRI. The WHOLE element is validated first, as written, so a
+/// Description that never closes is an error rather than a silent "none".
+fn parse_producer_quads(packet: &str, media_iri: &str) -> Result<Vec<oxigraph::model::Quad>> {
     let (s, e) = match (find_rdf_open(packet), packet.rfind("</rdf:RDF>")) {
         (Some(s), Some(e)) if e > s => (s, e + "</rdf:RDF>".len()),
         _ => return Err(anyhow!("XMP packet has no rdf:RDF element")),
@@ -369,9 +441,6 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
     // Root tag with every namespace declared anywhere in the element hoisted
     // onto it, so a Description can be dropped without losing a binding.
     let hoisted = hoist_namespaces(&packet[s..e]);
-    // First: is the WHOLE element valid RDF/XML? Asked of the full text, not
-    // of the Descriptions picked out of it — a Description that never closes
-    // would otherwise be picked out as "none" and pass in silence.
     Store::new()
         .context("scratch store")?
         .load_from_reader(
@@ -402,41 +471,38 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
             rebuilt.as_bytes(),
         )
         .map_err(|e| anyhow!("XMP in the file is not valid RDF/XML: {e}"))?;
-    // Pan's own Description is already out. What is left out here is only
-    // what must never travel between stores: pan: vocabulary (a previous
-    // store's paths and records) and a git-lex:id some older writer put in
-    // the file (identity of that store, never this object's). Everything else a
-    // producer asserts loads as written — Pan builds no rules around what a
-    // particular producer happens to send (Rob, 2026-09-07); a wrong subject
-    // in a producer's block is the producer's to fix.
-    let git_lex_id = format!("{}id", crate::config::GIT_LEX_NS);
-    // The pan: fields a producer may write: pan:relatedToId (pan.ttl v0.3.1;
-    // goodlux ruled on 2026-09-04 that Horae sends
-    // pan:relatedToId=<copia/Moment/id>) and pan:mediaCreatedDate (pan.ttl
-    // 0.4.19; goodlux, 2026-09-24: when the media was made is the producer's
-    // to say, and the Pool migration says it from the file name). Every other
-    // pan: statement in an arriving file is a previous store's and stays out.
-    let pan_related_to = format!("{PAN_NS}relatedToId");
-    let pan_media_created = format!("{PAN_NS}mediaCreatedDate");
-    let git_lex_related_to = format!("{}relatedToId", crate::config::GIT_LEX_NS);
-    let all: Vec<oxigraph::model::Quad> = store
+    store
         .iter()
         .collect::<std::result::Result<_, _>>()
-        .context("read packet quads")?;
-    let quads: Vec<oxigraph::model::Quad> = all
+        .context("read packet quads")
+}
+
+/// The pan: fields a producer may write: pan:relatedToId (pan.ttl v0.3.1;
+/// goodlux ruled on 2026-09-04 that Horae sends
+/// pan:relatedToId=<copia/Moment/id>) and pan:mediaCreatedDate (pan.ttl
+/// 0.4.19; goodlux, 2026-09-24: when the media was made is the producer's
+/// to say, and the Pool migration says it from the file name). Every other
+/// pan: statement from a producer is a previous store's and stays out, and
+/// so does a git-lex:id (identity of that store, never this object's).
+fn producer_predicate_allowed(p: &str) -> bool {
+    let git_lex_id = format!("{}id", crate::config::GIT_LEX_NS);
+    p == format!("{PAN_NS}relatedToId")
+        || p == format!("{PAN_NS}mediaCreatedDate")
+        || !(p.starts_with(PAN_NS) || p == git_lex_id)
+}
+
+/// A reference written the git-lex way — `<copia/Moment/x>` as a field
+/// value, exactly as frontmatter writes it — becomes the IRI in the graph,
+/// so the join is an edge, not a string. The file keeps the text. Applies
+/// to pan:relatedToId (the ruled field) and to git-lex:relatedToId (the
+/// universal one) alike. A parsed packet has no graph of its own: what a
+/// producer says lands in Pan's one named graph with everything else.
+fn finish_producer_quads(quads: Vec<oxigraph::model::Quad>) -> Vec<oxigraph::model::Quad> {
+    let pan_related_to = format!("{PAN_NS}relatedToId");
+    let git_lex_related_to = format!("{}relatedToId", crate::config::GIT_LEX_NS);
+    quads
         .into_iter()
-        .filter(|q| {
-            let p = q.predicate.as_str();
-            p == pan_related_to
-                || p == pan_media_created
-                || !(p.starts_with(PAN_NS) || p == git_lex_id)
-        })
         .map(|q| {
-            // A reference written the git-lex way — `<copia/Moment/x>` as a
-            // field value, exactly as frontmatter writes it — becomes the IRI
-            // in the graph, so the join is an edge, not a string. The file
-            // keeps the text. Applies to pan:relatedToId (the ruled field) and
-            // to git-lex:relatedToId (the universal one) alike.
             let p = q.predicate.as_str();
             if p != pan_related_to && p != git_lex_related_to {
                 return q;
@@ -456,13 +522,10 @@ pub fn load_packet_statements(packet: &str, media_iri: &str) -> Result<Vec<oxigr
                 None => q,
             }
         })
-        // A parsed packet has no graph of its own. What a producer's file
-        // says lands in Pan's one named graph with everything else.
         .map(|q| {
             oxigraph::model::Quad::new(q.subject, q.predicate, q.object, crate::config::pan_graph())
         })
-        .collect();
-    Ok(quads)
+        .collect()
 }
 
 // ── Packet reading — the REAL RDF parser (the change from Pool) ─────────────
