@@ -1255,10 +1255,18 @@ async fn store_embeddings(
                 .map(|n| n.into_string())
                 .unwrap_or_else(|| id.clone());
             line.clear();
-            let row = serde_json::json!({
-                "id": media_iri_bracket(&iri),
-                "vector": &rows.data[i * dim..(i + 1) * dim],
-            });
+            // A typed row, not a json! value: the floats are written as f32
+            // (nine digits), not widened to f64 (seventeen). Half the bytes
+            // for the same numbers.
+            #[derive(Serialize)]
+            struct Row<'a> {
+                id: String,
+                vector: &'a [f32],
+            }
+            let row = Row {
+                id: media_iri_bracket(&iri),
+                vector: &rows.data[i * dim..(i + 1) * dim],
+            };
             if serde_json::to_writer(&mut line, &row).is_err() {
                 break;
             }
