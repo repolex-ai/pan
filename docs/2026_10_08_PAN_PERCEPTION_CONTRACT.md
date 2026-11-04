@@ -12,6 +12,11 @@ below are what pand sends today (`src/daemon/client.rs`).
 - `POST` to the stage's configured `url`, body `multipart/form-data`.
 - One file part named `image`: the image bytes, with a file name ending in
   `.png` or `.jpg` and a matching `Content-Type` (`image/png`, `image/jpeg`).
+  Embed gets the stored file as it is. Pose, segment and depth get a copy of
+  its pixels as a JPEG at quality 90 with the same width and height (since
+  2026-11-04), so the coordinates they return are in the stored image's
+  pixel space and the upload is about a fifth of the size; a 3.5 MB PNG
+  goes up as a 0.6 MB JPEG.
 - Optional `Authorization: <auth>` header when the stage's config sets `auth`.
 - The answer is `200` with a JSON object. Unknown fields are kept beside the
   record; a missing optional field is simply absent.

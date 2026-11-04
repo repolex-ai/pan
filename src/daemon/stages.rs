@@ -384,6 +384,18 @@ async fn run_one(
     } else {
         &item.media_type
     };
+    // Pose, segment and depth get a same-size JPEG copy of the pixels, not
+    // the stored PNG: a fifth of the bytes on an upload link that is the cap
+    // on every perception pass, and the same pixel space for the geometry
+    // that comes back (goodlux, 2026-11-04; `wire.rs`). Embed keeps the
+    // stored bytes so every vector is one recipe; caption makes its own copy.
+    let (bytes, media_type): (Vec<u8>, &str) =
+        if matches!(stage, STAGE_POSE | STAGE_SEGMENT | STAGE_DEPTH) {
+            let w = tokio::task::spawn_blocking(move || crate::wire::percept_copy(&bytes)).await??;
+            (w.bytes, w.media_type)
+        } else {
+            (bytes, media_type)
+        };
 
     match stage {
         STAGE_EMBED => {
