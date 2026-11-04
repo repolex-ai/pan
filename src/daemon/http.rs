@@ -1187,6 +1187,102 @@ async fn store_imagesets(
     imagesets_in(&d, Some(&store_id)).await
 }
 
+#[utoipa::path(get, path = "/stores/{id}/embeddings", tag = "query",
+    params(("id" = String, Path, description = "Store id"),
+           ("index" = Option<String>, Query, description = "Index (embedding model) name; default the configured embed model"),
+           ("since" = Option<String>, Query, description = "RFC3339 with a zone: only images whose embedding record was produced at or after this instant")),
+    responses((status = 200, description = "application/x-ndjson: one line per image, {\"id\": \"<pan/Image/x>\", \"vector\": [floats]}; headers X-Pan-Dim and X-Pan-Count"),
+              (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn store_embeddings(
+    State(d): State<Shared>,
+    AxPath(store_id): AxPath<String>,
+    axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    let store = d.store_for(Some(&store_id)).map_err(map_err)?;
+    let index = q
+        .get("index")
+        .cloned()
+        .unwrap_or_else(|| default_index(&d, &store));
+    let since = q.get("since").cloned();
+    let s = store.clone();
+    let ix = index.clone();
+    // The snapshot is taken under the index lock and released before the
+    // first byte goes out, so a reader on a slow link never stalls search.
+    let (rows, keep) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let keep = match since.as_deref() {
+            Some(c) => Some(s.pan.embedded_since(&ix, c)?),
+            None => None,
+        };
+        let rows = s.pan.all_vectors(&ix)?;
+        Ok((rows, keep))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| {
+        let m = e.to_string();
+        if m.contains("RFC3339") {
+            ApiError(StatusCode::BAD_REQUEST, m)
+        } else {
+            map_err(e)
+        }
+    })?;
+    let Some(rows) = rows else {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("store {store_id} has no index {index} (no vectors yet)"),
+        ));
+    };
+    let count = match &keep {
+        Some(k) => rows.ids.iter().filter(|id| k.contains(*id)).count(),
+        None => rows.ids.len(),
+    };
+    let dim = rows.dim;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(16);
+    let s = store.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut line = Vec::with_capacity(dim * 12 + 64);
+        for (i, id) in rows.ids.iter().enumerate() {
+            if let Some(k) = &keep {
+                if !k.contains(id) {
+                    continue;
+                }
+            }
+            let iri = s
+                .pan
+                .subject_for(id)
+                .ok()
+                .flatten()
+                .map(|n| n.into_string())
+                .unwrap_or_else(|| id.clone());
+            line.clear();
+            let row = serde_json::json!({
+                "id": media_iri_bracket(&iri),
+                "vector": &rows.data[i * dim..(i + 1) * dim],
+            });
+            if serde_json::to_writer(&mut line, &row).is_err() {
+                break;
+            }
+            line.push(b'\n');
+            if tx
+                .blocking_send(Ok(axum::body::Bytes::copy_from_slice(&line)))
+                .is_err()
+            {
+                break; // the reader went away
+            }
+        }
+    });
+    let body = axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/x-ndjson".to_string()),
+            (header::HeaderName::from_static("x-pan-dim"), dim.to_string()),
+            (header::HeaderName::from_static("x-pan-count"), count.to_string()),
+        ],
+        body,
+    )
+        .into_response())
+}
+
 async fn imagesets_in(
     d: &Daemon,
     store_id: Option<&str>,
@@ -1361,7 +1457,7 @@ async fn imageset_member(
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
-    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, get_embedding, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_sparql_get, store_sparql_post,
+    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, get_embedding, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_embeddings, store_sparql_get, store_sparql_post,
           imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove, rename_namespace, redo, add_xmp),
     components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody,
                        ImageSetResponse, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse, RedoBody, RedoResponse)),
@@ -1398,6 +1494,7 @@ pub fn router(d: Shared) -> Router {
             "/stores/{id}/imagesets",
             get(store_imagesets).post(create_store_imageset),
         )
+        .route("/stores/{id}/embeddings", get(store_embeddings))
         .route("/stores/{id}/media", post(deliver_to))
         .route("/stores/{id}/rename-namespace", post(rename_namespace))
         .route(

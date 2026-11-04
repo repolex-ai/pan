@@ -346,6 +346,14 @@ pub struct SearchHit {
     pub score: f32,
 }
 
+/// One index's vectors, copied out whole: `ids.len()` rows of `dim` floats,
+/// row-major in `data`, in key order.
+pub struct VectorRows {
+    pub dim: usize,
+    pub ids: Vec<String>,
+    pub data: Vec<f32>,
+}
+
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct IndexStats {
     pub dim: usize,
@@ -2777,6 +2785,66 @@ impl Pan {
         Ok(Some(buf))
     }
 
+    /// Every vector in one index at this moment: a snapshot copied out of
+    /// the index under its lock and handed back row by row in key order, so
+    /// a slow reader never holds the lock. `data` is row-major, `ids.len()`
+    /// rows of `dim`. None when there is no such index.
+    pub fn all_vectors(&self, index_name: &str) -> Result<Option<VectorRows>> {
+        validate_index_name(index_name)?;
+        let mut indexes = locked(&self.indexes);
+        let Some(vi) = Self::index_loaded(&self.layout, &mut indexes, index_name)? else {
+            return Ok(None);
+        };
+        let mut keys: Vec<(u64, &String)> = vi.id_to_key.iter().map(|(id, k)| (*k, id)).collect();
+        keys.sort_unstable();
+        let dim = vi.dim;
+        let mut ids = Vec::with_capacity(keys.len());
+        let mut data: Vec<f32> = Vec::with_capacity(keys.len() * dim);
+        let mut buf = vec![0f32; dim];
+        for (key, id) in keys {
+            let found = vi
+                .index
+                .get(key, &mut buf)
+                .map_err(|e| anyhow!("read the vector of {id} from index {index_name}: {e}"))?;
+            if found == 0 {
+                continue;
+            }
+            ids.push(id.clone());
+            data.extend_from_slice(&buf);
+        }
+        Ok(Some(VectorRows { dim, ids, data }))
+    }
+
+    /// The images whose embedding record for `index_name` (the model) was
+    /// produced at or after `since`, an RFC3339 instant with a zone. The
+    /// changes feed for a client holding a copy of the index: these are the
+    /// rows to fetch again. Compared as instants, so a cursor taken across
+    /// a change of UTC offset still reads right.
+    pub fn embedded_since(&self, index_name: &str, since: &str) -> Result<HashSet<String>> {
+        validate_index_name(index_name)?;
+        chrono::DateTime::parse_from_rfc3339(since)
+            .map_err(|e| anyhow!("since must be RFC3339 with a zone, e.g. 2026-11-04T08:00:00-08:00: {e}"))?;
+        let q = format!(
+            "SELECT DISTINCT ?s WHERE {{
+               ?s a pan:Image ; pan:vectorData ?e .
+               ?e pan:model \"{}\" ; pan:producedDate ?d .
+               FILTER(xsd:dateTime(?d) >= xsd:dateTime(\"{}\"))
+             }}",
+            index_name.replace('"', ""),
+            since.replace('"', "")
+        );
+        let mut out = HashSet::new();
+        if let QueryResults::Solutions(sols) = self.query(&q)? {
+            for sol in sols {
+                let sol = sol?;
+                if let Some(t) = sol.get("s") {
+                    out.insert(bare_id(&term_str(t)));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// The named index, opened from disk on first use. None when no index of
     /// that name exists on disk or in memory.
     fn index_loaded<'a>(
@@ -3643,5 +3711,49 @@ mod search_tests {
         assert!(pan.stored_vector(&a.id, "other-model").unwrap().is_none());
         let err = pan.search("", &[1.0, 0.0], 10, INDEX, None).unwrap_err();
         assert!(err.to_string().contains("does not match"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod bulk_vector_tests {
+    use super::*;
+
+    fn tiny_png(seed: u8) -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(8, 8, |x, y| image::Rgba([x as u8 ^ seed, y as u8, seed, 255]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn all_vectors_is_every_row_in_key_order_and_since_narrows_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let model = "test-embed";
+        let a = pan.put(&tiny_png(1), Some("image/png")).unwrap();
+        let b = pan.put(&tiny_png(2), Some("image/png")).unwrap();
+        let none = serde_json::Map::new();
+        pan.write_embedding(&a.id, model, model, &[1.0, 0.0, 0.0], &none).unwrap();
+        pan.write_embedding(&b.id, model, model, &[0.0, 1.0, 0.0], &none).unwrap();
+
+        let rows = pan.all_vectors(model).unwrap().unwrap();
+        assert_eq!(rows.dim, 3);
+        assert_eq!(rows.ids, vec![a.id.clone(), b.id.clone()]);
+        assert_eq!(rows.data, vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        assert!(pan.all_vectors("no-such-model").unwrap().is_none());
+
+        // Both records were produced just now: a cursor from the past sees
+        // both, one from the future sees none, a cursor without a zone is
+        // refused.
+        let both = pan.embedded_since(model, "2000-01-01T00:00:00Z").unwrap();
+        assert_eq!(both.len(), 2, "{both:?}");
+        let later = pan.embedded_since(model, "2999-01-01T00:00:00Z").unwrap();
+        assert!(later.is_empty());
+        let err = pan.embedded_since(model, "2026-11-04T08:00:00").unwrap_err();
+        assert!(err.to_string().contains("RFC3339"), "{err}");
+        // Another model's cursor sees nothing of this one.
+        assert!(pan.embedded_since("other-model", "2000-01-01T00:00:00Z").unwrap().is_empty());
     }
 }

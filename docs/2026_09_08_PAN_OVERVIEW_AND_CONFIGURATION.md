@@ -291,9 +291,22 @@ down, since the vector has to come from the same model as the index.
 
 `GET /media/{id}/embedding` returns one image's stored vector as the `.npy`
 file pand wrote (float32, shape `(dim,)`), `?index=` naming another
-embedding model's index when a store has more than one. This and `/search`
-are what a client on another machine uses instead of reading the store's
-files (asked for by pan-ui, 2026-11-04).
+embedding model's index when a store has more than one.
+
+`GET /stores/{id}/embeddings` returns every vector in a store's index, one
+line per image (`application/x-ndjson`): `{"id": "<pan/Image/x>",
+"vector": [floats]}`. The `X-Pan-Dim` and `X-Pan-Count` headers say the
+vector length and how many lines follow. `?index=` picks the model as
+above. `?since=2026-11-04T08:00:00-08:00` (RFC3339 with a zone) returns
+only the images whose embedding record was produced at or after that
+instant: new images, and images embedded again. So a client takes the whole
+index once, keeps the time it asked, and then asks with `since` for what
+changed; the same lines come back in the same shape, and it overwrites by
+id. The snapshot is taken in memory and released before the first byte goes
+out, so a reader on a slow link does not stall search. The lUX store's
+70,000 vectors are about 1.5 GB as text. These three routes are what a
+client on another machine uses instead of reading the store's files (asked
+for by pan-ui, 2026-11-04).
 
 ### Moving facts from one namespace to another
 
