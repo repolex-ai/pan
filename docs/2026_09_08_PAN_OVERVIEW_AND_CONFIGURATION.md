@@ -304,7 +304,7 @@ index once, keeps the time it asked, and then asks with `since` for what
 changed; the same lines come back in the same shape, and it overwrites by
 id. The snapshot is taken in memory and released before the first byte goes
 out, so a reader on a slow link does not stall search. The lUX store's
-70,000 vectors are about 1.5 GB as text. These three routes are what a
+70,800 vectors are 1.8 GB as text, 9 s over loopback. These three routes are what a
 client on another machine uses instead of reading the store's files (asked
 for by pan-ui, 2026-11-04).
 
