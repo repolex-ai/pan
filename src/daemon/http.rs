@@ -1190,8 +1190,9 @@ async fn store_imagesets(
 #[utoipa::path(get, path = "/stores/{id}/embeddings", tag = "query",
     params(("id" = String, Path, description = "Store id"),
            ("index" = Option<String>, Query, description = "Index (embedding model) name; default the configured embed model"),
-           ("since" = Option<String>, Query, description = "RFC3339 with a zone: only images whose embedding record was produced at or after this instant")),
-    responses((status = 200, description = "application/x-ndjson: one line per image, {\"id\": \"<pan/Image/x>\", \"vector\": [floats]}; headers X-Pan-Dim and X-Pan-Count"),
+           ("since" = Option<String>, Query, description = "RFC3339 with a zone: only images whose embedding record was produced at or after this instant"),
+           ("format" = Option<String>, Query, description = "ndjson (default), f32 or f16: the two binary forms are a stream of records [u8 id length][bare id, UTF-8][dim little-endian floats]")),
+    responses((status = 200, description = "ndjson: application/x-ndjson, one line per image {\"id\": \"<pan/Image/x>\", \"vector\": [floats]}. f32/f16: application/octet-stream, X-Pan-Dtype float32|float16. All forms: X-Pan-Dim, X-Pan-Count (records to follow), X-Pan-Snapshot (the server's RFC3339 instant the copy was taken; send it back as the next ?since=). gzip and zstd when Accept-Encoding asks."),
               (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
 async fn store_embeddings(
     State(d): State<Shared>,
@@ -1204,6 +1205,18 @@ async fn store_embeddings(
         .cloned()
         .unwrap_or_else(|| default_index(&d, &store));
     let since = q.get("since").cloned();
+    let format = q.get("format").map(|f| f.as_str()).unwrap_or("ndjson").to_string();
+    if !["ndjson", "f32", "f16"].contains(&format.as_str()) {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            format!("format must be ndjson, f32 or f16, not {format}"),
+        ));
+    }
+    // The instant the client sends back as its next ?since=. Taken BEFORE
+    // the copy: a vector that lands between this instant and the copy is in
+    // the copy and comes again next time (harmless); taken after, a vector
+    // landing between the copy and the instant would never come at all.
+    let snapshot_at = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
     let s = store.clone();
     let ix = index.clone();
     // The snapshot is taken under the index lock and released before the
@@ -1239,52 +1252,89 @@ async fn store_embeddings(
     let dim = rows.dim;
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(16);
     let s = store.clone();
+    let fmt = format.clone();
     tokio::task::spawn_blocking(move || {
-        let mut line = Vec::with_capacity(dim * 12 + 64);
+        #[derive(Serialize)]
+        struct Row<'a> {
+            id: String,
+            vector: &'a [f32],
+        }
+        // Records are sent in chunks, not one by one: 64 rows is ~0.5 MB
+        // of f32, a sensible write.
+        const CHUNK_ROWS: usize = 64;
+        let mut chunk: Vec<u8> = Vec::with_capacity(CHUNK_ROWS * (dim * 12 + 64));
+        let mut in_chunk = 0usize;
         for (i, id) in rows.ids.iter().enumerate() {
             if let Some(k) = &keep {
                 if !k.contains(id) {
                     continue;
                 }
             }
-            let iri = s
-                .pan
-                .subject_for(id)
-                .ok()
-                .flatten()
-                .map(|n| n.into_string())
-                .unwrap_or_else(|| id.clone());
-            line.clear();
-            // A typed row, not a json! value: the floats are written as f32
-            // (nine digits), not widened to f64 (seventeen). Half the bytes
-            // for the same numbers.
-            #[derive(Serialize)]
-            struct Row<'a> {
-                id: String,
-                vector: &'a [f32],
+            let vector = &rows.data[i * dim..(i + 1) * dim];
+            match fmt.as_str() {
+                "ndjson" => {
+                    let iri = s
+                        .pan
+                        .subject_for(id)
+                        .ok()
+                        .flatten()
+                        .map(|n| n.into_string())
+                        .unwrap_or_else(|| id.clone());
+                    // A typed row, not a json! value: the floats are written
+                    // as f32 (nine digits), not widened to f64 (seventeen).
+                    let row = Row {
+                        id: media_iri_bracket(&iri),
+                        vector,
+                    };
+                    if serde_json::to_writer(&mut chunk, &row).is_err() {
+                        break;
+                    }
+                    chunk.push(b'\n');
+                }
+                "f32" => {
+                    chunk.push(id.len() as u8);
+                    chunk.extend_from_slice(id.as_bytes());
+                    for v in vector {
+                        chunk.extend_from_slice(&v.to_le_bytes());
+                    }
+                }
+                _ => {
+                    chunk.push(id.len() as u8);
+                    chunk.extend_from_slice(id.as_bytes());
+                    for v in vector {
+                        chunk.extend_from_slice(&half::f16::from_f32(*v).to_le_bytes());
+                    }
+                }
             }
-            let row = Row {
-                id: media_iri_bracket(&iri),
-                vector: &rows.data[i * dim..(i + 1) * dim],
-            };
-            if serde_json::to_writer(&mut line, &row).is_err() {
-                break;
+            in_chunk += 1;
+            if in_chunk == CHUNK_ROWS {
+                if tx
+                    .blocking_send(Ok(axum::body::Bytes::copy_from_slice(&chunk)))
+                    .is_err()
+                {
+                    return; // the reader went away
+                }
+                chunk.clear();
+                in_chunk = 0;
             }
-            line.push(b'\n');
-            if tx
-                .blocking_send(Ok(axum::body::Bytes::copy_from_slice(&line)))
-                .is_err()
-            {
-                break; // the reader went away
-            }
+        }
+        if !chunk.is_empty() {
+            let _ = tx.blocking_send(Ok(axum::body::Bytes::copy_from_slice(&chunk)));
         }
     });
     let body = axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+    let (content_type, dtype) = match format.as_str() {
+        "ndjson" => ("application/x-ndjson", "float32-as-text"),
+        "f32" => ("application/octet-stream", "float32"),
+        _ => ("application/octet-stream", "float16"),
+    };
     Ok((
         [
-            (header::CONTENT_TYPE, "application/x-ndjson".to_string()),
+            (header::CONTENT_TYPE, content_type.to_string()),
             (header::HeaderName::from_static("x-pan-dim"), dim.to_string()),
             (header::HeaderName::from_static("x-pan-count"), count.to_string()),
+            (header::HeaderName::from_static("x-pan-dtype"), dtype.to_string()),
+            (header::HeaderName::from_static("x-pan-snapshot"), snapshot_at),
         ],
         body,
     )
@@ -1502,7 +1552,12 @@ pub fn router(d: Shared) -> Router {
             "/stores/{id}/imagesets",
             get(store_imagesets).post(create_store_imageset),
         )
-        .route("/stores/{id}/embeddings", get(store_embeddings))
+        .route(
+            "/stores/{id}/embeddings",
+            // gzip/zstd when the client asks; the text form shrinks ~3.5x,
+            // the binary forms barely (floats do not compress).
+            get(store_embeddings).layer(tower_http::compression::CompressionLayer::new()),
+        )
         .route("/stores/{id}/media", post(deliver_to))
         .route("/stores/{id}/rename-namespace", post(rename_namespace))
         .route(

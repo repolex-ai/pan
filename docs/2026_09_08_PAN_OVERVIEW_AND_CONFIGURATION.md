@@ -304,9 +304,21 @@ index once, keeps the time it asked, and then asks with `since` for what
 changed; the same lines come back in the same shape, and it overwrites by
 id. The snapshot is taken in memory and released before the first byte goes
 out, so a reader on a slow link does not stall search. The lUX store's
-70,800 vectors are 1.8 GB as text, 9 s over loopback. These three routes are what a
-client on another machine uses instead of reading the store's files (asked
-for by pan-ui, 2026-11-04).
+70,800 vectors are 1.8 GB as text, 9 s over loopback.
+
+Over a network the same route has three cheaper forms. `Accept-Encoding:
+gzip` (or `zstd`) compresses the text about 3.5 times. `?format=f32` and
+`?format=f16` send binary instead: a stream of records, each one byte of id
+length, the bare id in UTF-8, then `dim` little-endian floats (`X-Pan-Dtype`
+says `float32` or `float16`; the half floats are converted from the stored
+values at send time, so `f32` is exact and `f16` is for a client that will
+reduce them anyway). Floats barely compress, so the binary forms are sent
+as they are. Every form carries `X-Pan-Snapshot`, the server's own RFC3339
+instant the copy was taken, and a client sends that back as its next
+`?since=` rather than its own clock, so two machines whose clocks disagree
+neither drop rows nor repeat them. These routes are what a client on
+another machine uses instead of reading the store's files (asked for by
+pan-ui, 2026-11-04).
 
 ### Moving facts from one namespace to another
 

@@ -40,7 +40,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # HTTP surface: axum 0.8 + utoipa Swagger (the interface spec, shipped from commit one).
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "fs", "sync", "time"] }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-zstd", "cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 utoipa = { version = "5", features = ["axum_extras"] }
@@ -49,6 +49,7 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 # Detector calls (external configured endpoints; rustls so no OpenSSL on macOS).
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "blocking"] }
 tokio-stream = "0.1"
+half = "2"
 
 [dev-dependencies]
 tempfile = "3"
