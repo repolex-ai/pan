@@ -2660,54 +2660,54 @@ impl Pan {
     /// Hybrid query — THE reason Pan exists. The SPARQL `where` (constraining
     /// `?s`, the media subject) gates the candidate set; usearch kNN ranks by
     /// cosine similarity to `like`. Pre-filter then search, joined at the
-    /// application layer by the id↔key map. Empty `where` = pure kNN.
+    /// application layer by the id↔key map. An empty `where` is pure kNN
+    /// over the whole index with no graph pass at all.
+    ///
+    /// The caller's pattern goes FIRST in the group and the type check after
+    /// it: the query engine joins in written order, and a selective pattern
+    /// written after `?s a pan:Image` cost a scan of every image (1.98 s
+    /// against 0.01 s on 203k images, measured 2026-11-04).
+    ///
+    /// `exclude` keeps one id out of the hits: the image a
+    /// nearest-to-this-image search started from, which would otherwise be
+    /// its own first hit at score 1.
     pub fn search(
         &self,
         where_clause: &str,
         like: &[f32],
         k: usize,
         index_name: &str,
+        exclude: Option<&str>,
     ) -> Result<Vec<SearchHit>> {
         validate_index_name(index_name)?;
-        let q = format!(
-            "{}
-             SELECT DISTINCT ?s WHERE {{
-               ?s a pan:Image .
-               {where_clause}
-             }}",
-            self.prefix_prologue()
-        );
+        let gated = !where_clause.trim().is_empty();
         let mut candidate_ids: HashSet<String> = HashSet::new();
-        if let QueryResults::Solutions(sols) = self
-            .run_query(&q)
-            .map_err(|e| anyhow!("search where-clause: {e}"))?
-        {
-            for s in sols {
-                let s = s?;
-                if let Some(t) = s.get("s") {
-                    candidate_ids.insert(bare_id(&term_str(t)));
+        if gated {
+            let q = format!(
+                "{}
+                 SELECT DISTINCT ?s WHERE {{
+                   {where_clause}
+                   ?s a pan:Image .
+                 }}",
+                self.prefix_prologue()
+            );
+            if let QueryResults::Solutions(sols) = self
+                .run_query(&q)
+                .map_err(|e| anyhow!("search where-clause: {e}"))?
+            {
+                for s in sols {
+                    let s = s?;
+                    if let Some(t) = s.get("s") {
+                        candidate_ids.insert(bare_id(&term_str(t)));
+                    }
                 }
             }
-        }
-        if candidate_ids.is_empty() {
-            return Ok(vec![]);
+            if candidate_ids.is_empty() {
+                return Ok(vec![]);
+            }
         }
         let mut indexes = locked(&self.indexes);
-        if !indexes.contains_key(index_name)
-            && self
-                .layout
-                .hnsw_root
-                .join(index_name)
-                .join("index.usearch")
-                .exists()
-        {
-            indexes.insert(
-                index_name.to_string(),
-                VectorIndex::create(&self.layout.hnsw_root, index_name, 0)?,
-            );
-        }
-        let vi = indexes
-            .get_mut(index_name)
+        let vi = Self::index_loaded(&self.layout, &mut indexes, index_name)?
             .ok_or_else(|| anyhow!("no such index: {index_name} (no vectors attached yet?)"))?;
         if vi.dim != like.len() {
             return Err(anyhow!(
@@ -2717,20 +2717,30 @@ impl Pan {
                 vi.dim
             ));
         }
-        let candidate_keys: HashSet<u64> = candidate_ids
-            .iter()
-            .filter_map(|c| vi.id_to_key.get(c).copied())
-            .collect();
-        if candidate_keys.is_empty() {
-            return Ok(vec![]);
-        }
-        let total = vi.id_to_key.len() as f32;
-        let selectivity = (candidate_keys.len() as f32 / total).max(0.001);
-        let ef = ((k as f32 / selectivity).clamp(64.0, 4096.0)) as usize;
-        vi.index.change_expansion_search(ef);
-        let matches = vi
-            .index
-            .filtered_search(like, k, |key| candidate_keys.contains(&key))?;
+        let excluded: Option<u64> = exclude.and_then(|id| vi.id_to_key.get(id).copied());
+        let matches = if gated {
+            let candidate_keys: HashSet<u64> = candidate_ids
+                .iter()
+                .filter_map(|c| vi.id_to_key.get(c).copied())
+                .filter(|key| Some(*key) != excluded)
+                .collect();
+            if candidate_keys.is_empty() {
+                return Ok(vec![]);
+            }
+            let total = vi.id_to_key.len() as f32;
+            let selectivity = (candidate_keys.len() as f32 / total).max(0.001);
+            let ef = ((k as f32 / selectivity).clamp(64.0, 4096.0)) as usize;
+            vi.index.change_expansion_search(ef);
+            vi.index
+                .filtered_search(like, k, |key| candidate_keys.contains(&key))?
+        } else {
+            vi.index
+                .change_expansion_search((k.max(1) * 2).clamp(64, 4096));
+            match excluded {
+                Some(x) => vi.index.filtered_search(like, k, |key| key != x)?,
+                None => vi.index.search(like, k)?,
+            }
+        };
         let mut hits = Vec::with_capacity(matches.keys.len());
         for (key, distance) in matches.keys.iter().zip(matches.distances.iter()) {
             if let Some(id) = vi.key_to_id.get(key) {
@@ -2741,6 +2751,52 @@ impl Pan {
             }
         }
         Ok(hits)
+    }
+
+    /// The stored vector of one image in one index, read from the index in
+    /// memory (the `.npy` beside the embedding record holds the same numbers
+    /// on disk). None when there is no such index, or the image has no
+    /// vector in it yet.
+    pub fn stored_vector(&self, id: &str, index_name: &str) -> Result<Option<Vec<f32>>> {
+        validate_index_name(index_name)?;
+        let mut indexes = locked(&self.indexes);
+        let Some(vi) = Self::index_loaded(&self.layout, &mut indexes, index_name)? else {
+            return Ok(None);
+        };
+        let Some(key) = vi.id_to_key.get(id).copied() else {
+            return Ok(None);
+        };
+        let mut buf = vec![0f32; vi.dim];
+        let found = vi
+            .index
+            .get(key, &mut buf)
+            .map_err(|e| anyhow!("read the vector of {id} from index {index_name}: {e}"))?;
+        if found == 0 {
+            return Ok(None);
+        }
+        Ok(Some(buf))
+    }
+
+    /// The named index, opened from disk on first use. None when no index of
+    /// that name exists on disk or in memory.
+    fn index_loaded<'a>(
+        layout: &PanLayout,
+        indexes: &'a mut HashMap<String, VectorIndex>,
+        index_name: &str,
+    ) -> Result<Option<&'a mut VectorIndex>> {
+        if !indexes.contains_key(index_name)
+            && layout
+                .hnsw_root
+                .join(index_name)
+                .join("index.usearch")
+                .exists()
+        {
+            indexes.insert(
+                index_name.to_string(),
+                VectorIndex::create(&layout.hnsw_root, index_name, 0)?,
+            );
+        }
+        Ok(indexes.get_mut(index_name))
     }
 
     // ── SPARQL ────────────────────────────────────────────────────────────────
@@ -3507,5 +3563,85 @@ mod add_xmp_tests {
         assert!(err.contains("RDF/XML") || err.contains("rdf:Description"), "{err}");
         let err = pan.add_xmp(&put.id, "").unwrap_err().to_string();
         assert!(err.contains("rdf:Description"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    fn tiny_png(seed: u8) -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(8, 8, |x, y| image::Rgba([x as u8 ^ seed, y as u8, seed, 255]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    const INDEX: &str = "test-embed";
+
+    /// Three images with vectors: a and b point nearly the same way, c is
+    /// orthogonal to both.
+    fn store_with_three() -> (tempfile::TempDir, Pan, [PutResult; 3]) {
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let a = pan.put(&tiny_png(1), Some("image/png")).unwrap();
+        let b = pan.put(&tiny_png(2), Some("image/png")).unwrap();
+        let c = pan.put(&tiny_png(3), Some("image/png")).unwrap();
+        assert!(pan.add_vector(&a.id, INDEX, &[1.0, 0.0, 0.0]).unwrap());
+        assert!(pan.add_vector(&b.id, INDEX, &[0.9, 0.1, 0.0]).unwrap());
+        assert!(pan.add_vector(&c.id, INDEX, &[0.0, 1.0, 0.0]).unwrap());
+        (dir, pan, [a, b, c])
+    }
+
+    #[test]
+    fn empty_where_is_nearest_over_the_whole_index() {
+        let (_dir, pan, [a, b, c]) = store_with_three();
+        let hits = pan.search("", &[1.0, 0.0, 0.0], 10, INDEX, None).unwrap();
+        let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, vec![a.id.as_str(), b.id.as_str(), c.id.as_str()]);
+        assert!((hits[0].score - 1.0).abs() < 1e-5, "the exact vector scores 1: {hits:?}");
+        assert!(hits[1].score > hits[2].score);
+    }
+
+    #[test]
+    fn exclude_keeps_the_starting_image_out_of_its_own_hits() {
+        let (_dir, pan, [a, b, c]) = store_with_three();
+        let v = pan.stored_vector(&a.id, INDEX).unwrap().unwrap();
+        assert_eq!(v, vec![1.0, 0.0, 0.0]);
+        let hits = pan.search("", &v, 10, INDEX, Some(&a.id)).unwrap();
+        let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, vec![b.id.as_str(), c.id.as_str()]);
+        // Gated the same way: the gate admits a, exclude still drops it.
+        let hits = pan
+            .search("?s pan:mediaType \"image/png\" .", &v, 10, INDEX, Some(&a.id))
+            .unwrap();
+        let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, vec![b.id.as_str(), c.id.as_str()]);
+    }
+
+    #[test]
+    fn the_where_gates_before_the_ranking() {
+        let (_dir, pan, [_a, _b, c]) = store_with_three();
+        // The query is nearest to a and b; the gate admits only c.
+        let gate = format!("?s pan:id <{}> .", c.iri);
+        let hits = pan.search(&gate, &[1.0, 0.0, 0.0], 10, INDEX, None).unwrap();
+        let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, vec![c.id.as_str()]);
+        // A gate nothing satisfies is an empty answer, not an error.
+        let hits = pan
+            .search("?s pan:mediaType \"video/mp4\" .", &[1.0, 0.0, 0.0], 10, INDEX, None)
+            .unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn stored_vector_is_none_for_an_unknown_image_or_index() {
+        let (_dir, pan, [a, _b, _c]) = store_with_three();
+        assert!(pan.stored_vector("nosuchid", INDEX).unwrap().is_none());
+        assert!(pan.stored_vector(&a.id, "other-model").unwrap().is_none());
+        let err = pan.search("", &[1.0, 0.0], 10, INDEX, None).unwrap_err();
+        assert!(err.to_string().contains("does not match"), "{err}");
     }
 }

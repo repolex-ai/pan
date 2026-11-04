@@ -99,11 +99,11 @@ fn wrong_dim_query_does_not_poison_index() {
     // A wrong-length query first — errors, but must NOT overwrite the real dim.
     let bad = vec![1.0f32, 0.0, 0.0];
     assert!(
-        store.search("", &bad, 3, "idx").is_err(),
+        store.search("", &bad, 3, "idx", None).is_err(),
         "dim-3 query should error against dim-8 index"
     );
     // Now a CORRECT-length query must still work.
-    let hits = store.search("", &good, 3, "idx").unwrap();
+    let hits = store.search("", &good, 3, "idx", None).unwrap();
     assert_eq!(
         hits.len(),
         1,
@@ -135,7 +135,7 @@ fn traversal_index_name_is_rejected() {
             "add_vector accepted a traversal index name: {evil:?}"
         );
         assert!(
-            store.search("", &v, 1, evil).is_err(),
+            store.search("", &v, 1, evil, None).is_err(),
             "search accepted a traversal index name: {evil:?}"
         );
         // A panId is also a path component (sidecar filename) — same gate.

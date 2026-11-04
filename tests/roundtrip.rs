@@ -214,7 +214,7 @@ fn full_store_describe_query_search_roundtrip() {
     assert_eq!(pan::npy::read_f32_1d(&sidecar).unwrap().len(), dim);
 
     // Ungated search: nearest to wolf_vec is wolf.
-    let hits = store.search("", &wolf_vec, 2, "test-idx").unwrap();
+    let hits = store.search("", &wolf_vec, 2, "test-idx", None).unwrap();
     assert_eq!(hits[0].id, wolf.id);
     assert!(
         hits[0].score > 0.99,
@@ -227,14 +227,14 @@ fn full_store_describe_query_search_roundtrip() {
     // Query vector is wolf-like, but the gate only admits dc:subject "sea" —
     // so the sea image is the only possible hit.
     let hits = store
-        .search("?s dc:subject \"sea\" .", &wolf_vec, 5, "test-idx")
+        .search("?s dc:subject \"sea\" .", &wolf_vec, 5, "test-idx", None)
         .unwrap();
     assert_eq!(hits.len(), 1, "graph gate admits exactly the sea image");
     assert_eq!(hits[0].id, sea.id);
 
     // Dim mismatch is loud.
     let err = store
-        .search("", &unit_vec(32, 1), 5, "test-idx")
+        .search("", &unit_vec(32, 1), 5, "test-idx", None)
         .unwrap_err();
     assert!(err.to_string().contains("does not match index"), "{err}");
 
@@ -242,7 +242,7 @@ fn full_store_describe_query_search_roundtrip() {
     store.flush().unwrap();
     drop(store);
     let reopened = Pan::open(dir.path()).unwrap();
-    let hits = reopened.search("", &sea_vec, 1, "test-idx").unwrap();
+    let hits = reopened.search("", &sea_vec, 1, "test-idx", None).unwrap();
     assert_eq!(hits[0].id, sea.id, "index + keymap reload from disk");
 
     // Graph survived too.
@@ -260,7 +260,7 @@ fn full_store_describe_query_search_roundtrip() {
         "triples gone"
     );
     assert!(reopened.get(&sea.id).is_err(), "blob gone");
-    let hits = reopened.search("", &sea_vec, 5, "test-idx").unwrap();
+    let hits = reopened.search("", &sea_vec, 5, "test-idx", None).unwrap();
     assert!(
         hits.iter().all(|h| h.id != sea.id),
         "deleted panId never surfaces in search"

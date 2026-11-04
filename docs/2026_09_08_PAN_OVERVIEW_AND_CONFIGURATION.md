@@ -267,6 +267,34 @@ when the embed stage is redone; redoing caption replaces them when the new
 caption lands. Over HTTP: `POST /media/{id}/redo` with `{"stage": "embed"}`;
 stages are caption, embed, segment, pose, depth.
 
+### Searching
+
+`POST /search` ranks images by how close their embedding is to a query, and
+takes the query in one of three forms: `vector` (floats in the index's own
+space), `like` (a stored image, `<pan/Image/x>` or its bare id, whose own
+vector is the query; it is left out of its own hits), or `text` (pand sends
+the words, and no image, to the configured embed endpoint and searches with
+the vector that comes back, so a client only ever talks to pand). `where` is
+optional SPARQL constraining `?s`, the image, with `pan:`, `copia:` and
+`git-lex:` declared; it runs first and the ranking happens among the images
+it admits, so `"where": "?s pan:relatedToId <https://repolex.ai/pan/ImageSet/x> ."`
+searches inside one set, and `FILTER NOT EXISTS` searches everything else.
+Without `where` there is no graph pass at all. `k` is how many hits (default
+10); `index` names the embedding model (default the one pand is configured
+with). The answer is `{"hits": [{"id": "<pan/Image/x>", "score": 0.93}]}`,
+score being cosine similarity. Only images that already have a vector can be
+hits; the others are simply absent. The query's own pattern is run before
+the `?s a pan:Image` check: the query engine joins in written order, and the
+other order cost a scan of every image on a 203k-image store (goodlux,
+2026-11-04). A search by text fails with 503 while the embed endpoint is
+down, since the vector has to come from the same model as the index.
+
+`GET /media/{id}/embedding` returns one image's stored vector as the `.npy`
+file pand wrote (float32, shape `(dim,)`), `?index=` naming another
+embedding model's index when a store has more than one. This and `/search`
+are what a client on another machine uses instead of reading the store's
+files (asked for by pan-ui, 2026-11-04).
+
 ### Moving facts from one namespace to another
 
 A producer's facts are loaded as written, so a producer that changes the

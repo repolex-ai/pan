@@ -21,6 +21,8 @@ use std::sync::Arc;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
+use super::calllog::{CallLine, Meter};
+use super::client::CallError;
 use super::stages;
 use super::Daemon;
 use crate::{bare_id, bracket_iri, MediaState, PAN_NS};
@@ -145,12 +147,27 @@ pub struct QueryBody {
 
 #[derive(Deserialize, ToSchema)]
 pub struct SearchBody {
+    /// The store to search. Absent: the store holding `like`, else the default.
     #[serde(default, alias = "soul")]
     pub store: Option<String>,
+    /// SPARQL group patterns constraining `?s`, the image: run first, then
+    /// `?s a pan:Image`; `pan:`, `copia:` and `git-lex:` are declared. Empty:
+    /// no graph pass, nearest over the whole index.
     #[serde(default)]
     pub r#where: String,
-    pub vector: Vec<f32>,
+    /// The query, exactly one of the three: a vector in the index's space …
+    #[serde(default)]
+    pub vector: Option<Vec<f32>>,
+    /// … a stored image, `<pan/Image/x>` or bare id, whose own vector is the
+    /// query (it is left out of the hits) …
+    #[serde(default)]
+    pub like: Option<String>,
+    /// … or text, embedded by the configured embed endpoint with no image.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// How many hits; default 10.
     pub k: Option<usize>,
+    /// Index (embedding model) name; default the configured embed model.
     pub index: Option<String>,
 }
 
@@ -683,6 +700,52 @@ async fn get_thumbnail(
     Ok(([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
 }
 
+#[utoipa::path(get, path = "/media/{id}/embedding", tag = "media",
+    params(("id" = String, Path, description = "<pan/Image/x>, full IRI, or bare id"),
+           ("index" = Option<String>, Query, description = "Index (embedding model) name; default the configured embed model")),
+    responses((status = 200, description = "The stored vector, the .npy file pand wrote: float32, shape (dim,)"),
+              (status = 404, body = ErrorBody)))]
+async fn get_embedding(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+    axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    let (store, id) = locate(&d, &given)?;
+    let index = q
+        .get("index")
+        .cloned()
+        .unwrap_or_else(|| default_index(&d, &store));
+    let rel = store
+        .pan
+        .enrichment_file(&id, crate::PanLayout::STAGE_EMBED, &index, "npy")
+        .map_err(map_err)?;
+    let abs = store.pan.layout.abs(&rel);
+    let bytes = tokio::fs::read(&abs).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                format!("no embedding for {given} in index {index} yet"),
+            )
+        } else {
+            ApiError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("read embedding: {e}"),
+            )
+        }
+    })?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("inline; filename=\"{id}.{index}.npy\""),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
 #[utoipa::path(delete, path = "/media/{id}", tag = "media", params(("id" = String, Path)),
     responses((status = 204), (status = 404, body = ErrorBody)))]
 async fn delete_media(
@@ -949,42 +1012,147 @@ fn serialize_results(results: crate::QueryResults) -> Result<Response, ApiError>
     }
 }
 
+/// The index a store searches when none is named: the embedding model pand
+/// is configured with (indexes are named by model); the store's own
+/// index_id when no embed stage is configured.
+fn default_index(d: &Daemon, store: &super::StoreHandle) -> String {
+    d.cfg
+        .models
+        .get(stages::STAGE_EMBED)
+        .map(|m| m.label())
+        .unwrap_or_else(|| store.pan.cfg.index_id.clone())
+}
+
+/// The query vector for a search by text: the configured embed endpoint,
+/// sent the text and no image. One line in the call log, stage `search`.
+async fn embed_text(d: &Daemon, store: &super::StoreHandle, text: &str) -> Result<Vec<f32>, ApiError> {
+    let ep = d
+        .cfg
+        .models
+        .get(stages::STAGE_EMBED)
+        .filter(|m| m.enabled)
+        .cloned()
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "search by text needs an embed endpoint in config.yml, and none is configured".into(),
+            )
+        })?;
+    let meter = Meter::new();
+    d.counters
+        .model_calls
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let result = d.client.embed_text(&ep.target(), text, &meter).await;
+    if let Some(m) = meter.take() {
+        let error = result.as_ref().err().map(|e| e.to_string());
+        d.calls.record(&CallLine {
+            time: CallLine::now(),
+            store: &store.entry.id,
+            id: "",
+            stage: "search",
+            model: &ep.model,
+            url: &m.url,
+            request_bytes: m.request_bytes,
+            status: m.status,
+            latency_ms: m.latency_ms,
+            response_bytes: m.response_bytes,
+            outcome: if result.is_ok() { "answered" } else { "failed" },
+            error: error.as_deref(),
+            finish_reason: None,
+            prompt_tokens: None,
+            completion_tokens: None,
+        });
+    }
+    match result {
+        Ok(v) => Ok(v.vector),
+        Err(CallError::Transient(m)) => Err(ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("the embed server did not answer: {m}"),
+        )),
+        Err(CallError::Terminal(m)) => Err(ApiError(
+            StatusCode::BAD_GATEWAY,
+            format!("the embed server refused the text: {m}"),
+        )),
+    }
+}
+
 #[utoipa::path(post, path = "/search", tag = "query", request_body = SearchBody,
-    responses((status = 200, body = SearchResponse), (status = 400, body = ErrorBody)))]
+    responses((status = 200, body = SearchResponse), (status = 400, body = ErrorBody),
+              (status = 404, body = ErrorBody), (status = 503, body = ErrorBody)))]
 async fn search(
     State(d): State<Shared>,
     Json(body): Json<SearchBody>,
 ) -> Result<Json<SearchResponse>, ApiError> {
-    let store = d.store_for(body.store.as_deref()).map_err(map_err)?;
-    // Default index = the embedding model pand is configured with (indexes
-    // are named by model); a store's own index_id is the fallback when no
-    // embed stage is configured.
-    let index = body.index.unwrap_or_else(|| {
-        d.cfg
-            .models
-            .get(stages::STAGE_EMBED)
-            .map(|m| m.label())
-            .unwrap_or_else(|| store.pan.cfg.index_id.clone())
-    });
-    let k = body.k.unwrap_or(10);
-    let hits = store
-        .pan
-        .search(&body.r#where, &body.vector, k, &index)
-        .map_err(map_err)?;
-    let mut out = Vec::with_capacity(hits.len());
-    for h in hits {
-        let iri = store
-            .pan
-            .subject_for(&h.id)
-            .map_err(map_err)?
-            .map(|n| n.into_string())
-            .unwrap_or(h.id.clone());
-        out.push(Hit {
-            id: media_iri_bracket(&iri),
-            score: h.score,
-        });
+    let given = [body.vector.is_some(), body.like.is_some(), body.text.is_some()]
+        .iter()
+        .filter(|b| **b)
+        .count();
+    if given != 1 {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "send exactly one of vector, like (a stored image's id) or text".into(),
+        ));
     }
-    Ok(Json(SearchResponse { hits: out }))
+    let like_id = body.like.as_deref().map(bare_id);
+    let store = match (&body.store, &like_id) {
+        (None, Some(id)) => d.locate(id).map_err(map_err)?.ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                format!("id not found: {}", body.like.as_deref().unwrap_or("")),
+            )
+        })?,
+        _ => d.store_for(body.store.as_deref()).map_err(map_err)?,
+    };
+    let index = body
+        .index
+        .clone()
+        .unwrap_or_else(|| default_index(&d, &store));
+    let k = body.k.unwrap_or(10);
+    let vector: Vec<f32> = if let Some(v) = body.vector {
+        v
+    } else if let Some(id) = &like_id {
+        let s = store.clone();
+        let (id2, ix) = (id.clone(), index.clone());
+        tokio::task::spawn_blocking(move || s.pan.stored_vector(&id2, &ix))
+            .await
+            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(map_err)?
+            .ok_or_else(|| {
+                ApiError(
+                    StatusCode::NOT_FOUND,
+                    format!(
+                        "{} has no vector in index {index} yet",
+                        body.like.as_deref().unwrap_or("")
+                    ),
+                )
+            })?
+    } else {
+        embed_text(&d, &store, body.text.as_deref().unwrap_or("")).await?
+    };
+    let where_clause = body.r#where;
+    let s = store.clone();
+    let hits = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Hit>> {
+        let hits = s
+            .pan
+            .search(&where_clause, &vector, k, &index, like_id.as_deref())?;
+        let mut out = Vec::with_capacity(hits.len());
+        for h in hits {
+            let iri = s
+                .pan
+                .subject_for(&h.id)?
+                .map(|n| n.into_string())
+                .unwrap_or(h.id.clone());
+            out.push(Hit {
+                id: media_iri_bracket(&iri),
+                score: h.score,
+            });
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(map_err)?;
+    Ok(Json(SearchResponse { hits }))
 }
 
 // ── ImageSets (issue #4; pan.ttl 0.4.2) ─────────────────────────────────────
@@ -1193,7 +1361,7 @@ async fn imageset_member(
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
-    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_sparql_get, store_sparql_post,
+    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, get_embedding, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_sparql_get, store_sparql_post,
           imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove, rename_namespace, redo, add_xmp),
     components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody,
                        ImageSetResponse, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse, RedoBody, RedoResponse)),
@@ -1213,6 +1381,7 @@ pub fn router(d: Shared) -> Router {
         .route("/media", post(deliver))
         .route("/media/{id}", get(get_media).delete(delete_media))
         .route("/media/{id}/thumbnail", get(get_thumbnail))
+        .route("/media/{id}/embedding", get(get_embedding))
         .route("/media/{id}/facts", get(get_facts))
         .route("/media/{id}/state", get(get_state))
         .route("/media/{id}/set", post(set_fields))

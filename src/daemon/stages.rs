@@ -389,12 +389,11 @@ async fn run_one(
         STAGE_EMBED => {
             // The embedding is multimodal: the image AND what the caption
             // stage said about it, embedded together as one vector. The text
-            // is the two captions, the scene fields, the scores and their
-            // critiques, and the render request the file arrived with
-            // (goodlux, 2026-09-20). It used to be the whole XMP packet as
-            // raw markup — tags, file paths, identifiers, dates and every
-            // enrichment reference, most of which says nothing about the
-            // picture.
+            // is the two captions and the render request the file arrived
+            // with, nothing else (goodlux, 2026-10-04); `embedding_text` says
+            // why the scene fields and scores stay out. Before 2026-09-20 it
+            // was the whole XMP packet as raw markup, most of which says
+            // nothing about the picture.
             let text = {
                 let s = store.clone();
                 let id = item.id.clone();

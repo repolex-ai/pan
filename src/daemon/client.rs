@@ -270,10 +270,12 @@ impl ModelClient {
 
     /// `/percept/embed` on the server (:1215): the image as a file part and the
     /// text to embed WITH it as the `text` string part; ONE joint vector of
-    /// pixels and text comes back (m3rc, 2026-09-08). Pan sends the file's
-    /// complete XMP packet as the text (goodlux, 2026-09-08). The model
-    /// The node caps the input and truncates at the end; m4rq raised that cap
-    /// on 2026-09-20 and the model itself takes up to 32k tokens.
+    /// pixels and text comes back (m3rc, 2026-09-08). The text Pan sends is
+    /// `Pan::embedding_text`: the two captions and the render request, nothing
+    /// else (goodlux, 2026-10-04; before that the whole XMP packet, then the
+    /// scene fields and scores as well). The node caps the input and
+    /// truncates at the end; m4rq raised that cap on 2026-09-20 and the model
+    /// itself takes up to 32k tokens.
     pub async fn embed(
         &self,
         t: &Target,
@@ -292,6 +294,33 @@ impl ModelClient {
         let v = self
             .post(t, form, (bytes.len() + text.len()) as u64, meter)
             .await?;
+        let out: SeeEmbed = serde_json::from_value(v)
+            .map_err(|e| CallError::Transient(format!("embed shape: {e}")))?;
+        if out.vector.is_empty() {
+            return Err(CallError::Transient("embed returned no vector".into()));
+        }
+        if out.dim != 0 && out.dim != out.vector.len() {
+            return Err(CallError::Transient(format!(
+                "embed dim {} != vector length {}",
+                out.dim,
+                out.vector.len()
+            )));
+        }
+        Ok(out)
+    }
+
+    /// `/percept/embed` with text and no image: the same model, the same
+    /// space, so the vector can be searched against the images' index. The
+    /// server embeds whichever of the two it is given (Iris `embed`, text
+    /// first). Used for a search by text; nothing is written from it.
+    pub async fn embed_text(
+        &self,
+        t: &Target,
+        text: &str,
+        meter: &Meter,
+    ) -> std::result::Result<SeeEmbed, CallError> {
+        let form = Form::new().text("text", text.to_string());
+        let v = self.post(t, form, text.len() as u64, meter).await?;
         let out: SeeEmbed = serde_json::from_value(v)
             .map_err(|e| CallError::Transient(format!("embed shape: {e}")))?;
         if out.vector.is_empty() {
