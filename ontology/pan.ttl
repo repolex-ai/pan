@@ -44,11 +44,27 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.19" .
+    owl:versionInfo "0.4.20" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.20 (2026-11-06, ruled by goodlux): WHEN A RECORD LAST CHANGED.
+#   A rating, a pick, a caption or a pose changed the file and the graph and
+#   left no time anywhere: pan:createdDate is the record's birth, and
+#   pan:producedDate sits on each enrichment, not on the image. A reader that
+#   caches a store's images (pan-ui) could only learn that something changed
+#   by noticing the image count move.
+#   (1) + pan:updatedDate on pan:Node, at most one: when the node's own file
+#       was last written. pand writes it on every write of that file, by
+#       whichever route (set, unset, a stage's result, a producer's XMP add,
+#       a set's creation). Equal to pan:createdDate at ingest, so every new
+#       node carries it. Never sent by a producer.
+#   (2) Media and MediaSet restrictions: pan:updatedDate at most once.
+#   Deliberately not done: no marks-only date (one date, moved by any write;
+#   a reader that cares only about rating and the flags compares the values
+#   it holds). No backfill: an existing node gets the date the first time it
+#   is written from now on. No record of deletions.
 # v0.4.19 (2026-09-22, ruled by goodlux): WHEN THE MEDIA WAS MADE.
 #   pan:createdDate is when the Pan record was created. It has never meant
 #   when the media itself was made, and until now nothing in Pan held that.
@@ -851,6 +867,14 @@ pan:createdDate a owl:DatatypeProperty ;
     rdfs:domain pan:Node ;
     rdfs:range xsd:dateTime .
 
+# When the node's own file was last written, by any route. pand moves it;
+# a producer never sends it. Equal to pan:createdDate at ingest.
+pan:updatedDate a owl:DatatypeProperty ;
+    rdfs:label "updated date" ;
+    rdfs:comment "When this record's own file was last written, RFC3339 system local time. pand writes it on every write of the file; never send it." ;
+    rdfs:domain pan:Node ;
+    rdfs:range xsd:dateTime .
+
 # When the media itself was made, as distinct from when Pan recorded it. Read
 # from the media's own metadata: a render time, a capture time.
 pan:mediaCreatedDate a owl:DatatypeProperty ;
@@ -1323,6 +1347,7 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:createdDate ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:mediaCreatedDate ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:enrichmentCompleteDate ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:updatedDate ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] ,
@@ -1339,11 +1364,13 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:isPicked   ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:isRejected ; owl:maxCardinality 1 ] .
 
-# A MediaSet: one id, one creation time, at most one description. Spelled pan:
-# as everywhere else in Pan. pan:ImageSet inherits this block.
+# A MediaSet: one id, one creation time, at most one update time and one
+# description. Spelled pan: as everywhere else in Pan. pan:ImageSet inherits
+# this block.
 pan:MediaSet rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:createdDate ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:updatedDate ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:description ; owl:maxCardinality 1 ] .
 
 # An Instance: one id, one root, one mode, one port; the rest at most once.

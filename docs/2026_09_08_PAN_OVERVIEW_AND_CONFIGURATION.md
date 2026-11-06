@@ -320,6 +320,34 @@ neither drop rows nor repeat them. These routes are what a client on
 another machine uses instead of reading the store's files (asked for by
 pan-ui, 2026-11-04).
 
+### What changed since
+
+Every record carries `pan:updatedDate`: when its own file was last written,
+by any route (a rating or flag set or unset, a stage's result, a producer's
+XMP add, a set's creation). It equals `pan:createdDate` at ingest and pand
+moves it on every rewrite of the file. A producer never sends it. A record
+from before pan.ttl 0.4.20 (2026-11-06) carries it from the first time it is
+written after that; nothing is backfilled.
+
+A reader that caches a store's images asks what changed:
+
+```
+GET /stores/700c5b/images?since=2026-11-06T08:00:00-08:00
+```
+
+The answer is one JSON object: `snapshot`, pand's instant to send back as
+the next `since`, and `images`, the images whose file was written at or
+after `since`, oldest first, each as `id`, `updated_date`, `rating` (0 when
+unrated), `is_picked` and `is_rejected` (false when absent). A cleared mark
+is a row like any other, so a reader learns a pick was removed. Without
+`since`, every image carrying the date. The snapshot is taken before the
+read and never later than a write still in flight, so a change landing
+during the call comes again next time rather than never; a reader keeps the
+newest state it has seen per image. `gzip` and `zstd` when `Accept-Encoding`
+asks. Adding an image to a set rewrites the image's file, so membership
+changes appear here as rows for the image; a set's own `updated_date` is on
+`GET /imagesets`.
+
 ### Moving facts from one namespace to another
 
 A producer's facts are loaded as written, so a producer that changes the

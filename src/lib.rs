@@ -485,7 +485,7 @@ pub const RENDER_REQUEST_CHUNK: &str = "parameters";
 
 /// Fields Pan itself writes about a media object at ingest or at stage
 /// completion. A person may never set these by hand.
-pub const STRUCTURAL_FIELDS: [&str; 10] = [
+pub const STRUCTURAL_FIELDS: [&str; 11] = [
     "mediaPath",
     "mediaType",
     "sourceFile",
@@ -493,6 +493,10 @@ pub const STRUCTURAL_FIELDS: [&str; 10] = [
     "width",
     "height",
     "createdDate",
+    // When the file was last written, by any route (pan.ttl 0.4.20, goodlux
+    // 2026-11-06). Equal to createdDate at ingest; `touch` moves it on every
+    // rewrite of the file.
+    "updatedDate",
     // When the media itself was made, from its own metadata (pan.ttl
     // 0.4.19, goodlux 2026-09-22). Recorded at ingest; like every declared
     // image field it may be set or added afterwards.
@@ -982,6 +986,25 @@ pub struct Pan {
     /// Bumped by every write to this store; the ready-mark pass runs only
     /// when it moved (issue #71).
     changes: std::sync::atomic::AtomicU64,
+    /// The `pan:updatedDate` instants of touches begun and not yet committed,
+    /// keyed by `touch_seq`. `updated_since` hands out no snapshot later than
+    /// the oldest of these, so a write in flight during a poll is reported
+    /// by the next poll instead of falling between two (w3bl0rd, 2026-11-06:
+    /// duplicates are harmless, gaps are not).
+    pending_touch: Mutex<std::collections::BTreeMap<u64, chrono::DateTime<chrono::FixedOffset>>>,
+    touch_seq: std::sync::atomic::AtomicU64,
+}
+
+/// One image as the changes feed reports it: its current marks and when its
+/// file was last written. A cleared mark is a row too, with the defaults.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedImage {
+    /// The full IRI, `https://repolex.ai/pan/Image/x`.
+    pub iri: String,
+    pub updated_date: String,
+    pub rating: u8,
+    pub is_picked: bool,
+    pub is_rejected: bool,
 }
 
 impl Pan {
@@ -1015,6 +1038,8 @@ impl Pan {
             indexes: Mutex::new(HashMap::new()),
             work: Mutex::new(None),
             changes: std::sync::atomic::AtomicU64::new(0),
+            pending_touch: Mutex::new(std::collections::BTreeMap::new()),
+            touch_seq: std::sync::atomic::AtomicU64::new(0),
         };
         pan.declare_store()?;
         // The sets a person curated live in imagesets/*.xml; the graph is
@@ -1293,6 +1318,8 @@ impl Pan {
             // When it came to be: pan:createdDate, the same spelling the file
             // carries (goodlux, 2026-09-17: the graph stores pan:, never git-lex:).
             self.quad(&subject, "createdDate", &created_date),
+            // Last written: the same instant, until something rewrites the file.
+            self.quad(&subject, "updatedDate", &created_date),
             self.quad(&subject, "mediaType", &media_type),
             self.quad(&subject, "sourceFile", &source_file),
         ];
@@ -2845,6 +2872,96 @@ impl Pan {
         Ok(out)
     }
 
+    /// Move `pan:updatedDate` on a node to now: the one place the date is
+    /// written after ingest. Registered in `pending_touch` from the instant
+    /// it is chosen until it is committed, for `updated_since`.
+    fn touch(&self, subject: &NamedNode) -> Result<()> {
+        let at = chrono::Local::now().fixed_offset();
+        let seq = self
+            .touch_seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::locked(&self.pending_touch).insert(seq, at);
+        let r = (|| -> Result<()> {
+            let old: Vec<Quad> = self
+                .store
+                .quads_for_pattern(
+                    Some(subject.into()),
+                    Some(pan_iri("updatedDate").as_ref()),
+                    None,
+                    Some(crate::config::pan_graph().as_ref()),
+                )
+                .collect::<std::result::Result<_, _>>()
+                .context("read updatedDate")?;
+            let mut t = self
+                .store
+                .start_transaction()
+                .context("start transaction")?;
+            for q in &old {
+                t.remove(q.as_ref());
+            }
+            let stamp = at.to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+            t.insert(self.quad(subject, "updatedDate", &stamp).as_ref());
+            t.commit().context("commit updatedDate")
+        })();
+        crate::locked(&self.pending_touch).remove(&seq);
+        r
+    }
+
+    /// The images whose file was written at or after `since` (RFC3339 with
+    /// a zone), oldest first, each with its current rating and flags; every
+    /// image carrying `pan:updatedDate` when `since` is None. Returns the
+    /// snapshot instant to send back as the next `since` first: taken before
+    /// the read, and never later than a touch still in flight, so nothing
+    /// written during this call can fall between two polls.
+    pub fn updated_since(&self, since: Option<&str>) -> Result<(String, Vec<ChangedImage>)> {
+        if let Some(c) = since {
+            chrono::DateTime::parse_from_rfc3339(c).map_err(|e| {
+                anyhow!("since must be RFC3339 with a zone, e.g. 2026-11-06T08:00:00-08:00: {e}")
+            })?;
+        }
+        let mut snapshot = chrono::Local::now().fixed_offset();
+        if let Some(oldest) = crate::locked(&self.pending_touch).values().next() {
+            if *oldest < snapshot {
+                snapshot = *oldest;
+            }
+        }
+        let snapshot = snapshot.to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+        let filter = match since {
+            Some(c) => format!(
+                "FILTER(xsd:dateTime(?u) >= xsd:dateTime(\"{}\"))",
+                c.replace('"', "")
+            ),
+            None => String::new(),
+        };
+        let q = format!(
+            "SELECT ?s ?u ?r ?p ?j WHERE {{
+               ?s a pan:Image ; pan:updatedDate ?u .
+               OPTIONAL {{ ?s pan:rating ?r }}
+               OPTIONAL {{ ?s pan:isPicked ?p }}
+               OPTIONAL {{ ?s pan:isRejected ?j }}
+               {filter}
+             }} ORDER BY xsd:dateTime(?u) ?s"
+        );
+        let mut out = Vec::new();
+        if let QueryResults::Solutions(sols) = self.query(&q)? {
+            for sol in sols {
+                let sol = sol?;
+                let (Some(s), Some(u)) = (sol.get("s"), sol.get("u")) else {
+                    continue;
+                };
+                let lit = |name: &str| sol.get(name).map(term_str);
+                out.push(ChangedImage {
+                    iri: term_str(s),
+                    updated_date: term_str(u),
+                    rating: lit("r").and_then(|v| v.parse().ok()).unwrap_or(0),
+                    is_picked: lit("p").as_deref() == Some("true"),
+                    is_rejected: lit("j").as_deref() == Some("true"),
+                });
+            }
+        }
+        Ok((snapshot, out))
+    }
+
     /// The named index, opened from disk on first use. None when no index of
     /// that name exists on disk or in memory.
     fn index_loaded<'a>(
@@ -3103,6 +3220,10 @@ impl Pan {
     /// is a namespace IRI to replace throughout that kept text, so a
     /// namespace renamed in the graph is renamed in the file too.
     fn restamp_subject(&self, subject: &NamedNode, rename: Option<(&str, &str)>) -> Result<()> {
+        // Every rewrite of the file moves pan:updatedDate, graph first so the
+        // packet below carries it. A rewrite that then fails leaves the date
+        // moved: a reader sees one unchanged row, which is harmless.
+        self.touch(subject)?;
         let facts = Self::facts_of(&self.store, subject)?;
         let Some(media_path) = facts
             .iter()
@@ -3631,6 +3752,103 @@ mod add_xmp_tests {
         assert!(err.contains("RDF/XML") || err.contains("rdf:Description"), "{err}");
         let err = pan.add_xmp(&put.id, "").unwrap_err().to_string();
         assert!(err.contains("rdf:Description"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod updated_date_tests {
+    use super::*;
+
+    fn tiny_png(seed: u8) -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(8, 8, |x, y| image::Rgba([x as u8 ^ seed, y as u8, seed, 255]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    fn fact(pan: &Pan, id: &str, local: &str) -> Option<String> {
+        let subject = pan.subject_for(id).unwrap().unwrap();
+        Pan::facts_of(&pan.store, &subject)
+            .unwrap()
+            .into_iter()
+            .find(|(p, _)| p == &format!("{PAN_NS}{local}"))
+            .and_then(|(_, v)| v.into_iter().next())
+    }
+
+    fn file_text(pan: &Pan, id: &str) -> String {
+        let rel = fact(pan, id, "mediaPath").unwrap();
+        let bytes = fs::read(pan.layout.abs(&rel)).unwrap();
+        xmp::read_xmp_packet_from_bytes(&bytes).unwrap().unwrap()
+    }
+
+    #[test]
+    fn a_new_image_is_updated_when_it_was_created_in_graph_and_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let a = pan.put(&tiny_png(1), Some("image/png")).unwrap();
+        let created = fact(&pan, &a.id, "createdDate").unwrap();
+        assert_eq!(fact(&pan, &a.id, "updatedDate").unwrap(), created);
+        assert!(file_text(&pan, &a.id).contains(&format!("<pan:updatedDate>{created}</pan:updatedDate>")));
+    }
+
+    #[test]
+    fn setting_and_clearing_a_mark_moves_the_date_and_the_cleared_mark_is_a_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let a = pan.put(&tiny_png(1), Some("image/png")).unwrap();
+        let b = pan.put(&tiny_png(2), Some("image/png")).unwrap();
+        let before = fact(&pan, &a.id, "updatedDate").unwrap();
+        pan.set_fields(&a.id, &[("isPicked".into(), serde_json::json!(true))])
+            .unwrap();
+        let after = fact(&pan, &a.id, "updatedDate").unwrap();
+        assert!(after >= before, "{after} < {before}");
+        assert_eq!(fact(&pan, &a.id, "updatedDate").into_iter().count(), 1, "one date, not two");
+        assert!(file_text(&pan, &a.id).contains(&format!("<pan:updatedDate>{after}</pan:updatedDate>")));
+
+        let (_snap, rows) = pan.updated_since(None).unwrap();
+        assert_eq!(rows.len(), 2, "both images carry the date: {rows:?}");
+        let row_a = rows.iter().find(|r| r.iri.ends_with(&a.id)).unwrap();
+        assert!(row_a.is_picked && !row_a.is_rejected && row_a.rating == 0);
+
+        pan.unset_fields(&a.id, &["isPicked".into()]).unwrap();
+        let (_snap, rows) = pan.updated_since(None).unwrap();
+        let row_a = rows.iter().find(|r| r.iri.ends_with(&a.id)).unwrap();
+        assert!(!row_a.is_picked, "a cleared pick is a row with false: {row_a:?}");
+        assert!(rows.iter().any(|r| r.iri.ends_with(&b.id)), "the untouched image keeps its ingest date");
+    }
+
+    #[test]
+    fn since_filters_and_snapshot_is_the_next_since() {
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let a = pan.put(&tiny_png(1), Some("image/png")).unwrap();
+        let (snap, rows) = pan.updated_since(Some("2000-01-01T00:00:00Z")).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].iri.ends_with(&a.id));
+        chrono::DateTime::parse_from_rfc3339(&snap).expect("snapshot is RFC3339 with a zone");
+        let (_s, rows) = pan.updated_since(Some("2999-01-01T00:00:00Z")).unwrap();
+        assert!(rows.is_empty());
+        let (_s, rows) = pan.updated_since(Some(&snap)).unwrap();
+        assert!(rows.len() <= 1, "at most the same row again, never a gap");
+        assert!(pan.updated_since(Some("2026-11-06T08:00:00")).is_err(), "no zone is refused");
+    }
+
+    #[test]
+    fn a_new_set_carries_the_date_and_membership_moves_the_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let a = pan.put(&tiny_png(1), Some("image/png")).unwrap();
+        let set = pan.imageset_create(Some("picks")).unwrap();
+        assert_eq!(set.updated_date.as_deref(), Some(set.created_date.as_str()));
+        let again = pan.imageset_get(&set.id).unwrap().unwrap();
+        assert_eq!(again.updated_date, set.updated_date, "the graph holds it too");
+        let text = fs::read_to_string(pan.imagesets_root().join(format!("{}.nq", set.id))).unwrap();
+        assert!(text.contains("updatedDate"), "the set's file carries it: {text}");
+        pan.imageset_add(&set.id, &a.id).unwrap();
+        let (_s, rows) = pan.updated_since(Some("2000-01-01T00:00:00Z")).unwrap();
+        assert!(rows.iter().any(|r| r.iri.ends_with(&a.id)), "adding to a set rewrites the image");
     }
 }
 

@@ -192,6 +192,10 @@ pub struct ImageSetResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub created_date: String,
+    /// `pan:updatedDate`: when the set's own file was last written. Absent on
+    /// a set made before pan.ttl 0.4.20.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_date: Option<String>,
     /// The media whose `pan:relatedToId` names this set, bracket form.
     /// Omitted from the list; present on one set.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -208,6 +212,29 @@ pub struct ImageSetCreateBody {
 pub struct ImageSetMemberBody {
     /// `<pan/Image/x>`, the full IRI, or the bare id.
     pub media: String,
+}
+
+/// `GET /stores/{id}/images?since=`: the images whose file was written since
+/// an instant, each with its current marks (pan.ttl 0.4.20, goodlux 2026-11-06).
+#[derive(Serialize, ToSchema)]
+pub struct ChangesResponse {
+    /// pand's instant, taken before the read: send it back as the next `since`.
+    pub snapshot: String,
+    pub store: String,
+    pub images: Vec<ChangedImageOut>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ChangedImageOut {
+    /// `<pan/Image/x>`, bracket form.
+    pub id: String,
+    /// `pan:updatedDate`: when the image's file was last written, by any route.
+    pub updated_date: String,
+    /// 0 when unrated.
+    pub rating: u8,
+    /// false when the flag is absent, so a cleared pick is a row.
+    pub is_picked: bool,
+    pub is_rejected: bool,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -880,6 +907,45 @@ async fn query(State(d): State<Shared>, Json(body): Json<QueryBody>) -> Result<R
     serialize_results(results)
 }
 
+#[utoipa::path(get, path = "/stores/{id}/images", tag = "query",
+    params(("id" = String, Path, description = "store id"),
+           ("since" = Option<String>, Query, description = "RFC3339 with a zone; the X-Pan-Snapshot / snapshot of the previous call. Absent: every image carrying pan:updatedDate.")),
+    responses((status = 200, body = ChangesResponse, description = "Images whose file was written at or after since, oldest first, with current rating and flags. Cleared marks are rows with the defaults. gzip and zstd when Accept-Encoding asks."), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn store_images_changed(
+    State(d): State<Shared>,
+    AxPath(store_id): AxPath<String>,
+    axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    let store = d.store_for(Some(&store_id)).map_err(map_err)?;
+    let since = q.get("since").cloned();
+    let s = store.clone();
+    let (snapshot, rows) = tokio::task::spawn_blocking(move || s.pan.updated_since(since.as_deref()))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
+    let body = ChangesResponse {
+        snapshot: snapshot.clone(),
+        store: store.entry.id.clone(),
+        images: rows
+            .into_iter()
+            .map(|r| ChangedImageOut {
+                id: media_iri_bracket(&r.iri),
+                updated_date: r.updated_date,
+                rating: r.rating,
+                is_picked: r.is_picked,
+                is_rejected: r.is_rejected,
+            })
+            .collect(),
+    };
+    let mut resp = Json(body).into_response();
+    resp.headers_mut().insert(
+        header::HeaderName::from_static("x-pan-snapshot"),
+        header::HeaderValue::from_str(&snapshot)
+            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+    );
+    Ok(resp)
+}
+
 /// SPARQL 1.1 Protocol, per store — what git-lex and Syrinx federate to.
 /// GET `?query=` · POST `application/sparql-query` (raw) ·
 /// POST `application/x-www-form-urlencoded` (`query=`). Results as
@@ -1168,6 +1234,7 @@ fn imageset_out(
         store: store.entry.id.clone(),
         description: p.description,
         created_date: p.created_date,
+        updated_date: p.updated_date,
         media,
     }
 }
@@ -1515,7 +1582,7 @@ async fn imageset_member(
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
-    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, get_embedding, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_embeddings, store_sparql_get, store_sparql_post,
+    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, get_embedding, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_embeddings, store_images_changed, store_sparql_get, store_sparql_post,
           imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove, rename_namespace, redo, add_xmp),
     components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody,
                        ImageSetResponse, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse, RedoBody, RedoResponse)),
@@ -1557,6 +1624,10 @@ pub fn router(d: Shared) -> Router {
             // gzip/zstd when the client asks; the text form shrinks ~3.5x,
             // the binary forms barely (floats do not compress).
             get(store_embeddings).layer(tower_http::compression::CompressionLayer::new()),
+        )
+        .route(
+            "/stores/{id}/images",
+            get(store_images_changed).layer(tower_http::compression::CompressionLayer::new()),
         )
         .route("/stores/{id}/media", post(deliver_to))
         .route("/stores/{id}/rename-namespace", post(rename_namespace))

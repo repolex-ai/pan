@@ -47,6 +47,10 @@ pub struct ImageSet {
     pub description: Option<String>,
     /// `pan:createdDate`, in the file and in the graph alike.
     pub created_date: String,
+    /// `pan:updatedDate`: when the set's file was last written. Equal to
+    /// `created_date` at creation; absent on a file from before 0.4.20.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_date: Option<String>,
 }
 
 pub fn imageset_iri(id: &str) -> Result<NamedNode> {
@@ -81,6 +85,14 @@ fn imageset_quads(p: &ImageSet) -> Result<Vec<Quad>> {
             crate::config::pan_graph(),
         ),
     ];
+    if let Some(u) = &p.updated_date {
+        quads.push(Quad::new(
+            node.clone(),
+            pan_iri("updatedDate"),
+            Literal::new_simple_literal(u),
+            crate::config::pan_graph(),
+        ));
+    }
     if let Some(d) = &p.description {
         quads.push(Quad::new(
             node,
@@ -125,6 +137,7 @@ pub fn read_imageset_file(text: &str) -> Result<ImageSet> {
         .to_string();
     validate_pan_id(&id)?;
     let mut created_date = None;
+    let mut updated_date = None;
     let mut description = None;
     let mut typed = false;
     for q in &quads {
@@ -143,6 +156,7 @@ pub fn read_imageset_file(text: &str) -> Result<ImageSet> {
             }
             (_, Some("id")) => {}
             (Term::Literal(l), Some("createdDate")) => created_date = Some(l.value().to_string()),
+            (Term::Literal(l), Some("updatedDate")) => updated_date = Some(l.value().to_string()),
             (Term::Literal(l), Some("description")) => description = Some(l.value().to_string()),
             _ => {
                 return Err(anyhow!(
@@ -161,6 +175,7 @@ pub fn read_imageset_file(text: &str) -> Result<ImageSet> {
         iri: node.as_str().to_string(),
         description,
         created_date,
+        updated_date,
     })
 }
 
@@ -254,11 +269,13 @@ impl Pan {
             .map(str::trim)
             .filter(|d| !d.is_empty())
             .map(String::from);
+        let created_date = now_local();
         let p = ImageSet {
             iri: imageset_iri(id)?.into_string(),
             id: id.to_string(),
             description,
-            created_date: now_local(),
+            updated_date: Some(created_date.clone()),
+            created_date,
         };
         let path = self.imageset_file(&p.id);
         fs::create_dir_all(self.imagesets_root())
@@ -332,6 +349,7 @@ impl Pan {
 
     fn imageset_of(&self, node: &NamedNode) -> Result<Option<ImageSet>> {
         let mut created_date = None;
+        let mut updated_date = None;
         let mut description = None;
         for q in self.store.quads_for_pattern(
             Some(node.into()),
@@ -346,6 +364,7 @@ impl Pan {
             };
             match q.predicate.as_str().strip_prefix(PAN_NS) {
                 Some("createdDate") => created_date = Some(value),
+                Some("updatedDate") => updated_date = Some(value),
                 Some("description") => description = Some(value),
                 _ => {}
             }
@@ -358,6 +377,7 @@ impl Pan {
             iri: node.as_str().to_string(),
             description,
             created_date,
+            updated_date,
         }))
     }
 
@@ -531,6 +551,7 @@ mod tests {
             iri: format!("{PAN_MEDIA_NS}ImageSet/abcd2345"),
             description: Some("portraits & <tests>".into()),
             created_date: "2026-09-16T12:00:00-07:00".into(),
+            updated_date: Some("2026-09-16T12:00:00-07:00".into()),
         }
     }
 
@@ -542,8 +563,14 @@ mod tests {
         let graph = format!("<{}> .", crate::config::PAN_GRAPH_IRI);
         assert_eq!(
             text.lines().count(),
-            4,
-            "type, id, created, description: {text}"
+            5,
+            "type, id, created, updated, description: {text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "<{PAN_NS}updatedDate> \"2026-09-16T12:00:00-07:00\""
+            )),
+            "{text}"
         );
         assert!(
             text.lines()

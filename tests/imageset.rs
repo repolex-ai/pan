@@ -223,6 +223,8 @@ fn the_graph_is_rebuilt_from_the_set_files_on_open() {
             iri: format!("{}ImageSet/handmade", pan::PAN_MEDIA_NS),
             description: Some("made by hand".into()),
             created_date: "2026-09-16T10:00:00-07:00".into(),
+            // A file from before pan.ttl 0.4.20 carries no updatedDate.
+            updated_date: None,
         };
         std::fs::write(
             dir.path().join("_ignore/ImageSet/handmade.nq"),
@@ -270,6 +272,7 @@ fn a_set_file_whose_name_and_id_disagree_refuses_the_open() {
         iri: format!("{}ImageSet/abcd2345", pan::PAN_MEDIA_NS),
         description: None,
         created_date: "2026-09-16T10:00:00-07:00".into(),
+        updated_date: None,
     };
     std::fs::write(
         dir.path().join("_ignore/ImageSet/other.nq"),
