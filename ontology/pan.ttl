@@ -44,11 +44,28 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.21" .
+    owl:versionInfo "0.4.22" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.22 (2026-11-10, ruled by goodlux): VIDEO, AND A PLACE FOR NOTES.
+#   Clips (about 10 MB, 5 to 15 s) and films (clips stitched together, about
+#   200 MB) are being made in numbers and need a home. What a stored video
+#   needs is almost all declared on pan:Media already: captions, rating, the
+#   flags, width and height, the thumbnail slot, mediaCreatedDate,
+#   relatedToId to the stills it was made from and to the clips a film holds.
+#   (1) + pan:Video a owl:Class ; rdfs:subClassOf pan:Media. IRI <pan/Video/id>.
+#       pan:VideoSet (stubbed since 0.4.7) now has its media class; nothing
+#       writes a Video yet, that is pand work to follow.
+#   (2) + pan:duration (seconds) and pan:frameRate on pan:Video, at most one
+#       each: what a player and a UI need and what is awkward to go back for.
+#   (3) + pan:note on pan:Media, at most one: arbitrary notes about the
+#       media, written by a person. pan:description is NOT for notes and is
+#       left exactly as it was.
+#   Deliberately not done: no ordering of a film's clips (the film file holds
+#   the order; relatedToId links the clips, unordered). No audio facts. No
+#   video stages; the embed pass on video is a separate ask.
 # v0.4.21 (2026-11-09, ruled by goodlux): FACES.
 #   A face-detection pass (InsightFace buffalo_l behind Iris POST /percept/face,
 #   m3rc 2026-11-06) answers with every face in an image: where it is, five
@@ -694,12 +711,29 @@ pan:mediaRoot a owl:DatatypeProperty ;
 pan:Media a owl:Class ;
     rdfs:subClassOf pan:Node ;
     rdfs:label "Media" ;
-    rdfs:comment "A stored media object. Pan's facts and the producer's copia block ride in its XMP; everything it arrived with is kept. IRI <pan/Image/id>." .
+    rdfs:comment "A stored media object. Pan's facts and the producer's copia block ride in its XMP; everything it arrived with is kept. IRI <pan/Image/id> or <pan/Video/id>." .
 
 pan:Image a owl:Class ;
     rdfs:subClassOf pan:Media ;
     rdfs:label "Image" ;
     rdfs:comment "Media whose bytes are a raster image. Region and pose enrichment are facts about pixels and are declared on Image, not Media." .
+
+pan:Video a owl:Class ;
+    rdfs:subClassOf pan:Media ;
+    rdfs:label "Video" ;
+    rdfs:comment "Media whose bytes are a moving picture (MP4 or MOV), with or without sound: a clip, or a film stitched from clips. IRI <pan/Video/id>." .
+
+pan:duration a owl:DatatypeProperty ;
+    rdfs:label "duration" ;
+    rdfs:comment "Running time in seconds, as the file says. pand reads it; never send it." ;
+    rdfs:domain pan:Video ;
+    rdfs:range xsd:decimal .
+
+pan:frameRate a owl:DatatypeProperty ;
+    rdfs:label "frame rate" ;
+    rdfs:comment "Frames per second, as the file says. pand reads it; never send it." ;
+    rdfs:domain pan:Video ;
+    rdfs:range xsd:decimal .
 
 pan:mediaPath a owl:DatatypeProperty ;
     rdfs:label "media path" ;
@@ -1004,6 +1038,12 @@ pan:isRejected a owl:DatatypeProperty ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:boolean .
 
+pan:note a owl:DatatypeProperty ;
+    rdfs:label "note" ;
+    rdfs:comment "Arbitrary notes about the media, written by a person. One value; overwrite it, do not repeat the key." ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:string .
+
 # -----------------------------------------------------------------------------
 # MEDIASETS & IMAGESETS — sets of media a person curates (goodlux, 2026-09-17)
 # -----------------------------------------------------------------------------
@@ -1034,11 +1074,11 @@ pan:ImageSet a owl:Class ;
     rdfs:label "ImageSet" ;
     rdfs:comment "An unordered set of Pan media holding only pan:Image; its own file ImageSet/<id>.nq on disk, from which the graph is rebuilt. Do not put an ordering on it." .
 
-# Stub: not yet implemented — no pan:Video media class exists yet and nothing writes one.
+# pan:Video exists since 0.4.22; nothing writes a Video or a VideoSet yet.
 pan:VideoSet a owl:Class ;
     rdfs:subClassOf pan:MediaSet ;
     rdfs:label "VideoSet" ;
-    rdfs:comment "Stub: an unordered set of Pan media holding only video; not yet implemented — no pan:Video media class exists yet and nothing writes one." .
+    rdfs:comment "An unordered set of Pan media holding only pan:Video. Nothing writes one yet. Do not put an ordering on it." .
 
 # Stub: not yet implemented — no pan:Audio media class exists yet and nothing writes one.
 pan:AudioSet a owl:Class ;
@@ -1399,6 +1439,7 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:mediaCreatedDate ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:enrichmentCompleteDate ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:updatedDate ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:note       ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] ,
@@ -1418,6 +1459,10 @@ pan:Media rdfs:subClassOf
 # A MediaSet: one id, one creation time, at most one update time and one
 # description. Spelled pan: as everywhere else in Pan. pan:ImageSet inherits
 # this block.
+pan:Video rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty pan:duration  ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:frameRate ; owl:maxCardinality 1 ] .
+
 pan:MediaSet rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:createdDate ; owl:cardinality 1 ] ,
