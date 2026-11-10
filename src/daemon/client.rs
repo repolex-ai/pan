@@ -427,6 +427,27 @@ impl ModelClient {
         serde_json::from_value(v).map_err(|e| CallError::Transient(format!("depth shape: {e}")))
     }
 
+    /// `face`: image → every face with box, landmarks, head pose and identity
+    /// vector (docs/2026_10_08_PAN_PERCEPTION_CONTRACT.md). The parsed
+    /// answer and the raw body come back together: `crate::face` reads the
+    /// first and saves the second whole.
+    pub async fn face(
+        &self,
+        t: &Target,
+        bytes: &[u8],
+        media_type: &str,
+        meter: &Meter,
+    ) -> std::result::Result<(crate::face::FaceAnswer, serde_json::Value), CallError> {
+        let form = Form::new().part(
+            "image",
+            Self::image_part(bytes, media_type).map_err(|e| CallError::Terminal(e.to_string()))?,
+        );
+        let v = self.post(t, form, bytes.len() as u64, meter).await?;
+        let parsed = serde_json::from_value(v.clone())
+            .map_err(|e| CallError::Transient(format!("face shape: {e}")))?;
+        Ok((parsed, v))
+    }
+
     /// `segment` (docs/2026_10_08_PAN_PERCEPTION_CONTRACT.md): `prompts` is one
     /// comma-separated string of nouns. Returns the parsed regions AND the
     /// whole response as it came, so the caller can keep everything the

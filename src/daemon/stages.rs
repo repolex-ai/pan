@@ -8,10 +8,10 @@
 //! "These 500 images have no caption, cycle captioning" is literally one
 //! stage's query.
 //!
-//! Stages are addressed only by the url in the config. The five Pan uses
-//! today are the server's, 2026-09-18: POST /percept/vlm (OpenAI chat completions),
-//! and POST /percept/embed, /percept/pose, /percept/depth and
-//! /percept/segment (an image upload, JSON back).
+//! Stages are addressed only by the url in the config. The six Pan uses
+//! today are the server's, 2026-09-18 and 2026-11-06: POST /percept/vlm (OpenAI
+//! chat completions), and POST /percept/embed, /percept/pose, /percept/depth,
+//! /percept/segment and /percept/face (an image upload, JSON back).
 //!
 //!   embed   → pan:Embedding and the vector index
 //!   caption → pan:Caption, and the facts its JSON answer declares
@@ -19,6 +19,7 @@
 //!   sam3    → pan:Region per grounded prompt. The prompts are the nouns the
 //!             caption model listed, so this stage waits for a caption. The
 //!             whole server answer is kept as a .json beside the record.
+//!   face    → one pan:Face per face found, its vector in the model's index
 //!   depth   → one pan:Depth per image: the map PNG and the node's sidecar
 //!             beside the record.
 
@@ -38,6 +39,7 @@ pub const STAGE_CAPTION: &str = "caption";
 pub const STAGE_POSE: &str = "pose";
 pub const STAGE_SEGMENT: &str = "segment";
 pub const STAGE_DEPTH: &str = crate::depth::STAGE;
+pub const STAGE_FACE: &str = crate::face::STAGE;
 
 /// Which graph link a stage's completion is read from: the data REFERENCE
 /// (`pan:regionData`, …), not a record (records hang off the reference via `pan:item`). A run that
@@ -52,6 +54,7 @@ pub fn link_for(stage: &str) -> Option<&'static str> {
         STAGE_POSE => Some("poseData"),
         STAGE_SEGMENT => Some("regionData"),
         STAGE_DEPTH => Some(crate::depth::REF_LOCAL),
+        STAGE_FACE => Some(crate::face::REF_LOCAL),
         _ => None,
     }
 }
@@ -71,6 +74,7 @@ pub async fn run(d: Arc<Daemon>) {
         STAGE_POSE,
         STAGE_SEGMENT,
         STAGE_DEPTH,
+        STAGE_FACE,
     ] {
         if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
             continue;
@@ -197,6 +201,7 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
             STAGE_POSE,
             STAGE_SEGMENT,
             STAGE_DEPTH,
+            STAGE_FACE,
         ] {
             if !d.cfg.models.get(stage).map(|m| m.enabled).unwrap_or(false) {
                 continue;
@@ -384,13 +389,13 @@ async fn run_one(
     } else {
         &item.media_type
     };
-    // Pose, segment and depth get a same-size JPEG copy of the pixels, not
+    // Pose, segment, depth and face get a same-size JPEG copy of the pixels, not
     // the stored PNG: a fifth of the bytes on an upload link that is the cap
     // on every perception pass, and the same pixel space for the geometry
     // that comes back (goodlux, 2026-11-04; `wire.rs`). Embed keeps the
     // stored bytes so every vector is one recipe; caption makes its own copy.
     let (bytes, media_type): (Vec<u8>, &str) =
-        if matches!(stage, STAGE_POSE | STAGE_SEGMENT | STAGE_DEPTH) {
+        if matches!(stage, STAGE_POSE | STAGE_SEGMENT | STAGE_DEPTH | STAGE_FACE) {
             let w = tokio::task::spawn_blocking(move || crate::wire::percept_copy(&bytes)).await??;
             (w.bytes, w.media_type)
         } else {
@@ -675,6 +680,28 @@ async fn run_one(
             let model = ep.label();
             tokio::task::spawn_blocking(move || {
                 s.pan.write_depth(&id, &model, &answer).map(|_| ())
+            })
+            .await??;
+        }
+        STAGE_FACE => {
+            // Every face in the image, or none: an empty list is a finding
+            // and lands as a reference with no records. An answer with no
+            // list at all is the node failing; the image stays pending.
+            d.counters
+                .model_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let (answer, raw) = d.client.face(t, &bytes, media_type, meter).await?;
+            if answer.is_empty() {
+                return Err(CallError::Transient(
+                    "face: node answered without a faces list".into(),
+                )
+                .into());
+            }
+            let s = store.clone();
+            let id = item.id.clone();
+            let model = ep.label();
+            tokio::task::spawn_blocking(move || {
+                s.pan.write_face(&id, &model, &answer, &raw).map(|_| ())
             })
             .await??;
         }

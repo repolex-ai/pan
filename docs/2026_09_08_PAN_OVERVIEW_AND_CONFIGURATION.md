@@ -45,6 +45,7 @@ kind, then by what the file is.
         ├── segment/YYYY/MM/DD/            regions per noun (bbox, polygon, score), plus the server's answer as .json
         ├── pose/YYYY/MM/DD/               keypoints per person, plus an overlay image
         ├── depth/YYYY/MM/DD/              one depth map per image, plus the server's answer as .json
+        ├── face/YYYY/MM/DD/               one record per face and one .npy per face, plus the server's answer as .json
         └── embed/YYYY/MM/DD/              one .npy per image, plus the server's answer as .json
 
 <store root>/                          the store itself
@@ -260,12 +261,12 @@ pan redo '<pan/Image/k7m2p9x4>' embed
 
 forgets that stage's result for that image: the reference, its records,
 the files they name (record, server reply, vector, depth map, overlays,
-masks), the vector index entry for embed, and the completion date. The
+masks), the vector index entries for embed and face, and the completion date. The
 image's XMP is rewritten without the reference, and the stage picks the
 image up again on its next pass. The caption's own fields stay on the image
 when the embed stage is redone; redoing caption replaces them when the new
 caption lands. Over HTTP: `POST /media/{id}/redo` with `{"stage": "embed"}`;
-stages are caption, embed, segment, pose, depth.
+stages are caption, embed, segment, pose, depth, face.
 
 ### Searching
 
@@ -319,6 +320,19 @@ instant the copy was taken, and a client sends that back as its next
 neither drop rows nor repeat them. These routes are what a client on
 another machine uses instead of reading the store's files (asked for by
 pan-ui, 2026-11-04).
+
+### Faces like this one
+
+The face stage (pan.ttl 0.4.21, 2026-11-09) writes one `pan:Face` record per
+face the model found, reached from the image through `pan:faceData` and
+`pan:item` like every other stage's records. Each record carries the box,
+the five landmarks, the head pose, the score and the path of its identity
+vector; the vector itself sits in a second index, named after the face model
+(`buffalo-l`), under the Face record's id rather than the image's, because an
+image has many faces. `GET /faces/{id}/similar?k=10` takes a Face id in any
+form and answers with the nearest other faces, each with the image it is in
+and a cosine score; the model's own rough line for "same person" is about
+0.4. A Face is not a person: nothing in the graph says whose face it is.
 
 ### What changed since
 

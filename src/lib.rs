@@ -37,6 +37,7 @@ pub mod convert;
 pub mod daemon;
 pub mod depth;
 pub mod enrich;
+pub mod face;
 pub mod facts;
 pub mod imageset;
 pub mod instance;
@@ -942,6 +943,7 @@ pub struct StoreCounts {
     pub poses: u64,
     pub regions: u64,
     pub depths: u64,
+    pub faces: u64,
 }
 
 /// The facts of one node as `pan info` shows them: one entry per predicate
@@ -1796,6 +1798,7 @@ impl Pan {
             "regionData",
             "poseData",
             depth::REF_LOCAL,
+            face::REF_LOCAL,
         ] {
             let mut models: Vec<String> = Vec::new();
             for (pred, values) in &facts {
@@ -1947,6 +1950,10 @@ impl Pan {
             depths: count(&format!(
                 "?s pan:{} ?d . ?d pan:item ?m .",
                 depth::REF_LOCAL
+            ))?,
+            faces: count(&format!(
+                "?s pan:{} ?d . ?d pan:item ?f .",
+                face::REF_LOCAL
             ))?,
         })
     }
@@ -2358,7 +2365,11 @@ impl Pan {
             "poseData",
             "regionData",
             "depthData",
+            face::REF_LOCAL,
         ];
+        // Face vectors sit in their index under the FACE's id, not the
+        // image's, so each one is taken out by name once the graph is clear.
+        let mut face_ids: Vec<String> = Vec::new();
         for (pred, values) in &facts {
             let Some(local) = pred.strip_prefix(PAN_NS) else {
                 continue;
@@ -2390,6 +2401,9 @@ impl Pan {
                 for item in items {
                     for field in ["vectorPath", "depthMapPath", "overlayPath", "maskPath"] {
                         rels.extend(self.node_field(item.as_str(), field)?);
+                    }
+                    if local == face::REF_LOCAL {
+                        face_ids.push(bare_id(item.as_str()));
                     }
                     linked.push(item);
                 }
@@ -2428,6 +2442,9 @@ impl Pan {
         t.commit().context("commit delete")?;
 
         self.remove_from_indexes(id)?;
+        for fid in &face_ids {
+            self.remove_from_indexes(fid)?;
+        }
         self.changed();
         if let Some(w) = locked(&self.work).as_mut() {
             w.remove_image(subject.as_str());
@@ -2435,9 +2452,10 @@ impl Pan {
         Ok(())
     }
 
-    /// Take an image out of every vector index on disk, loading an index
-    /// only if its key map says the image is in it.
-    fn remove_from_indexes(&self, id: &str) -> Result<()> {
+    /// Take a node out of every vector index on disk, loading an index only
+    /// if its key map says the node is in it. The node is an image for image
+    /// embeddings and a Face record for face vectors.
+    pub(crate) fn remove_from_indexes(&self, id: &str) -> Result<()> {
         validate_pan_id(id)?;
         let index_names: Vec<String> = fs::read_dir(&self.layout.hnsw_root)
             .map(|rd| {
@@ -2494,6 +2512,7 @@ impl Pan {
             "regionData",
             "poseData",
             depth::REF_LOCAL,
+            face::REF_LOCAL,
         ];
         if !refs.contains(&ref_local) {
             return Err(anyhow!(
@@ -2515,6 +2534,7 @@ impl Pan {
         let mut rels: Vec<String> = Vec::new();
         let mut linked: Vec<NamedNode> = Vec::new();
         let mut models: Vec<String> = Vec::new();
+        let mut face_ids: Vec<String> = Vec::new();
         for v in &nodes {
             let Ok(node) = NamedNode::new(v.as_str()) else {
                 continue;
@@ -2540,6 +2560,9 @@ impl Pan {
             for item in items {
                 for field in ["vectorPath", "depthMapPath", "overlayPath", "maskPath"] {
                     rels.extend(self.node_field(item.as_str(), field)?);
+                }
+                if ref_local == face::REF_LOCAL {
+                    face_ids.push(bare_id(item.as_str()));
                 }
                 linked.push(item);
             }
@@ -2591,6 +2614,11 @@ impl Pan {
         if ref_local == "vectorData" {
             self.remove_from_indexes(id)?;
         }
+        if ref_local == face::REF_LOCAL {
+            for fid in &face_ids {
+                self.remove_from_indexes(fid)?;
+            }
+        }
         self.changed();
         if let Some(w) = locked(&self.work).as_mut() {
             for m in &models {
@@ -2607,6 +2635,28 @@ impl Pan {
     /// Attach a vector: `.npy` sidecar + the named HNSW index. Idempotent per
     /// (id, index): `Ok(false)` when already present.
     pub fn add_vector(&self, id: &str, index_name: &str, vec: &[f32]) -> Result<bool> {
+        validate_pan_id(id)?;
+        let npy_abs = self.layout.abs(&self.enrichment_file(
+            id,
+            PanLayout::STAGE_EMBED,
+            index_name,
+            "npy",
+        )?);
+        self.index_insert(id, index_name, vec, Some(&npy_abs))
+    }
+
+    /// Put one vector into the named index under `key_id`, writing the
+    /// `.npy` first when a path is given. The key is whatever node the vector
+    /// belongs to: the image for an image embedding, the Face record for a
+    /// face (`crate::face`), which writes its own `.npy` and passes `None`.
+    /// Idempotent per (key, index): `Ok(false)` when already present.
+    pub(crate) fn index_insert(
+        &self,
+        id: &str,
+        index_name: &str,
+        vec: &[f32],
+        npy_abs: Option<&Path>,
+    ) -> Result<bool> {
         validate_pan_id(id)?;
         let mut indexes = locked(&self.indexes);
         if !indexes.contains_key(index_name) {
@@ -2627,13 +2677,9 @@ impl Pan {
         if vi.id_to_key.contains_key(id) {
             return Ok(false);
         }
-        let npy_abs = self.layout.abs(&self.enrichment_file(
-            id,
-            PanLayout::STAGE_EMBED,
-            index_name,
-            "npy",
-        )?);
-        npy::write_f32_1d(&npy_abs, vec)?;
+        if let Some(npy_abs) = npy_abs {
+            npy::write_f32_1d(npy_abs, vec)?;
+        }
         let key = vi.next_key;
         vi.next_key += 1;
         vi.id_to_key.insert(id.to_string(), key);
@@ -3386,6 +3432,7 @@ impl Pan {
             "captionData",
             "vectorData",
             depth::REF_LOCAL,
+            face::REF_LOCAL,
         ] {
             let mut refs: Vec<enrich::EnrichmentRef> = Vec::new();
             for (pred, values) in &facts {

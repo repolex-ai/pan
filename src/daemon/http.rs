@@ -73,6 +73,7 @@ pub struct StoreCountsOut {
     pub poses: u64,
     pub regions: u64,
     pub depths: u64,
+    pub faces: u64,
 }
 
 /// What `POST /media/{id}/xmp` did.
@@ -176,6 +177,30 @@ pub struct SearchResponse {
     pub hits: Vec<Hit>,
 }
 
+/// One face near the asked-for face.
+#[derive(Serialize, ToSchema)]
+pub struct FaceHit {
+    /// `<pan/Face/x>` — the face found, bracket form.
+    pub face: String,
+    /// `<pan/Image/y>` — the image that face is in.
+    pub image: String,
+    /// Cosine similarity, 1 = the same vector. The model's own rough line
+    /// for "same person" is about 0.4.
+    pub score: f32,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct SimilarFacesResponse {
+    /// The face asked about, bracket form.
+    pub face: String,
+    /// The image it is in.
+    pub image: String,
+    pub store: String,
+    /// The index searched: the face model's name.
+    pub index: String,
+    pub hits: Vec<FaceHit>,
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct Hit {
     pub id: String,
@@ -258,7 +283,7 @@ pub struct RenameNamespaceResponse {
 
 #[derive(Deserialize, ToSchema)]
 pub struct RedoBody {
-    /// The stage to run again for this image: caption, embed, segment, pose or depth.
+    /// The stage to run again for this image: caption, embed, segment, pose, depth or face.
     pub stage: String,
 }
 
@@ -361,6 +386,7 @@ async fn health(State(d): State<Shared>) -> Json<HealthResponse> {
                         poses: c.poses,
                         regions: c.regions,
                         depths: c.depths,
+                        faces: c.faces,
                     }
                 })
                 .collect()
@@ -636,7 +662,7 @@ async fn redo(
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
             format!(
-                "{} is not a stage; one of caption, embed, segment, pose, depth",
+                "{} is not a stage; one of caption, embed, segment, pose, depth, face",
                 body.stage
             ),
         ));
@@ -1221,6 +1247,104 @@ async fn search(
     Ok(Json(SearchResponse { hits }))
 }
 
+/// Which face index to search when the caller names none: the configured
+/// face stage's model label, else the one index that is not the embed index.
+fn default_face_index(d: &Daemon) -> Option<String> {
+    d.cfg.models.get(stages::STAGE_FACE).map(|m| m.label())
+}
+
+#[utoipa::path(get, path = "/faces/{id}/similar", tag = "query",
+    params(("id" = String, Path, description = "a Face record: <pan/Face/x> or bare id"),
+           ("k" = Option<usize>, Query, description = "how many hits; default 10"),
+           ("store" = Option<String>, Query, description = "the store holding the face; default: whichever store has it"),
+           ("index" = Option<String>, Query, description = "face index name; default the configured face model")),
+    responses((status = 200, body = SimilarFacesResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn similar_faces(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+    axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>,
+) -> Result<Json<SimilarFacesResponse>, ApiError> {
+    let face_id = bare_id(&given);
+    let k: usize = match q.get("k") {
+        None => 10,
+        Some(v) => v.parse().map_err(|_| {
+            ApiError(StatusCode::BAD_REQUEST, format!("k must be a number, not {v:?}"))
+        })?,
+    };
+    let Some(index) = q
+        .get("index")
+        .cloned()
+        .or_else(|| default_face_index(&d))
+    else {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "no face stage is configured and no index was named".into(),
+        ));
+    };
+    // The store: named, or the one whose graph lists this face.
+    let mut store = None;
+    let candidates: Vec<Arc<super::StoreHandle>> = match q.get("store") {
+        Some(name) => vec![d.store_for(Some(name)).map_err(map_err)?],
+        None => d.stores.clone(),
+    };
+    let mut owner: Option<(String, String)> = None;
+    for s in candidates {
+        let s2 = s.clone();
+        let fid = face_id.clone();
+        if let Some(found) = tokio::task::spawn_blocking(move || s2.pan.image_of_face(&fid))
+            .await
+            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(map_err)?
+        {
+            owner = Some(found);
+            store = Some(s);
+            break;
+        }
+    }
+    let (Some(store), Some((image_iri, face_iri))) = (store, owner) else {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("no face {given} in any store"),
+        ));
+    };
+    let s = store.clone();
+    let (fid, ix) = (face_id.clone(), index.clone());
+    let hits = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<FaceHit>>> {
+        let Some(vector) = s.pan.stored_vector(&fid, &ix)? else {
+            return Ok(None);
+        };
+        let found = s.pan.search("", &vector, k, &ix, Some(&fid))?;
+        let mut out = Vec::with_capacity(found.len());
+        for h in found {
+            let Some((img, face)) = s.pan.image_of_face(&h.id)? else {
+                continue;
+            };
+            out.push(FaceHit {
+                face: media_iri_bracket(&face),
+                image: media_iri_bracket(&img),
+                score: h.score,
+            });
+        }
+        Ok(Some(out))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(map_err)?
+    .ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            format!("{given} has no vector in index {index}"),
+        )
+    })?;
+    Ok(Json(SimilarFacesResponse {
+        face: media_iri_bracket(&face_iri),
+        image: media_iri_bracket(&image_iri),
+        store: store.entry.id.clone(),
+        index,
+        hits,
+    }))
+}
+
 // ── ImageSets (issue #4; pan.ttl 0.4.2) ─────────────────────────────────────
 
 fn imageset_out(
@@ -1582,9 +1706,9 @@ async fn imageset_member(
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
-    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, get_embedding, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, store_embeddings, store_images_changed, store_sparql_get, store_sparql_post,
+    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, get_embedding, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, similar_faces, store_embeddings, store_images_changed, store_sparql_get, store_sparql_post,
           imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove, rename_namespace, redo, add_xmp),
-    components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, ErrorBody,
+    components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, FaceHit, SimilarFacesResponse, ErrorBody,
                        ImageSetResponse, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse, RedoBody, RedoResponse)),
     tags(
         (name = "meta", description = "Daemon + store status"),
@@ -1611,6 +1735,7 @@ pub fn router(d: Shared) -> Router {
         .route("/media/{id}/xmp", post(add_xmp))
         .route("/query", post(query))
         .route("/search", post(search))
+        .route("/faces/{id}/similar", get(similar_faces))
         .route("/imagesets", get(imagesets).post(create_imageset))
         .route("/imagesets/{id}", get(get_imageset))
         .route("/imagesets/{id}/add", post(imageset_add))

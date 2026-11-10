@@ -369,10 +369,10 @@ impl DaemonConfig {
         if install_defaults {
             install_default_prompts(&prompts_dir)?;
         }
-        // The five stages pand runs. A block under any other name would be
+        // The six stages pand runs. A block under any other name would be
         // read and then never run, so it is refused here: a stage that goes
         // quiet is worse than a pand that will not start.
-        const STAGES: [&str; 5] = ["caption", "embed", "pose", "segment", "depth"];
+        const STAGES: [&str; 6] = ["caption", "embed", "pose", "segment", "depth", "face"];
         for stage in models.keys() {
             if stage == "sam3" {
                 return Err(anyhow!(

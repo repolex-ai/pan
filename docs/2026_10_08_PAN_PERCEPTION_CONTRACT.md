@@ -1,4 +1,4 @@
-# The perception contract: what Pan sends and expects for embed, pose, segment and depth
+# The perception contract: what Pan sends and expects for embed, pose, segment, depth and face
 
 Captions have an industry standard: Pan sends an OpenAI chat-completions
 request and reads an OpenAI chat-completions answer, so any provider that
@@ -12,7 +12,7 @@ below are what pand sends today (`src/daemon/client.rs`).
 - `POST` to the stage's configured `url`, body `multipart/form-data`.
 - One file part named `image`: the image bytes, with a file name ending in
   `.png` or `.jpg` and a matching `Content-Type` (`image/png`, `image/jpeg`).
-  Embed gets the stored file as it is. Pose, segment and depth get a copy of
+  Embed gets the stored file as it is. Pose, segment, depth and face get a copy of
   its pixels as a JPEG at quality 90 with the same width and height (since
   2026-11-04), so the coordinates they return are in the stored image's
   pixel space and the upload is about a fifth of the size; a 3.5 MB PNG
@@ -95,4 +95,34 @@ Answer:
   255 nearest, 0 farthest.
 - `min`, `max`: the relative depth range the map was normalised from, in
   the model's own units, larger meaning nearer; not metres.
+- `width`, `height`, `model`, `precision`, `provider`: optional, recorded.
+
+## face
+
+Request fields: `image` only. Added 2026-11-09 (pan.ttl 0.4.21); the route
+is Iris `POST /percept/face`, a pass-through to the face server on katoptron
+(InsightFace buffalo_l, CPU, about a quarter second an image).
+
+Answer:
+
+```json
+{"faces": [{"bbox": [323.5, 159.3, 711.7, 620.8], "score": 0.8149,
+            "kps": [[476.5, 335.5], [647.5, 364.1], [579.3, 446.2], [442.2, 472.7], [624.0, 497.3]],
+            "pose": [-1.08, 18.82, 11.37], "age": 29, "sex": "F",
+            "landmark_2d_106": [[x, y], "... 106 points"], "landmark_3d_68": [[x, y, z], "... 68 points"],
+            "embedding": ["... 512 floats, unit length"]}],
+ "width": 1024, "height": 1536,
+ "model": "insightface/buffalo_l", "precision": "fp32-onnx-cpu", "provider": "katoptron"}
+```
+
+- `faces` (required): every face found, largest first; `[]` when there is
+  none. A body with no `faces` key is the node failing and the image stays
+  pending.
+- Per face, what the graph records: `bbox` four pixel numbers; `score`;
+  `kps` five `[x, y]` points, in the model's order left eye, right eye, nose,
+  mouth left, mouth right (pan:landmarks); `pose` pitch, yaw, roll in degrees
+  (pan:headPose); `embedding`, written to a `.npy` beside the record and into
+  the face index under the Face record's id, never into the graph.
+- `age`, `sex`, `landmark_2d_106`, `landmark_3d_68` and anything else: kept
+  whole in the saved answer beside the record, not read into the graph.
 - `width`, `height`, `model`, `precision`, `provider`: optional, recorded.

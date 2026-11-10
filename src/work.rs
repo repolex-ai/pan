@@ -18,12 +18,13 @@ use crate::config::PAN_NS;
 use crate::PendingItem;
 
 /// The reference predicates a stage writes, one per stage.
-pub const REF_LOCALS: [&str; 5] = [
+pub const REF_LOCALS: [&str; 6] = [
     "regionData",
     "poseData",
     "captionData",
     "vectorData",
     crate::depth::REF_LOCAL,
+    crate::face::REF_LOCAL,
 ];
 
 /// One image as the ladder sees it.

@@ -53,6 +53,14 @@ models:
     model: depth-anything-v2-base
     concurrency: 2
     enabled: true
+  # Faces: every face in the image with its box, five landmarks, head pose and
+  # an identity vector (InsightFace buffalo_l on katoptron behind Iris). The
+  # model name is also the face index's name.
+  face:
+    url: http://127.0.0.1:1215/percept/face
+    model: buffalo-l
+    concurrency: 2
+    enabled: true
   segment:
     url: http://127.0.0.1:1215/percept/segment
     model: sam3

@@ -25,7 +25,7 @@
 #
 # WHERE THE DATA LIVES (Rob, 2026-08-25, unchanged): bulk model output does
 # NOT ride inside the image. Each stage writes its own DATA FILE beside the
-# media (caption/, segment/, pose/, depth/, embed/) and the image carries
+# media (caption/, segment/, pose/, depth/, face/, embed/) and the image carries
 # one REFERENCE per output — an pan:Enrichment record naming the model, the
 # file, how many items it holds and when it was produced. Every path is
 # declared here; nothing is found by filesystem convention.
@@ -44,11 +44,35 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.20" .
+    owl:versionInfo "0.4.21" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.21 (2026-11-09, ruled by goodlux): FACES.
+#   A face-detection pass (InsightFace buffalo_l behind Iris POST /percept/face,
+#   m3rc 2026-11-06) answers with every face in an image: where it is, five
+#   landmarks, head orientation, a confidence, and a 512-float identity vector
+#   (ArcFace, unit length, cosine = dot). Handled like pose: one record per
+#   face, all in one file, hung off one reference on the image.
+#   (1) + pan:Face a owl:Class ; rdfs:subClassOf pan:Node — one detected face.
+#   (2) + pan:faceData on pan:Image — the reference to one run's file.
+#   (3) + pan:landmarks (five points, 'x,y;…') and pan:headPose
+#       ('pitch,yaw,roll' degrees) on pan:Face.
+#   (4) pan:bbox, pan:score, pan:vectorPath and pan:dim move from one class
+#       each (Region, Region, Embedding, Embedding) to the shared parent
+#       pan:Node: a Face has a box, a score and a vector too. Same meaning,
+#       same spelling; no stored fact changes.
+#   (5) The identity vector is never a graph literal (as every embedding):
+#       it goes to a .npy beside the record, named by pan:vectorPath, and
+#       into its own search index named after the model, keyed by the Face
+#       record's id, so "faces like this one" is a search like any other.
+#   Deliberately not done: the model's age and sex guesses stay in the saved
+#   reply file only, out of the graph (rough on renders; a guess must not
+#   read as a fact). The 106-point and 68-point landmark sets stay in the
+#   reply file too (alignment data, not a question anyone asks the graph).
+#   A Face is not a person: nothing here says whose face it is; linking a
+#   face to a Being is a later ruling. No change to any existing record.
 # v0.4.20 (2026-11-06, ruled by goodlux): WHEN A RECORD LAST CHANGED.
 #   A rating, a pick, a caption or a pose changed the file and the graph and
 #   left no time anywhere: pan:createdDate is the record's birth, and
@@ -1128,6 +1152,11 @@ pan:Depth a owl:Class ;
     rdfs:label "Depth" ;
     rdfs:comment "One monocular depth estimate: a normalized depth map for the whole image, with the range it was normalized from." .
 
+pan:Face a owl:Class ;
+    rdfs:subClassOf pan:Node ;
+    rdfs:label "Face" ;
+    rdfs:comment "One detected face: its box, five landmarks, head orientation, confidence and identity vector. Not a person; nothing here says whose." .
+
 # --- references: media → one stage's output file -----------------------------
 
 pan:regionData a owl:ObjectProperty ;
@@ -1143,6 +1172,11 @@ pan:poseData a owl:ObjectProperty ;
 pan:depthData a owl:ObjectProperty ;
     rdfs:label "depth data" ;
     rdfs:comment "Reference to a depth-estimation output file holding this image's depth map." ;
+    rdfs:domain pan:Image ; rdfs:range pan:Enrichment .
+
+pan:faceData a owl:ObjectProperty ;
+    rdfs:label "face data" ;
+    rdfs:comment "Reference to a face-detection output file holding this image's faces; a run that found none still writes one." ;
     rdfs:domain pan:Image ; rdfs:range pan:Enrichment .
 
 pan:captionData a owl:ObjectProperty ;
@@ -1260,15 +1294,18 @@ pan:polygon a owl:DatatypeProperty ;
     rdfs:comment "Outline as 'x,y;x,y;…' in pixel coordinates." ;
     rdfs:domain pan:Region ; rdfs:range xsd:string .
 
+# bbox and score are shared since 0.4.21: a Region and a Face both have a
+# box and a confidence. Their domain is pan:Node; the cardinality blocks say
+# which class carries them.
 pan:bbox a owl:DatatypeProperty ;
     rdfs:label "bounding box" ;
     rdfs:comment "'x1,y1,x2,y2' in pixel coordinates." ;
-    rdfs:domain pan:Region ; rdfs:range xsd:string .
+    rdfs:domain pan:Node ; rdfs:range xsd:string .
 
 pan:score a owl:DatatypeProperty ;
     rdfs:label "score" ;
     rdfs:comment "Model confidence, 0..1." ;
-    rdfs:domain pan:Region ; rdfs:range xsd:decimal .
+    rdfs:domain pan:Node ; rdfs:range xsd:decimal .
 
 pan:maskPath a owl:DatatypeProperty ;
     rdfs:label "mask path" ;
@@ -1294,15 +1331,17 @@ pan:text a owl:DatatypeProperty ;
     rdfs:comment "The model's answer as it came back, unparsed." ;
     rdfs:domain pan:Caption ; rdfs:range xsd:string .
 
+# dim and vectorPath are shared since 0.4.21: an Embedding and a Face each
+# carry one vector. Domain pan:Node; the cardinality blocks say which class.
 pan:dim a owl:DatatypeProperty ;
     rdfs:label "dimension" ;
-    rdfs:comment "Length of the embedding vector." ;
-    rdfs:domain pan:Embedding ; rdfs:range xsd:integer .
+    rdfs:comment "Length of the vector." ;
+    rdfs:domain pan:Node ; rdfs:range xsd:integer .
 
 pan:vectorPath a owl:DatatypeProperty ;
     rdfs:label "vector path" ;
     rdfs:comment "Path to the .npy vector file, relative to pan:mediaRoot. The searchable copy lives in the index; this file is the rebuildable source." ;
-    rdfs:domain pan:Embedding ; rdfs:range xsd:string .
+    rdfs:domain pan:Node ; rdfs:range xsd:string .
 
 # --- Depth fields --------------------------------------------------------------
 
@@ -1320,6 +1359,18 @@ pan:depthMax a owl:DatatypeProperty ;
     rdfs:label "depth max" ;
     rdfs:comment "Upper bound of raw model depth the map was normalized from. Needed to compare maps." ;
     rdfs:domain pan:Depth ; rdfs:range xsd:decimal .
+
+# --- Face fields ---------------------------------------------------------------
+
+pan:landmarks a owl:DatatypeProperty ;
+    rdfs:label "landmarks" ;
+    rdfs:comment "'x,y;…' five points in pixel coordinates, in the model's order: left eye, right eye, nose, mouth left, mouth right." ;
+    rdfs:domain pan:Face ; rdfs:range xsd:string .
+
+pan:headPose a owl:DatatypeProperty ;
+    rdfs:label "head pose" ;
+    rdfs:comment "'pitch,yaw,roll' in degrees, as the model reported them." ;
+    rdfs:domain pan:Face ; rdfs:range xsd:string .
 
 # -----------------------------------------------------------------------------
 # CARDINALITY
@@ -1445,3 +1496,14 @@ pan:Depth rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:depthMax     ; owl:cardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width        ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height       ; owl:maxCardinality 1 ] .
+
+pan:Face rdfs:subClassOf
+    [ a owl:Restriction ; owl:onProperty pan:id ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:model        ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:producedDate ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:bbox         ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:score        ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:landmarks    ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:headPose     ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:vectorPath   ; owl:cardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:dim          ; owl:cardinality 1 ] .
