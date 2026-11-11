@@ -18,7 +18,7 @@ cd pan && cargo install --path .
 pand start
 
 # 2. In another terminal, store an image
-pan store ~/Pictures/sample.png
+pan put ~/Pictures/sample.png
 # → <https://repolex.ai/pan/Image/k7m2p9x4>
 
 # 3. Inspect image state and enrichment progress

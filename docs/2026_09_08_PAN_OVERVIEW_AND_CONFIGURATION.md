@@ -26,7 +26,7 @@ Then `pand start` in a terminal. It runs there and stops with `pand stop`.
 
 ## Pan as a solo store
 
-A store is one folder. Media goes in with `pan store <file>` and is copied
+A store is one folder. Media goes in with `pan put <file>` and is copied
 into the store's media root. Everything Pan derives sits beside it, by media
 kind, then by what the file is.
 
@@ -149,7 +149,7 @@ are idle.
 stores:                                  # every store this daemon serves, in priority order
   - /Users/me/repos/squad/agent-a        # a soul repo: store at <repo>/.pan, id = the repo's genesis SHA
   - ~/.pan                               # a bare store: id from its own pan.yml
-default: ~/.pan                          # where `pan store <file>` lands when no store is named
+default: ~/.pan                          # where `pan put <file>` lands when no store is named
 media_volume: /Volumes/p02/_pan          # media root = <volume>/<6-char id>/pan; omit to keep media in the store
 port: 7401
 backfill_since: "2026-09-07T04:15:45-07:00"   # images created before this are not sent to models
@@ -261,7 +261,7 @@ verbatim, when the file carries one. A producer that hands over a bare file
 sets both the file and its fields in one command:
 
 ```
-pan store photo.jpg renderPrompt="a 50mm medium shot of ..." description="..."
+pan put photo.jpg renderPrompt="a 50mm medium shot of ..." description="..."
 ```
 
 The file goes in first, then the fields; a JPEG's own XMP is not read on

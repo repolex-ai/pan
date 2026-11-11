@@ -1,7 +1,7 @@
 //! pan — the command line. A thin client of pand; it never touches a store's
 //! files or graph itself. Every answer it prints came from the graph.
 //!
-//!   pan store [<user-id>] <file> [key=value …] → <pan/Image/id> or <pan/Video/id>; the fields set on it at once
+//!   pan put   [<user-id>] <file> [key=value …] → <pan/Image/id> or <pan/Video/id>; the fields set on it at once
 //!   pan info  <pan/Image/id>         → the facts the graph holds about it
 //!   pan state <pan/Image/id>         → what has been done to it (per stage)
 //!   pan query [<user-id>] "<sparql>" → W3C results JSON
@@ -26,7 +26,7 @@ fn usage() -> ! {
     eprintln!(
         "pan {} — talks to pand\n\n\
          USAGE:\n  \
-           pan store [<user-id>] <file>\n  \
+           pan put   [<user-id>] <file> [key=value …]\n  \
            pan info  <pan/Image/id>\n  \
            pan state <pan/Image/id>\n  \
            pan query [<user-id>] \"<sparql>\"\n  \
@@ -126,7 +126,9 @@ fn main() -> Result<()> {
     let c = client();
 
     match cmd {
-        "store" => {
+        // "put": put it in the Pan (goodlux, 2026-11-11). Not "store", which
+        // is what the folder and its graph are called.
+        "put" => {
             // Positional words are the store and the file; anything with an
             // `=` is a field to set once the file is in, the same key=value
             // as `pan set` (goodlux, 2026-11-11: a generator that bypasses
