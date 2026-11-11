@@ -157,9 +157,9 @@ fn imagesets_work_through_a_running_pand_and_survive_a_restart() {
         let _pand = Live::start(&home);
 
         // Store: two in the default store, one in the other.
-        a1 = home.pan(&["store", &f1]).unwrap();
-        a2 = home.pan(&["store", &f2]).unwrap();
-        b1 = home.pan(&["store", "bbbbbb", &f3]).unwrap();
+        a1 = home.pan(&["put", &f1]).unwrap();
+        a2 = home.pan(&["put", &f2]).unwrap();
+        b1 = home.pan(&["put", "bbbbbb", &f3]).unwrap();
         assert!(a1.starts_with("<pan/Image/"), "{a1}");
 
         // Create: one set per store. The command prints the set's id.

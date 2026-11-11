@@ -1210,21 +1210,51 @@ impl Pan {
         // `<pan/Store/700c5bd4a9…>` behind; the id is six characters now
         // (goodlux, 2026-09-18) and every store node that is not this one is
         // removed whole, not left as a second answer to "where is the media".
-        let stale: Vec<Quad> = self
-            .store
-            .quads_for_pattern(None, None, None, Some(crate::config::pan_graph().as_ref()))
-            .filter_map(|q| q.ok())
-            .filter(|q| match &q.subject {
-                NamedOrBlankNode::NamedNode(n) => {
-                    n.as_str().starts_with(&format!("{PAN_MEDIA_NS}Store/"))
+        // Found through the two predicates a store node carries (its type
+        // and its media root), each an index lookup. Until 2026-11-11 this
+        // walked every quad in the graph, which on a store of 221,000
+        // images was seven of the eight minutes pand took to start.
+        let store_prefix = format!("{PAN_MEDIA_NS}Store/");
+        let mut stale_subjects: Vec<NamedNode> = Vec::new();
+        for (pred, obj) in [
+            (rdf_type(), Some(pan_iri("Store"))),
+            (pan_iri("mediaRoot"), None),
+        ] {
+            for q in self
+                .store
+                .quads_for_pattern(
+                    None,
+                    Some((&pred).into()),
+                    obj.as_ref().map(|o| o.into()),
+                    Some(crate::config::pan_graph().as_ref()),
+                )
+                .filter_map(|q| q.ok())
+            {
+                if let NamedOrBlankNode::NamedNode(n) = &q.subject {
+                    if n.as_str().starts_with(&store_prefix)
                         && n.as_str() != node.as_str()
+                        && !stale_subjects.contains(n)
+                    {
+                        stale_subjects.push(n.clone());
+                    }
                 }
-                _ => false,
-            })
-            .collect();
-        for q in &stale {
-            tracing::warn!(store = %self.store_id, subject = %q.subject, "store node from an older id removed");
-            t.remove(q.as_ref());
+            }
+        }
+        for subject in &stale_subjects {
+            tracing::warn!(store = %self.store_id, subject = %subject, "store node from an older id removed");
+            let quads: Vec<Quad> = self
+                .store
+                .quads_for_pattern(
+                    Some(subject.into()),
+                    None,
+                    None,
+                    Some(crate::config::pan_graph().as_ref()),
+                )
+                .filter_map(|q| q.ok())
+                .collect();
+            for q in &quads {
+                t.remove(q.as_ref());
+            }
         }
         t.insert(
             Quad::new(
