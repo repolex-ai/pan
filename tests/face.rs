@@ -272,3 +272,103 @@ fn the_face_vocabulary_is_declared_in_the_ontology() {
         assert!(block.contains("rdfs:domain pan:Node"), "pan:{shared} is not on pan:Node:\n{block}");
     }
 }
+
+/// 2026-11-10, goodlux's lUX store: a SIGTERM during a save cut the face
+/// index short, and every face write failed from then on with the index
+/// library's own words. The save is now two files written beside their
+/// targets and renamed into place, so a kill leaves the pair whole; a
+/// damaged file is reported with its path and the route that rebuilds it;
+/// and the rebuild puts every vector the graph names back from the `.npy`
+/// files, leaving out the ones whose file is gone and saying which.
+#[test]
+fn a_torn_face_index_is_reported_with_its_path_and_rebuilt_from_the_vectors_on_disk() {
+    let (dir, store) = open();
+    let a = store.put(&make_png(4, 4, 21), Some("image/png")).unwrap();
+    let c = store.put(&make_png(4, 4, 23), Some("image/png")).unwrap();
+    for (img, n) in [(&a, 1), (&c, 2)] {
+        let (answer, raw) = answer_with_faces(n);
+        store.write_face(&img.id, MODEL, &answer, &raw).unwrap();
+    }
+    let face_of = |store: &Pan, img: &pan::PutResult| -> Vec<String> {
+        rows(
+            store,
+            &format!("SELECT ?rec WHERE {{ <{}> pan:{REF_LOCAL} ?d . ?d pan:item ?rec }} ORDER BY ?rec", img.iri),
+            &["rec"],
+        )
+        .into_iter()
+        .map(|r| r[0].rsplit('/').next().unwrap().to_string())
+        .collect()
+    };
+    let fa = face_of(&store, &a)[0].clone();
+    let va = store.stored_vector(&fa, MODEL).unwrap().unwrap();
+    // C's two faces by what they carry, not by id order: the same vector as
+    // A's face, and the reversed one.
+    let fc = face_of(&store, &c);
+    let (same, reversed) = if store.stored_vector(&fc[0], MODEL).unwrap().unwrap() == va {
+        (fc[0].clone(), fc[1].clone())
+    } else {
+        (fc[1].clone(), fc[0].clone())
+    };
+    let index_dir = store.layout.hnsw_root.join(MODEL);
+    // A finished save leaves no half-written file behind.
+    assert!(index_dir.join("index.usearch").exists());
+    assert!(index_dir.join("keymap.json").exists());
+    assert!(!index_dir.join(".index.usearch.partial").exists());
+    assert!(!index_dir.join(".keymap.json.partial").exists());
+    // The second of C's vector files goes missing, as a disk might lose it.
+    let gone_rel = rows(
+        &store,
+        &format!("SELECT ?vp WHERE {{ <{}{}/{}> pan:vectorPath ?vp }}", pan::config::PAN_MEDIA_NS, CLASS, reversed),
+        &["vp"],
+    )[0][0]
+        .clone();
+    drop(store);
+
+    // Cut the index file short, as the kill did, and leave a stale partial
+    // from a save that never finished.
+    let idx = index_dir.join("index.usearch");
+    let len = std::fs::metadata(&idx).unwrap().len();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&idx)
+        .unwrap()
+        .set_len(len / 2)
+        .unwrap();
+    std::fs::write(index_dir.join(".index.usearch.partial"), b"half").unwrap();
+
+    let store = Pan::open(dir.path()).unwrap();
+    std::fs::remove_file(store.layout.abs(&gone_rel)).unwrap();
+    let b = store.put(&make_png(4, 4, 22), Some("image/png")).unwrap();
+    let (answer, raw) = answer_with_faces(1);
+    let err = format!("{:#}", store.write_face(&b.id, MODEL, &answer, &raw).unwrap_err());
+    assert!(err.contains(idx.to_str().unwrap()), "names the file: {err}");
+    assert!(err.contains("cut short"), "says what happened: {err}");
+    assert!(err.contains(&format!("indexes/{MODEL}/rebuild")), "names the route: {err}");
+    assert!(!index_dir.join(".index.usearch.partial").exists(), "the stale partial is gone");
+    let err = format!("{:#}", store.search("", &va, 5, MODEL, None).unwrap_err());
+    assert!(err.contains("cannot be read"), "search says the same: {err}");
+
+    let r = store.rebuild_index(MODEL).unwrap();
+    assert_eq!((r.index.as_str(), r.dim), (MODEL, 512));
+    assert_eq!(r.vectors, 2, "A's face and C's matching one: {r:?}");
+    assert_eq!(r.missing, 1, "{r:?}");
+    assert_eq!(r.missing_sample, vec![gone_rel.clone()]);
+    assert_eq!(store.stored_vector(&fa, MODEL).unwrap().unwrap(), va, "A's vector is back from its .npy");
+    assert!(store.contains_id(&same, MODEL));
+    assert!(!store.contains_id(&reversed, MODEL), "the face without a file stays out");
+    let hits = store.search("", &va, 5, MODEL, Some(&fa)).unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].id, same);
+    assert!(hits[0].score > 0.999);
+    // Writes work again, and the rebuilt pair is what a fresh open loads.
+    store.write_face(&b.id, MODEL, &answer, &raw).unwrap();
+    assert_eq!(store.index_stats().iter().find(|(n, _)| n == MODEL).map(|(_, s)| s.count), Some(3));
+    drop(store);
+    let store = Pan::open(dir.path()).unwrap();
+    assert_eq!(store.index_stats().iter().find(|(n, _)| n == MODEL).map(|(_, s)| s.count), Some(3));
+    assert_eq!(store.search("", &va, 5, MODEL, Some(&fa)).unwrap().len(), 2);
+
+    // An index the graph knows nothing about is refused, not written empty.
+    let err = format!("{:#}", store.rebuild_index("no-such-model").unwrap_err());
+    assert!(err.contains("names no vector"), "{err}");
+}

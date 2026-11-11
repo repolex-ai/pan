@@ -281,6 +281,21 @@ pub struct RenameNamespaceResponse {
     pub quads: usize,
 }
 
+#[derive(Serialize, ToSchema)]
+pub struct IndexRebuildResponse {
+    pub store: String,
+    /// The index name = the model label (`buffalo-l`, `qwen3-vl-embedding-2b`).
+    pub index: String,
+    pub dim: usize,
+    /// Vectors now in the index: one per record in the graph whose `.npy` was on disk.
+    pub vectors: usize,
+    /// Records in the graph whose `.npy` was not on disk; left out.
+    pub missing: usize,
+    /// Up to twenty of the missing, by `pan:vectorPath`.
+    pub missing_sample: Vec<String>,
+    pub seconds: f64,
+}
+
 #[derive(Deserialize, ToSchema)]
 pub struct RedoBody {
     /// The stage to run again for this image: caption, embed, segment, pose, depth or face.
@@ -1608,6 +1623,36 @@ async fn rename_namespace(
     }))
 }
 
+#[utoipa::path(post, path = "/stores/{id}/indexes/{name}/rebuild", tag = "query",
+    params(("id" = String, Path, description = "Store id"), ("name" = String, Path, description = "Index name = the model label, e.g. buffalo-l or qwen3-vl-embedding-2b")),
+    responses((status = 200, description = "The index was built again from the graph and the .npy files on disk and replaced the one in use", body = IndexRebuildResponse),
+        (status = 400, description = "No such index name in the graph, or a vector file that cannot be read", body = ErrorBody),
+        (status = 404, body = ErrorBody)))]
+/// For an index file that is damaged (every write to it fails with "cannot be
+/// read"): one call rebuilds it from the vectors that are already on disk.
+/// Nothing is written to any index while it runs.
+async fn rebuild_index(
+    State(d): State<Shared>,
+    AxPath((store_id, name)): AxPath<(String, String)>,
+) -> Result<Json<IndexRebuildResponse>, ApiError> {
+    let store = d.store_for(Some(&store_id)).map_err(map_err)?;
+    let s2 = store.clone();
+    let n2 = name.clone();
+    let r = tokio::task::spawn_blocking(move || s2.pan.rebuild_index(&n2))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(map_err)?;
+    Ok(Json(IndexRebuildResponse {
+        store: store.entry.id.clone(),
+        index: r.index,
+        dim: r.dim,
+        vectors: r.vectors,
+        missing: r.missing,
+        missing_sample: r.missing_sample,
+        seconds: r.seconds,
+    }))
+}
+
 fn locate_imageset(d: &Daemon, given: &str) -> Result<(Arc<super::StoreHandle>, String), ApiError> {
     let id = bare_id(given);
     let store = d.locate_imageset(&id).map_err(map_err)?.ok_or_else(|| {
@@ -1706,9 +1751,9 @@ async fn imageset_member(
 #[derive(OpenApi)]
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
-    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, get_embedding, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, similar_faces, store_embeddings, store_images_changed, store_sparql_get, store_sparql_post,
+    paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, get_embedding, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, similar_faces, rebuild_index, store_embeddings, store_images_changed, store_sparql_get, store_sparql_post,
           imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove, rename_namespace, redo, add_xmp),
-    components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, FaceHit, SimilarFacesResponse, ErrorBody,
+    components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, FaceHit, SimilarFacesResponse, IndexRebuildResponse, ErrorBody,
                        ImageSetResponse, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse, RedoBody, RedoResponse)),
     tags(
         (name = "meta", description = "Daemon + store status"),
@@ -1756,6 +1801,7 @@ pub fn router(d: Shared) -> Router {
         )
         .route("/stores/{id}/media", post(deliver_to))
         .route("/stores/{id}/rename-namespace", post(rename_namespace))
+        .route("/stores/{id}/indexes/{name}/rebuild", post(rebuild_index))
         .route(
             "/stores/{id}/sparql",
             get(store_sparql_get).post(store_sparql_post),
@@ -1766,7 +1812,10 @@ pub fn router(d: Shared) -> Router {
         .with_state(d)
 }
 
-/// Serve + run the stage ladder until ctrl-c. Flushes every store on the way out.
+/// Serve + run the stage ladder until ctrl-c or SIGTERM. Flushes every store
+/// on the way out. SIGTERM is what `pand stop`, `pand restart` and a
+/// terminal's task runner send; until 2026-11-10 it was unhandled, so it
+/// killed pand at once, mid-write of whatever it was writing.
 pub async fn serve(d: Shared) -> anyhow::Result<()> {
     let app = router(d.clone());
     let addr = format!("{}:{}", d.cfg.bind, d.cfg.port);
@@ -1779,7 +1828,21 @@ pub async fn serve(d: Shared) -> anyhow::Result<()> {
     let ladder = tokio::spawn(stages::run(d.clone()));
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
+            let ctrl_c = tokio::signal::ctrl_c();
+            #[cfg(unix)]
+            {
+                let mut term =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("install the SIGTERM handler");
+                tokio::select! {
+                    _ = ctrl_c => {}
+                    _ = term.recv() => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = ctrl_c.await;
+            }
             tracing::info!("shutting down");
         })
         .await?;

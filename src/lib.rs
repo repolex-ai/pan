@@ -267,7 +267,10 @@ struct VectorIndex {
 }
 
 impl VectorIndex {
-    fn create(hnsw_root: &Path, name: &str, dim: usize) -> Result<Self> {
+    /// A new, empty index for `name`, nothing read from disk. [`create`]
+    /// loads the files beside it; [`Pan::rebuild_index`] fills one from the
+    /// graph and saves it over whatever is there.
+    fn empty(hnsw_root: &Path, name: &str, dim: usize) -> Result<Self> {
         validate_index_name(name)?;
         let dir = hnsw_root.join(name);
         fs::create_dir_all(&dir).context("create hnsw index dir")?;
@@ -283,61 +286,87 @@ impl VectorIndex {
         };
         let index = Index::new(&opts)?;
         index.reserve(1024)?;
-        let mut id_to_key = HashMap::new();
-        let mut key_to_id = HashMap::new();
-        let mut next_key = 0u64;
-        let mut true_dim = dim;
-        if path.exists() {
-            let path_text = path.to_str().ok_or_else(|| {
-                anyhow!(
-                    "vector index path {} is not valid UTF-8; the index library needs a UTF-8 path",
-                    path.display()
-                )
-            })?;
-            index.load(path_text)?;
-            let loaded = index.dimensions();
-            if loaded != 0 {
-                true_dim = loaded;
-            }
-            let map_path = dir.join("keymap.json");
-            if map_path.exists() {
-                let raw = fs::read_to_string(&map_path)?;
-                let m: HashMap<String, u64> = serde_json::from_str(&raw)?;
-                next_key = m.values().copied().max().map(|m| m + 1).unwrap_or(0);
-                for (id, key) in &m {
-                    key_to_id.insert(*key, id.clone());
-                }
-                id_to_key = m;
-            }
-        }
         Ok(Self {
-            dim: true_dim,
+            dim,
             index,
-            id_to_key,
-            key_to_id,
-            next_key,
+            id_to_key: HashMap::new(),
+            key_to_id: HashMap::new(),
+            next_key: 0,
             path,
             dirty: false,
         })
     }
 
+    fn create(hnsw_root: &Path, name: &str, dim: usize) -> Result<Self> {
+        let mut vi = Self::empty(hnsw_root, name, dim)?;
+        // A save that never finished leaves its `.partial` beside the index;
+        // the pair in place is whole, so the leftover is only disk.
+        for leftover in [".index.usearch.partial", ".keymap.json.partial"] {
+            let _ = fs::remove_file(vi.path.with_file_name(leftover));
+        }
+        if vi.path.exists() {
+            let path_text = vi.path.to_str().ok_or_else(|| {
+                anyhow!(
+                    "vector index path {} is not valid UTF-8; the index library needs a UTF-8 path",
+                    vi.path.display()
+                )
+            })?;
+            vi.index.load(path_text).map_err(|e| {
+                anyhow!(
+                    "the vector index file {} cannot be read ({e}). The file is damaged, most \
+                     likely cut short when the process writing it was killed. Build it again \
+                     from the vectors on disk: POST /stores/<store>/indexes/{name}/rebuild",
+                    vi.path.display()
+                )
+            })?;
+            let loaded = vi.index.dimensions();
+            if loaded != 0 {
+                vi.dim = loaded;
+            }
+            let map_path = vi.path.with_file_name("keymap.json");
+            if map_path.exists() {
+                let raw = fs::read_to_string(&map_path)?;
+                let m: HashMap<String, u64> = serde_json::from_str(&raw)?;
+                vi.next_key = m.values().copied().max().map(|m| m + 1).unwrap_or(0);
+                for (id, key) in &m {
+                    vi.key_to_id.insert(*key, id.clone());
+                }
+                vi.id_to_key = m;
+            }
+        }
+        Ok(vi)
+    }
+
+    /// Write the index and its key map so that a kill at any moment leaves
+    /// the pair on disk whole: each goes to `.<name>.partial` beside its
+    /// target, then one rename puts it in place. Until 2026-11-10 the index
+    /// was written in place, and a SIGTERM during a save cut a 406 MB face
+    /// index short at 336 MB; every write to it failed from then on (goodlux's
+    /// lUX store). The index goes first and the key map second: a crash
+    /// between the two leaves a vector under a key the map does not name,
+    /// which search skips and a rebuild drops. The other order would leave an
+    /// id the map names but the index lacks, and that node would never be
+    /// added again.
     fn save(&self) -> Result<()> {
-        let path_text = self.path.to_str().ok_or_else(|| {
+        let tmp = self.path.with_file_name(".index.usearch.partial");
+        let tmp_text = tmp.to_str().ok_or_else(|| {
             anyhow!(
                 "vector index path {} is not valid UTF-8; the index library needs a UTF-8 path",
-                self.path.display()
+                tmp.display()
             )
         })?;
-        self.index.save(path_text)?;
-        let dir = self.path.parent().ok_or_else(|| {
-            anyhow!(
-                "vector index path {} has no parent directory to hold keymap.json",
-                self.path.display()
-            )
-        })?;
-        let map_path = dir.join("keymap.json");
-        fs::write(&map_path, serde_json::to_string(&self.id_to_key)?)?;
-        Ok(())
+        self.index
+            .save(tmp_text)
+            .map_err(|e| anyhow!("write {}: {e}", tmp.display()))?;
+        if let Err(e) = fs::rename(&tmp, &self.path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e)
+                .with_context(|| format!("rename {} → {}", tmp.display(), self.path.display()));
+        }
+        write_atomic(
+            &self.path.with_file_name("keymap.json"),
+            serde_json::to_string(&self.id_to_key)?.as_bytes(),
+        )
     }
 }
 
@@ -359,6 +388,21 @@ pub struct VectorRows {
 pub struct IndexStats {
     pub dim: usize,
     pub count: usize,
+}
+
+/// What [`Pan::rebuild_index`] did.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct IndexRebuild {
+    pub index: String,
+    pub dim: usize,
+    /// Vectors now in the index: one per record in the graph whose `.npy`
+    /// was on disk.
+    pub vectors: usize,
+    /// Records in the graph whose `.npy` was not on disk. They are left out;
+    /// `missing_sample` names up to twenty of them by their `pan:vectorPath`.
+    pub missing: usize,
+    pub missing_sample: Vec<String>,
+    pub seconds: f64,
 }
 
 /// What [`Pan::forget_enrichment`] removed.
@@ -2699,6 +2743,125 @@ impl Pan {
             .map_err(|e| anyhow!("usearch add (id {}, index {}): {}", id, index_name, e))?;
         vi.dirty = true;
         Ok(true)
+    }
+
+    /// Build the named vector index again from the graph and the `.npy`
+    /// files, replacing whatever is on disk and in memory under that name.
+    /// Every record whose `pan:model` is the index name and that carries a
+    /// `pan:vectorPath` goes in: under the image's id when the record is an
+    /// image embedding (reached through `pan:vectorData`), under its own id
+    /// for everything else (a Face). The lock on the indexes is held
+    /// throughout, so no vector is written anywhere while this runs. For
+    /// when the files on disk are damaged: the first write to such an index
+    /// fails naming this. Refuses when the graph names no vector for the
+    /// index, rather than writing an empty one.
+    pub fn rebuild_index(&self, index_name: &str) -> Result<IndexRebuild> {
+        validate_index_name(index_name)?;
+        let started = std::time::Instant::now();
+        let mut indexes = locked(&self.indexes);
+        let q = format!(
+            "SELECT ?img ?link ?node ?vp WHERE {{ ?img ?link ?ref . ?ref pan:item ?node . \
+             ?node pan:vectorPath ?vp ; pan:model {} . }}",
+            oxigraph::model::Literal::new_simple_literal(index_name)
+        );
+        // (id the vector is keyed by, the vector file's path from the media root)
+        let mut rows: Vec<(String, String)> = Vec::new();
+        if let QueryResults::Solutions(sols) = self.query(&q)? {
+            for s in sols {
+                let s = s?;
+                let Some(Term::NamedNode(link)) = s.get("link") else {
+                    continue;
+                };
+                let Some(local) = link.as_str().strip_prefix(config::PAN_NS) else {
+                    continue;
+                };
+                if !work::REF_LOCALS.contains(&local) {
+                    continue;
+                }
+                let keyed = if local == "vectorData" {
+                    s.get("img")
+                } else {
+                    s.get("node")
+                };
+                let Some(Term::NamedNode(n)) = keyed else {
+                    continue;
+                };
+                let Some(Term::Literal(vp)) = s.get("vp") else {
+                    continue;
+                };
+                let id = n.as_str().rsplit('/').next().unwrap_or("").to_string();
+                rows.push((id, vp.value().to_string()));
+            }
+        }
+        rows.sort();
+        rows.dedup();
+        if rows.is_empty() {
+            return Err(anyhow!(
+                "the graph names no vector for index {index_name}: no record with pan:model \
+                 {index_name:?} and a pan:vectorPath. Nothing to rebuild; a stage run writes \
+                 the index as it goes."
+            ));
+        }
+        let mut fresh: Option<VectorIndex> = None;
+        let mut missing = 0usize;
+        let mut missing_sample = Vec::new();
+        for (id, rel) in &rows {
+            let npy_abs = self.layout.abs(rel);
+            if !npy_abs.exists() {
+                missing += 1;
+                if missing_sample.len() < 20 {
+                    missing_sample.push(rel.clone());
+                }
+                continue;
+            }
+            let vec = npy::read_f32_1d(&npy_abs)
+                .with_context(|| format!("read {}", npy_abs.display()))?;
+            let vi = match fresh.as_mut() {
+                Some(vi) => vi,
+                None => {
+                    let vi = VectorIndex::empty(&self.layout.hnsw_root, index_name, vec.len())?;
+                    vi.index.reserve(rows.len().max(1024))?;
+                    fresh.insert(vi)
+                }
+            };
+            if vec.len() != vi.dim {
+                return Err(anyhow!(
+                    "{} holds a {}-d vector; index {index_name} is {}-d",
+                    npy_abs.display(),
+                    vec.len(),
+                    vi.dim
+                ));
+            }
+            if vi.id_to_key.contains_key(id) {
+                continue;
+            }
+            let key = vi.next_key;
+            vi.next_key += 1;
+            vi.id_to_key.insert(id.clone(), key);
+            vi.key_to_id.insert(key, id.clone());
+            vi.index
+                .add(key, &vec)
+                .map_err(|e| anyhow!("usearch add (id {id}, index {index_name}): {e}"))?;
+        }
+        let Some(vi) = fresh else {
+            return Err(anyhow!(
+                "none of the {} vector files the graph names for index {index_name} is on disk \
+                 (first: {}); nothing to rebuild from",
+                rows.len(),
+                missing_sample.first().cloned().unwrap_or_default()
+            ));
+        };
+        vi.save()?;
+        let report = IndexRebuild {
+            index: index_name.to_string(),
+            dim: vi.dim,
+            vectors: vi.id_to_key.len(),
+            missing,
+            missing_sample,
+            seconds: started.elapsed().as_secs_f64(),
+        };
+        indexes.insert(index_name.to_string(), vi);
+        Ok(report)
     }
 
     pub fn contains_id(&self, id: &str, index_name: &str) -> bool {

@@ -334,6 +334,31 @@ form and answers with the nearest other faces, each with the image it is in
 and a cosine score; the model's own rough line for "same person" is about
 0.4. A Face is not a person: nothing in the graph says whose face it is.
 
+### Rebuilding a vector index
+
+Each vector index is two files under `<store>/.pan/_ignore/hnsw/<name>/`:
+`index.usearch` and `keymap.json`. Since 2026-11-10 a save writes each one
+beside its target as `.index.usearch.partial` and `.keymap.json.partial`
+and renames it into place, so stopping pand at any moment leaves the pair
+on disk whole. Before that the file was written in place, and a `pand stop`
+during a save cut the lUX face index short; every face write on that store
+then failed with the index library's own words. A damaged index now fails
+its first write with the file's path and this:
+
+```
+POST /stores/700c5b/indexes/buffalo-l/rebuild
+```
+
+That reads every record in the graph whose `pan:model` is the index name
+and that carries a `pan:vectorPath`, loads each `.npy`, builds the index
+again and saves it over the damaged one. An image embedding is keyed by its
+image, a face by its Face record, the same as when the stage wrote them.
+Nothing is written to any index while it runs. The answer says how many
+vectors went in and names, up to twenty, any record whose `.npy` is no
+longer on disk; those stay out until the stage runs again for their image.
+An index name the graph knows nothing about is refused rather than written
+empty.
+
 ### What changed since
 
 Every record carries `pan:updatedDate`: when its own file was last written,
