@@ -44,11 +44,26 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.23" .
+    owl:versionInfo "0.4.24" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.24 (2026-11-11, ruled by goodlux): THE PROMPT, ON ITS OWN.
+#   pan:renderPrompt: the prompt that asked for the media, as the person or
+#   agent gave it to the generator. Needed because a generator that is not
+#   the render queue (Gemini's native image generation, 2026-11-11) hands over
+#   a bare JPEG with no request record at all, and the prompt is the one
+#   thing every generated image has. Declared on pan:Media, so a clip has it
+#   too; at most one; settable like every Media field, and written into the
+#   file's XMP.
+#   NOT done: pan:renderRequestInformation stays exactly what it is, the
+#   generator's own request record verbatim when the file carries one, never
+#   taken apart and never the place for a prompt given by hand. Also not
+#   done: the fuller set of render fields (model, seed, reference images,
+#   aspect ratio) that most generated media share; that is its own project
+#   with a migration behind it, and renderPrompt is the one field it needs
+#   today.
 # v0.4.23 (2026-11-10, ruled by goodlux): NOTES ARE DESCRIPTIONS.
 #   pan:note (added in 0.4.22 the same morning) is REMOVED, never written.
 #   pan:description already is the place to say something about a Thing, on
@@ -786,6 +801,12 @@ pan:renderRequestInformation a owl:DatatypeProperty ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:string .
 
+pan:renderPrompt a owl:DatatypeProperty ;
+    rdfs:label "render prompt" ;
+    rdfs:comment "The prompt that asked for this media, as the person or agent gave it to the generator. One value; overwrite it, do not repeat the key. Not the generator's own request record: that is pan:renderRequestInformation." ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:string .
+
 pan:enrichmentCompleteDate a owl:DatatypeProperty ;
     rdfs:label "enrichment complete date" ;
     rdfs:comment "When every configured enrichment stage had recorded a result for this object, RFC3339 local time. Absent means a stage is still owed. Written once by pand, never by hand." ;
@@ -1446,6 +1467,7 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:modelPromptPath ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:imageSha256Hash ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:renderRequestInformation ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderPrompt ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:imageTechnicalScore ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:imageTechnicalCritique ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:imageAestheticScore ; owl:maxCardinality 1 ] ,

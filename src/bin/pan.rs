@@ -1,7 +1,7 @@
 //! pan — the command line. A thin client of pand; it never touches a store's
 //! files or graph itself. Every answer it prints came from the graph.
 //!
-//!   pan store [<user-id>] <file>     → <pan/Image/id>
+//!   pan store [<user-id>] <file> [key=value …] → <pan/Image/id> or <pan/Video/id>; the fields set on it at once
 //!   pan info  <pan/Image/id>         → the facts the graph holds about it
 //!   pan state <pan/Image/id>         → what has been done to it (per stage)
 //!   pan query [<user-id>] "<sparql>" → W3C results JSON
@@ -127,11 +127,25 @@ fn main() -> Result<()> {
 
     match cmd {
         "store" => {
-            let (user, file) = match rest.as_slice() {
-                [file] => (None, Path::new(file)),
-                [user, file] => (Some(user.clone()), Path::new(file)),
+            // Positional words are the store and the file; anything with an
+            // `=` is a field to set once the file is in, the same key=value
+            // as `pan set` (goodlux, 2026-11-11: a generator that bypasses
+            // the render queue hands over a bare file and its prompt).
+            let (words, pairs): (Vec<&String>, Vec<&String>) =
+                rest.iter().partition(|a| !a.contains('='));
+            let (user, file) = match words.as_slice() {
+                [file] => (None, Path::new(file.as_str())),
+                [user, file] => (Some((*user).clone()), Path::new(file.as_str())),
                 _ => usage(),
             };
+            let mut fields = serde_json::Map::new();
+            for pair in &pairs {
+                let (k, v) = pair.split_once('=').expect("partitioned on '='");
+                if k.is_empty() {
+                    return Err(anyhow!("expected key=value, got {pair} (example: renderPrompt=\"a cat\")"));
+                }
+                fields.insert(k.to_string(), json_value(v));
+            }
             let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
             // The file IS the request: raw bytes, media type in the header.
             // Whatever XMP it carries is its metadata; nothing else is sent.
@@ -146,7 +160,19 @@ fn main() -> Result<()> {
                     .send()
                     .map_err(not_running)?,
             )?;
-            println!("{}", v.get("id").and_then(|i| i.as_str()).unwrap_or("?"));
+            let id = v.get("id").and_then(|i| i.as_str()).unwrap_or("?").to_string();
+            if !fields.is_empty() {
+                // The file is in; now the fields. A refused field is reported
+                // with the id, so the stored file is not lost from view.
+                check(
+                    c.post(format!("{base}/media/{}/set", encode_id(&id)))
+                        .json(&fields)
+                        .send()
+                        .map_err(not_running)?,
+                )
+                .with_context(|| format!("{id} is stored; setting its fields failed"))?;
+            }
+            println!("{id}");
             Ok(())
         }
         "info" | "state" => {

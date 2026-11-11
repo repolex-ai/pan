@@ -253,6 +253,21 @@ range (a rating of 6, a pick of `yes`) is refused naming the expected type.
 A new field is declared in pan.ttl first; the command reads the list from
 the ontology.
 
+Since pan.ttl 0.4.24 (2026-11-11) the prompt that asked for a generated
+image or clip has its own field, `pan:renderPrompt`, set like any other and
+written into the file. It is for the prompt as a person or agent gave it;
+`pan:renderRequestInformation` stays the generator's own request record,
+verbatim, when the file carries one. A producer that hands over a bare file
+sets both the file and its fields in one command:
+
+```
+pan store photo.jpg renderPrompt="a 50mm medium shot of ..." description="..."
+```
+
+The file goes in first, then the fields; a JPEG's own XMP is not read on
+the way in (the file is converted to PNG and only a PNG's packet is
+loaded), so this is the way a bare JPEG's prompt reaches Pan.
+
 ### Running one stage again for one image
 
 ```sh
