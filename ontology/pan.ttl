@@ -44,11 +44,18 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.22" .
+    owl:versionInfo "0.4.23" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.23 (2026-11-10, ruled by goodlux): NOTES ARE DESCRIPTIONS.
+#   pan:note (added in 0.4.22 the same morning) is REMOVED, never written.
+#   pan:description already is the place to say something about a Thing, on
+#   any record: a person's own words about an image, a video or a set. One
+#   field, not two with the same meaning. The pan-ui heading that shows a
+#   caption under the word "description" is a UI label, not this property;
+#   no stored record carries pan:description yet.
 # v0.4.22 (2026-11-10, ruled by goodlux): VIDEO, AND A PLACE FOR NOTES.
 #   Clips (about 10 MB, 5 to 15 s) and films (clips stitched together, about
 #   200 MB) are being made in numbers and need a home. What a stored video
@@ -61,8 +68,8 @@
 #   (2) + pan:duration (seconds) and pan:frameRate on pan:Video, at most one
 #       each: what a player and a UI need and what is awkward to go back for.
 #   (3) + pan:note on pan:Media, at most one: arbitrary notes about the
-#       media, written by a person. pan:description is NOT for notes and is
-#       left exactly as it was.
+#       media, written by a person. Removed again in 0.4.23: pan:description
+#       is that field.
 #   Deliberately not done: no ordering of a film's clips (the film file holds
 #   the order; relatedToId links the clips, unordered). No audio facts. No
 #   video stages; the embed pass on video is a separate ask.
@@ -1038,12 +1045,6 @@ pan:isRejected a owl:DatatypeProperty ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:boolean .
 
-pan:note a owl:DatatypeProperty ;
-    rdfs:label "note" ;
-    rdfs:comment "Arbitrary notes about the media, written by a person. One value; overwrite it, do not repeat the key." ;
-    rdfs:domain pan:Media ;
-    rdfs:range xsd:string .
-
 # -----------------------------------------------------------------------------
 # MEDIASETS & IMAGESETS — sets of media a person curates (goodlux, 2026-09-17)
 # -----------------------------------------------------------------------------
@@ -1439,7 +1440,6 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:mediaCreatedDate ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:enrichmentCompleteDate ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:updatedDate ; owl:maxCardinality 1 ] ,
-    [ a owl:Restriction ; owl:onProperty pan:note       ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:width      ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:height     ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:thumbnail  ; owl:maxCardinality 1 ] ,
