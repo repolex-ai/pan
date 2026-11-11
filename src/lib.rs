@@ -546,7 +546,12 @@ pub fn settable_fields() -> Vec<SettableField> {
                 .filter(|t| !t.is_empty())
         };
         let domain = token_after("rdfs:domain ").unwrap_or("");
-        if domain != "pan:Media" && domain != "pan:Image" {
+        // Every property declared on an image or on any media, plus the one
+        // person-written field declared on the shared parent pan:Node:
+        // pan:description, the place to say something about a Thing in your
+        // own words (goodlux, 2026-11-10; pan.ttl 0.4.23). The other
+        // pan:Node properties (model, producedDate, width, …) are pand's.
+        if domain != "pan:Media" && domain != "pan:Image" && local != "description" {
             continue;
         }
         out.push(SettableField {
@@ -863,6 +868,7 @@ mod perception_tests {
             "shortCaption",
             "mediaCreatedDate",
             "mediaPath",
+            "description",
         ] {
             assert!(
                 names.contains(&expected.to_string()),
@@ -3828,6 +3834,19 @@ mod updated_date_tests {
         let rel = fact(pan, id, "mediaPath").unwrap();
         let bytes = fs::read(pan.layout.abs(&rel)).unwrap();
         xmp::read_xmp_packet_from_bytes(&bytes).unwrap().unwrap()
+    }
+
+    #[test]
+    fn a_description_set_by_hand_lands_in_the_graph_and_the_file() {
+        // pan:description is declared on pan:Node, not pan:Media, and is the
+        // one such field a person writes (goodlux, 2026-11-10).
+        let dir = tempfile::tempdir().unwrap();
+        let pan = Pan::open(dir.path()).unwrap();
+        let a = pan.put(&tiny_png(4), Some("image/png")).unwrap();
+        let fields = vec![("description".to_string(), serde_json::json!("a few words about it"))];
+        pan.set_fields(&a.id, &fields).unwrap();
+        assert_eq!(fact(&pan, &a.id, "description").as_deref(), Some("a few words about it"));
+        assert!(file_text(&pan, &a.id).contains("<pan:description>a few words about it</pan:description>"));
     }
 
     #[test]
