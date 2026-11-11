@@ -310,14 +310,17 @@ pub fn split_descriptions(packet: &str) -> Vec<(bool, String)> {
         }
         let Some(c) = close else { break };
         let elem = &body[s0..c];
-        // Pan's own block is the one that names a pan Image as its identity
-        // (`<pan:id>&lt;pan/Image/…&gt;`). Files Pan wrote earlier on
-        // 2026-09-07 named it `<git-lex:id>` instead; that block is Pan's too
-        // and is replaced, not kept as a producer's. A producer's block never
-        // names a pan Image, whatever pan: fields it tries to write.
+        // Pan's own block is the one that names a pan media object as its
+        // identity (`<pan:id>&lt;pan/Image/…&gt;`, or Video since pan.ttl
+        // 0.4.22, or Media). Files Pan wrote earlier on 2026-09-07 named it
+        // `<git-lex:id>` instead; that block is Pan's too and is replaced,
+        // not kept as a producer's. A producer's block never names a pan
+        // media object, whatever pan: fields it tries to write.
         let pan_authored = elem.contains(PAN_NS)
-            && (elem.contains("<pan:id>&lt;pan/Image/")
-                || elem.contains("<git-lex:id>&lt;pan/Image/"));
+            && ["Image", "Video", "Media"].iter().any(|class| {
+                elem.contains(&format!("<pan:id>&lt;pan/{class}/"))
+                    || elem.contains(&format!("<git-lex:id>&lt;pan/{class}/"))
+            });
         out.push((pan_authored, elem.to_string()));
         i = c;
     }

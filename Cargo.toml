@@ -49,6 +49,7 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 # Detector calls (external configured endpoints; rustls so no OpenSSL on macOS).
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "blocking"] }
 tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["io"] }
 half = "2"
 
 [dev-dependencies]

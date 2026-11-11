@@ -38,6 +38,7 @@ pub mod daemon;
 pub mod depth;
 pub mod enrich;
 pub mod face;
+pub mod video;
 pub mod facts;
 pub mod imageset;
 pub mod instance;
@@ -203,6 +204,8 @@ pub(crate) fn validate_pan_id(id: &str) -> Result<()> {
 pub(crate) fn media_class(media_type: &str) -> &str {
     match media_type.split('/').next() {
         Some("image") => "Image",
+        // pan.ttl 0.4.22 (goodlux, 2026-11-10): MP4 and MOV are pan:Video.
+        Some("video") => "Video",
         _ => "Media",
     }
 }
@@ -567,7 +570,10 @@ pub struct SettableField {
 /// the previous store refused most of them and was the harder to use for
 /// it). What is checked is the value, against the declared type. A new
 /// field is declared in pan.ttl, never added here.
-pub fn settable_fields() -> Vec<SettableField> {
+/// Every `owl:DatatypeProperty` pan.ttl declares, as (local name, domain,
+/// range), read from the ontology text. The one list every roster that
+/// claims to be "what the ontology declares" is built from.
+fn declared_datatype_properties() -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for chunk in PAN_ONTOLOGY_TTL.split("\npan:").skip(1) {
         let Some(name_end) = chunk.find(' ') else {
@@ -590,23 +596,38 @@ pub fn settable_fields() -> Vec<SettableField> {
                 .filter(|t| !t.is_empty())
         };
         let domain = token_after("rdfs:domain ").unwrap_or("");
+        let range = token_after("rdfs:range ").unwrap_or("xsd:string");
+        out.push((local.to_string(), domain.to_string(), range.to_string()));
+    }
+    out.sort();
+    out
+}
+
+/// The properties a caller may set on a media object (`POST /media/{id}/set`).
+pub fn settable_fields() -> Vec<SettableField> {
+    declared_datatype_properties()
+        .into_iter()
         // Every property declared on an image or on any media, plus the one
         // person-written field declared on the shared parent pan:Node:
         // pan:description, the place to say something about a Thing in your
         // own words (goodlux, 2026-11-10; pan.ttl 0.4.23). The other
-        // pan:Node properties (model, producedDate, width, …) are pand's.
-        if domain != "pan:Media" && domain != "pan:Image" && local != "description" {
-            continue;
-        }
-        out.push(SettableField {
-            local: local.to_string(),
-            range: token_after("rdfs:range ")
-                .unwrap_or("xsd:string")
-                .to_string(),
-        });
-    }
-    out.sort_by(|a, b| a.local.cmp(&b.local));
-    out
+        // pan:Node properties (model, producedDate, width, …) are pand's,
+        // and so are the pan:Video ones (duration, frameRate).
+        .filter(|(local, domain, _)| {
+            domain == "pan:Media" || domain == "pan:Image" || local == "description"
+        })
+        .map(|(local, _, range)| SettableField { local, range })
+        .collect()
+}
+
+/// The properties pan.ttl declares on pan:Video and nothing else: read from
+/// the file by pand, written into the file's XMP, never set by a caller.
+pub fn video_fields() -> Vec<String> {
+    declared_datatype_properties()
+        .into_iter()
+        .filter(|(_, domain, _)| domain == "pan:Video")
+        .map(|(local, _, _)| local)
+        .collect()
 }
 
 /// The inclusive bounds a bounded integer datatype declares in pan.ttl
@@ -1249,7 +1270,7 @@ impl Pan {
         if validate_pan_id(id).is_err() {
             return Ok(None);
         }
-        for class in ["Image", "Media"] {
+        for class in ["Image", "Video", "Media"] {
             let cand = NamedNode::new(format!("{PAN_MEDIA_NS}{class}/{id}"))
                 .map_err(|e| anyhow!("candidate IRI: {e}"))?;
             let exists = self
@@ -1307,9 +1328,30 @@ impl Pan {
         } else {
             None
         };
+        // A video the same way (pan.ttl 0.4.22): MP4 or MOV, told by the
+        // bytes. A file that calls itself video and is neither is refused.
+        let video_type = if decoded.is_none() {
+            video::sniff(arrived)
+        } else {
+            None
+        };
+        let claims_video = content_type.is_some_and(|t| t.starts_with("video/"));
+        if claims_video && video_type.is_none() {
+            return Err(anyhow!(
+                "not a readable video: it was delivered as {} and is not an MP4 or MOV file (no ftyp header). Nothing was stored.",
+                content_type.unwrap_or("an unlabelled file")
+            ));
+        }
+        let video_info = match video_type {
+            Some(_) => Some(video::info(arrived).map_err(|e| {
+                anyhow!("not a readable video: its header does not read ({e}). Nothing was stored.")
+            })?),
+            None => None,
+        };
         let arrived_png = sniffed == Some(image::ImageFormat::Png);
-        let arrived_type = match (decoded.is_some(), sniffed) {
-            (true, Some(f)) => f.to_mime_type().to_string(),
+        let arrived_type = match (decoded.is_some(), sniffed, video_type) {
+            (true, Some(f), _) => f.to_mime_type().to_string(),
+            (_, _, Some(v)) => v.to_string(),
             _ => content_type
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "application/octet-stream".to_string()),
@@ -1320,6 +1362,8 @@ impl Pan {
             "image/webp" => "webp",
             "image/gif" => "gif",
             "image/tiff" => "tiff",
+            "video/mp4" => "mp4",
+            "video/quicktime" => "mov",
             _ => "bin",
         };
 
@@ -1402,6 +1446,8 @@ impl Pan {
         // stored that the graph cannot say.
         let existing_packet = if png {
             xmp::read_xmp_packet_from_bytes(bytes).context("read the XMP chunk in the file")?
+        } else if video_info.is_some() {
+            video::read_xmp(bytes).context("read the XMP box in the file")?
         } else {
             None
         };
@@ -1482,19 +1528,55 @@ impl Pan {
             }
         }
 
-        // Thumbnail — declared as its own node, made from the image that was
-        // decoded on the way in.
-        let mut thumb: Option<xmp::ThumbRef> = None;
-        let mut thumb_jpeg: Vec<u8> = Vec::new();
+        // What the video's own header says (pan.ttl 0.4.22): duration and
+        // frame rate, read by pand and never sent; the picture size from the
+        // track header, so the facts do not wait on the frame below.
         let mut width = None;
         let mut height = None;
-        if let Some(img) = &decoded {
+        if let Some(vi) = &video_info {
+            quads.push(self.quad(&subject, "duration", &video::decimal(vi.duration)));
+            if let Some(fps) = vi.frame_rate {
+                quads.push(self.quad(&subject, "frameRate", &video::decimal(fps)));
+            }
+            if let (Some(w), Some(h)) = (vi.width, vi.height) {
+                width = Some(w);
+                height = Some(h);
+                quads.push(self.quad(&subject, "width", &w.to_string()));
+                quads.push(self.quad(&subject, "height", &h.to_string()));
+            }
+        }
+
+        // Thumbnail — declared as its own node, made from the image that was
+        // decoded on the way in, or from a video's first frame. The frame
+        // needs the file on disk (ffmpeg seeks in it), so a video's bytes
+        // land first, as they arrived; the XMP box is put on below.
+        let mut thumb: Option<xmp::ThumbRef> = None;
+        let mut thumb_jpeg: Vec<u8> = Vec::new();
+        let first_frame: Option<image::DynamicImage> = if video_info.is_some() {
+            if let Some(parent) = abs_path.parent() {
+                fs::create_dir_all(parent).context("create media shard dir")?;
+            }
+            write_atomic(&abs_path, bytes)
+                .with_context(|| format!("write media {}", abs_path.display()))?;
+            match video::first_frame(&abs_path) {
+                Ok(img) => Some(img),
+                Err(e) => {
+                    tracing::warn!(id = %id, "no thumbnail: {e:#}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(img) = decoded.as_ref().or(first_frame.as_ref()) {
             match thumbnail::make_from(img) {
                 Ok(t) => {
-                    width = Some(t.source_width);
-                    height = Some(t.source_height);
-                    quads.push(self.quad(&subject, "width", &t.source_width.to_string()));
-                    quads.push(self.quad(&subject, "height", &t.source_height.to_string()));
+                    if video_info.is_none() {
+                        width = Some(t.source_width);
+                        height = Some(t.source_height);
+                        quads.push(self.quad(&subject, "width", &t.source_width.to_string()));
+                        quads.push(self.quad(&subject, "height", &t.source_height.to_string()));
+                    }
                     let rel = PanLayout::thumbnail_rel_path(
                         kind,
                         &shard,
@@ -1549,6 +1631,19 @@ impl Pan {
                     xmp::build_pan_description(&self.image_packet_from(&scratch, &subject)?);
                 let packet = xmp::compose_packet(existing_packet.as_deref(), &pan_desc);
                 let written = xmp::write_packet_into_png_bytes(bytes, &packet)?;
+                write_atomic(&abs_path, &written)
+                    .with_context(|| format!("write media {}", abs_path.display()))?;
+            } else if video_info.is_some() {
+                // The same block, as the last box of the MP4 or MOV.
+                let scratch = Store::new().context("scratch store")?;
+                for q in &quads {
+                    scratch.insert(q.as_ref()).context("scratch insert")?;
+                }
+                let pan_desc =
+                    xmp::build_pan_description(&self.image_packet_from(&scratch, &subject)?);
+                let packet = xmp::compose_packet(existing_packet.as_deref(), &pan_desc);
+                let written = video::with_xmp(bytes, &packet)
+                    .with_context(|| "put the XMP box on the video; nothing was stored")?;
                 write_atomic(&abs_path, &written)
                     .with_context(|| format!("write media {}", abs_path.display()))?;
             } else {
@@ -1733,6 +1828,21 @@ impl Pan {
     // ── read ──────────────────────────────────────────────────────────────────
 
     /// Media bytes + facts by id.
+    /// Where the media file is and what it is, for serving it: the absolute
+    /// path and the media type. The file itself is not read.
+    pub fn media_file(&self, id: &str) -> Result<(PathBuf, String)> {
+        let facts = self.facts_for(id)?;
+        let field = |local: &str| -> Option<String> {
+            facts
+                .iter()
+                .find(|(p, _)| p == &format!("{PAN_NS}{local}"))
+                .and_then(|(_, v)| v.first().cloned())
+        };
+        let media_path = field("mediaPath").ok_or_else(|| anyhow!("id not found: {id}"))?;
+        let media_type = field("mediaType").unwrap_or_else(|| "application/octet-stream".to_string());
+        Ok((self.layout.abs(&media_path), media_type))
+    }
+
     pub fn get(&self, id: &str) -> Result<(Vec<u8>, NodeFacts)> {
         let facts = self.facts_for(id)?;
         let media_path = facts
@@ -3457,9 +3567,30 @@ impl Pan {
             return Err(anyhow!("id not found: {subject}"));
         };
         let abs = self.layout.abs(media_path);
+        // The first bytes say which kind of file this is. A video is never
+        // read whole here: its XMP is the last box, found by a few seeks.
+        let head = {
+            let mut f = fs::File::open(&abs).with_context(|| format!("open media {}", abs.display()))?;
+            let mut h = [0u8; 12];
+            let n = std::io::Read::read(&mut f, &mut h)?;
+            h[..n].to_vec()
+        };
+        if video::sniff(&head).is_some() {
+            let mut f = fs::File::open(&abs)?;
+            let (mut existing, _) = video::xmp_in(&mut f)
+                .with_context(|| format!("read the XMP box in {}", abs.display()))?;
+            if let (Some(text), Some((from, to))) = (existing.as_mut(), rename) {
+                *text = text.replace(from, to);
+            }
+            let pan_desc =
+                xmp::build_pan_description(&self.image_packet_from(&self.store, subject)?);
+            let packet = xmp::compose_packet(existing.as_deref(), &pan_desc);
+            return video::write_xmp_in_place(&abs, &packet)
+                .with_context(|| format!("write media {}", abs.display()));
+        }
         let bytes = fs::read(&abs).with_context(|| format!("read media {}", abs.display()))?;
         if !xmp::is_png(&bytes) {
-            return Ok(()); // non-PNG media carries no XMP (v1)
+            return Ok(()); // other media carries no XMP
         }
         let mut existing = xmp::read_xmp_packet_from_bytes(&bytes).unwrap_or(None);
         if let (Some(text), Some((from, to))) = (existing.as_mut(), rename) {
@@ -3708,6 +3839,14 @@ impl Pan {
             }
             if let Some(v) = pan_field(local) {
                 put(&mut fields, local, v);
+            }
+        }
+        // What pan.ttl declares on a video (duration, frameRate): pand's
+        // own, never settable, so not in the roster above; present only when
+        // the object is a video.
+        for local in video_fields() {
+            if let Some(v) = pan_field(&local) {
+                put(&mut fields, &local, v);
             }
         }
         // The references Pan itself put on the image — imageset membership,

@@ -475,9 +475,12 @@ async fn stores(State(d): State<Shared>) -> Json<Vec<StoreInfo>> {
 /// raw bytes, media type in `Content-Type`. Nothing else is sent — whatever
 /// XMP the file carries is its metadata (a producer writes its block into the
 /// image before handing it over; Rob, 2026-09-04). Pan reads that XMP into
-/// the graph, appends its own block, and never touches the rest.
+/// the graph, appends its own block, and never touches the rest. An image
+/// (PNG, JPEG, WebP, GIF, TIFF) becomes a pan:Image; an MP4 or MOV
+/// (`video/mp4`, `video/quicktime`) a pan:Video, stored as delivered with
+/// its XMP as the file's last box (pan.ttl 0.4.22).
 #[utoipa::path(post, path = "/media", tag = "media",
-    request_body(content = Vec<u8>, content_type = "image/png", description = "The media file, raw bytes. Content-Type names the media type."),
+    request_body(content = Vec<u8>, content_type = "image/png", description = "The media file, raw bytes: an image, or an MP4/MOV with Content-Type video/mp4 or video/quicktime. Content-Type names the media type."),
     responses((status = 201, body = Delivered), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
 async fn deliver(
     State(d): State<Shared>,
@@ -491,7 +494,7 @@ async fn deliver(
 /// SHA, or a bare
 /// store id). Same body as `POST /media`.
 #[utoipa::path(post, path = "/stores/{id}/media", tag = "media", params(("id" = String, Path, description = "store id")),
-    request_body(content = Vec<u8>, content_type = "image/png", description = "The media file, raw bytes. Content-Type names the media type."),
+    request_body(content = Vec<u8>, content_type = "image/png", description = "The media file, raw bytes: an image, or an MP4/MOV with Content-Type video/mp4 or video/quicktime. Content-Type names the media type."),
     responses((status = 201, body = Delivered), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
 async fn deliver_to(
     State(d): State<Shared>,
@@ -721,23 +724,105 @@ fn locate(d: &Daemon, given: &str) -> Result<(Arc<super::StoreHandle>, String), 
     Ok((store, id))
 }
 
-#[utoipa::path(get, path = "/media/{id}", tag = "media", params(("id" = String, Path, description = "<pan/Image/x>, full IRI, or bare id")),
-    responses((status = 200, description = "The media bytes"), (status = 404, body = ErrorBody)))]
+#[utoipa::path(get, path = "/media/{id}", tag = "media",
+    params(("id" = String, Path, description = "<pan/Image/x>, <pan/Video/x>, full IRI, or bare id"),
+           ("Range" = Option<String>, Header, description = "bytes=start-end: one part of the file, answered 206 with Content-Range; how a browser plays a video")),
+    responses((status = 200, description = "The media bytes, Accept-Ranges: bytes"), (status = 206, description = "The requested part"),
+        (status = 416, description = "The range starts past the end of the file"), (status = 404, body = ErrorBody)))]
+/// The file itself, streamed from disk. A `Range` header gets that part of
+/// it (RFC 9110 single range), which is what a browser's video player sends
+/// to seek; without one, the whole file.
 async fn get_media(
     State(d): State<Shared>,
     AxPath(given): AxPath<String>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
     let (store, id) = locate(&d, &given)?;
-    let (bytes, facts) = tokio::task::spawn_blocking(move || store.pan.get(&id))
+    let (abs, media_type) = store.pan.media_file(&id).map_err(map_err)?;
+    let mut file = tokio::fs::File::open(&abs).await.map_err(|e| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("read media {}: {e}", abs.display()),
+        )
+    })?;
+    let len = file
+        .metadata()
         .await
-        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(map_err)?;
-    let media_type = facts
-        .iter()
-        .find(|(p, _)| p == &format!("{PAN_NS}mediaType"))
-        .and_then(|(_, v)| v.first().cloned())
-        .unwrap_or_else(|| "application/octet-stream".to_string());
-    Ok(([(header::CONTENT_TYPE, media_type)], bytes).into_response())
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("stat media: {e}")))?
+        .len();
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|r| byte_range(r, len));
+    let mut response_headers = vec![
+        (header::CONTENT_TYPE, media_type),
+        (header::ACCEPT_RANGES, "bytes".to_string()),
+    ];
+    let (status, start, count) = match range {
+        None => (StatusCode::OK, 0, len),
+        Some(Some((start, end))) => {
+            response_headers.push((
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{len}"),
+            ));
+            (StatusCode::PARTIAL_CONTENT, start, end - start + 1)
+        }
+        Some(None) => {
+            return Ok((
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                [(header::CONTENT_RANGE, format!("bytes */{len}"))],
+            )
+                .into_response());
+        }
+    };
+    response_headers.push((header::CONTENT_LENGTH, count.to_string()));
+    use tokio::io::AsyncSeekExt;
+    if start > 0 {
+        file.seek(std::io::SeekFrom::Start(start)).await.map_err(|e| {
+            ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("seek media: {e}"))
+        })?;
+    }
+    use tokio::io::AsyncReadExt;
+    let stream = tokio_util::io::ReaderStream::new(file.take(count));
+    let mut resp = axum::body::Body::from_stream(stream).into_response();
+    *resp.status_mut() = status;
+    for (k, v) in response_headers {
+        resp.headers_mut().insert(k, v.parse().expect("header value"));
+    }
+    Ok(resp)
+}
+
+/// One `bytes=` range against a file of `len` bytes: `Some((first, last))`
+/// inclusive when it can be satisfied, `None` when it starts past the end.
+/// `bytes=a-b`, `bytes=a-` and `bytes=-n` (the last n bytes); anything else
+/// is read as "no range".
+fn byte_range(header: &str, len: u64) -> Option<(u64, u64)> {
+    let spec = header.trim().strip_prefix("bytes=")?;
+    let (a, b) = spec.split_once('-')?;
+    let (a, b) = (a.trim(), b.trim());
+    if len == 0 {
+        return None;
+    }
+    if a.is_empty() {
+        let n: u64 = b.parse().ok()?;
+        if n == 0 {
+            return None;
+        }
+        return Some((len.saturating_sub(n), len - 1));
+    }
+    let start: u64 = a.parse().ok()?;
+    if start >= len {
+        return None;
+    }
+    let end: u64 = if b.is_empty() {
+        len - 1
+    } else {
+        b.parse::<u64>().ok()?.min(len - 1)
+    };
+    if end < start {
+        return None;
+    }
+    Some((start, end))
 }
 
 #[utoipa::path(get, path = "/media/{id}/thumbnail", tag = "media", params(("id" = String, Path)),

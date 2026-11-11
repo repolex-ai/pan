@@ -334,6 +334,35 @@ form and answers with the nearest other faces, each with the image it is in
 and a cosine score; the model's own rough line for "same person" is about
 0.4. A Face is not a person: nothing in the graph says whose face it is.
 
+### Video
+
+An MP4 or MOV delivered to `POST /media` with `Content-Type: video/mp4`
+or `video/quicktime` becomes a `pan:Video` (pan.ttl 0.4.22), IRI
+`<pan/Video/id>`, stored as delivered under `video/img/source/`: nothing is
+converted. pand reads the file's own header for `pan:duration` (seconds)
+and `pan:frameRate` (frames per second), and the picture size for
+`pan:width` and `pan:height`; a producer never sends those. The thumbnail
+is the first frame, taken with ffmpeg, which is the one outside tool video
+needs on the machine. A file that calls itself video and does not begin
+like an MP4 or MOV is refused whole.
+
+Pan's XMP block goes into the video as the last box of the file, in the
+`uuid` box every XMP reader looks for, so exiftool and the like read it the
+same way they read a PNG's. Setting a rating, a flag, a description or a
+`relatedToId` to the image the clip was made from rewrites that one box in
+place: a 200 MB film changes by a few kilobytes at its tail and the picture
+data is never touched. Whatever XMP the file arrived with stays beside
+Pan's block and its facts land in the graph, as for images. One shape is
+refused: a file whose XMP box sits before other boxes, since growing it
+would move the picture data and every offset in the header with it; move
+the box to the end (exiftool does) and deliver again.
+
+`GET /media/{id}` streams the file and honours a `Range` header, which is
+how a browser's player seeks, answering `206` with `Content-Range`. The
+image stages never see a video: caption, embedding, pose, segment, depth
+and face are declared on images. A video embedding is its own stage when
+its model exists.
+
 ### Rebuilding a vector index
 
 Each vector index is two files under `<store>/.pan/_ignore/hnsw/<name>/`:
