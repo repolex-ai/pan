@@ -359,6 +359,14 @@ longer on disk; those stay out until the stage runs again for their image.
 An index name the graph knows nothing about is refused rather than written
 empty.
 
+pand saves a changed index every thirty seconds and when it stops, not
+after every write: a save rewrites the whole file, and doing it per image
+(as pand did until 2026-11-11) wrote the disk at about 500 MB/s and held
+the face stage to one image a second. A `pand stop` or `pand restart`
+saves on the way out. A kill that does not (`kill -9`, a power cut) can
+lose the last thirty seconds of vectors from the index and from nowhere
+else; the rebuild above puts them back.
+
 ### What changed since
 
 Every record carries `pan:updatedDate`: when its own file was last written,

@@ -310,6 +310,9 @@ fn a_torn_face_index_is_reported_with_its_path_and_rebuilt_from_the_vectors_on_d
         (fc[1].clone(), fc[0].clone())
     };
     let index_dir = store.layout.hnsw_root.join(MODEL);
+    // Nothing is on disk until a save; the daemon saves every FLUSH_INTERVAL.
+    assert!(!index_dir.join("index.usearch").exists(), "no save per write");
+    store.flush().unwrap();
     // A finished save leaves no half-written file behind.
     assert!(index_dir.join("index.usearch").exists());
     assert!(index_dir.join("keymap.json").exists());

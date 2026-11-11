@@ -2158,7 +2158,9 @@ impl Pan {
             return Err(anyhow!("id not found: {id}"));
         };
         self.add_vector(id, index_name, vec)?;
-        self.flush()?;
+        // Not saved here: the daemon's flush loop, stop and drop save the
+        // index, since a save rewrites its whole file (983 MB on lUX,
+        // 2026-11-11). The `.npy` and the record below are on disk at once.
         let npy_rel = self.enrichment_file(id, PanLayout::STAGE_EMBED, index_name, "npy")?;
         // Everything the server said besides the vector, whole, beside the
         // .npy, and named on the reference as pan:modelReplyPath (goodlux,
@@ -2502,20 +2504,27 @@ impl Pan {
         Ok(())
     }
 
-    /// Take a node out of every vector index on disk, loading an index only
-    /// if its key map says the node is in it. The node is an image for image
-    /// embeddings and a Face record for face vectors.
+    /// Take a node out of every vector index, in memory or on disk, loading
+    /// one from disk only if its key map says the node is in it. An index in
+    /// memory may not be on disk yet (saves run every FLUSH_INTERVAL), so the
+    /// names come from both. The node is an image for image embeddings and a
+    /// Face record for face vectors.
     pub(crate) fn remove_from_indexes(&self, id: &str) -> Result<()> {
         validate_pan_id(id)?;
-        let index_names: Vec<String> = fs::read_dir(&self.layout.hnsw_root)
-            .map(|rd| {
-                rd.filter_map(|e| e.ok())
-                    .filter(|e| e.path().join("index.usearch").exists())
-                    .filter_map(|e| e.file_name().to_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
         let mut indexes = locked(&self.indexes);
+        let mut index_names: Vec<String> = indexes.keys().cloned().collect();
+        if let Ok(rd) = fs::read_dir(&self.layout.hnsw_root) {
+            for e in rd.filter_map(|e| e.ok()) {
+                if !e.path().join("index.usearch").exists() {
+                    continue;
+                }
+                if let Some(n) = e.file_name().to_str() {
+                    if !index_names.iter().any(|x| x == n) {
+                        index_names.push(n.to_string());
+                    }
+                }
+            }
+        }
         for name in index_names {
             if !indexes.contains_key(&name) {
                 let known =
@@ -3730,7 +3739,12 @@ impl Pan {
         })
     }
 
-    /// Persist dirty vector indexes. Called on Drop too.
+    /// Save every vector index that changed since its last save. The daemon
+    /// calls this every [`crate::daemon::stages::FLUSH_INTERVAL`] and on
+    /// stop; Drop calls it too. A save rewrites the index's whole file, so
+    /// the write paths do not call it per vector. Until a save, a vector
+    /// lives in memory and in its `.npy`: a kill in between loses it from the
+    /// index only, and `rebuild_index` puts it back from the file.
     pub fn flush(&self) -> Result<()> {
         let mut indexes = locked(&self.indexes);
         for vi in indexes.values_mut() {

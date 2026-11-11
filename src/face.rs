@@ -197,7 +197,11 @@ impl Pan {
         for (face_id, vec) in &keyed {
             self.index_insert(face_id, model, vec, None)?;
         }
-        self.flush()?;
+        // The index is saved by the daemon's flush loop, on stop and on
+        // drop, not here: a save rewrites the whole index file, 437 MB on a
+        // store of 200,000 faces, and doing that after every image wrote the
+        // disk at about 500 MB/s and held the stage to one image a second
+        // (2026-11-11).
         let rel = self.write_enrichment(
             id,
             STAGE,

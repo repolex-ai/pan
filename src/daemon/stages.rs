@@ -96,6 +96,26 @@ pub async fn run(d: Arc<Daemon>) {
         });
     }
     {
+        // Save changed vector indexes every FLUSH_INTERVAL (see there for
+        // why not per write). The stop path saves once more on the way out.
+        let d = d.clone();
+        loops.spawn(async move {
+            loop {
+                tokio::time::sleep(FLUSH_INTERVAL).await;
+                for store in d.stores.clone() {
+                    let s = store.clone();
+                    match tokio::task::spawn_blocking(move || s.pan.flush()).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => {
+                            tracing::error!(store = %store.entry.id, "saving vector indexes failed: {e:#}")
+                        }
+                        Err(e) => tracing::error!(store = %store.entry.id, "flush task failed: {e}"),
+                    }
+                }
+            }
+        });
+    }
+    {
         // The counts a health check reports, recomputed off the request
         // path once a minute (issue #71: seven count queries over 200,000
         // images take 7 s). A store that took no write keeps its numbers.
@@ -225,6 +245,16 @@ pub async fn run_pass(d: Arc<Daemon>) -> usize {
 /// 2026-10-13: four left a caption server with free slots idle.
 pub const IN_FLIGHT: usize = 6;
 pub const PASS_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How often a changed vector index is saved to disk. A save rewrites the
+/// index's whole file (437 MB for 200,000 faces, 983 MB for 118,000 image
+/// embeddings on lUX), so saving after every write, as pand did until
+/// 2026-11-11, wrote the disk at about 500 MB/s and held the face stage to
+/// one image a second against a model answering in 300 ms. Thirty seconds
+/// bounds what a kill between saves can lose from the index to thirty
+/// seconds of vectors, every one still on disk as its `.npy` and in the
+/// graph, which `POST /stores/{id}/indexes/{name}/rebuild` puts back.
+pub const FLUSH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// How long a whole stage waits after a call failed before reaching the model
 /// (connection refused / reset / timeout). One try per hold; the server
