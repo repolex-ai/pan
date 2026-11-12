@@ -219,6 +219,7 @@ fn the_graph_is_rebuilt_from_the_set_files_on_open() {
         let set = store.imageset_create(Some("first")).unwrap();
         // A set written by hand while pand was down: a file is enough.
         let edited = pan::ImageSet {
+            class: "ImageSet".into(),
             id: "handmade".into(),
             iri: format!("{}ImageSet/handmade", pan::PAN_MEDIA_NS),
             description: Some("made by hand".into()),
@@ -233,6 +234,7 @@ fn the_graph_is_rebuilt_from_the_set_files_on_open() {
         .unwrap();
         // And the first set's file changed its description under the graph's feet.
         let changed = pan::ImageSet {
+            class: "ImageSet".into(),
             description: Some("renamed on disk".into()),
             ..set.clone()
         };
@@ -268,6 +270,7 @@ fn a_set_file_whose_name_and_id_disagree_refuses_the_open() {
     std::fs::write(dir.path().join("pan.yml"), "storage_id: test-store\n").unwrap();
     std::fs::create_dir_all(dir.path().join("_ignore/ImageSet")).unwrap();
     let p = pan::ImageSet {
+            class: "ImageSet".into(),
         id: "abcd2345".into(),
         iri: format!("{}ImageSet/abcd2345", pan::PAN_MEDIA_NS),
         description: None,

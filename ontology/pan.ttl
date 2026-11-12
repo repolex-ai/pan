@@ -44,11 +44,24 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.25" .
+    owl:versionInfo "0.4.26" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.26 (2026-11-12, ruled by goodlux): VIDEOSETS ARE WRITTEN.
+#   Clips made from Pan stills are arriving in numbers (LTX image-to-video,
+#   eight clips to a film), and each film needs its set. pan:VideoSet,
+#   declared as a stub in 0.4.7 and given its media class in 0.4.22, is now
+#   written by pand exactly as pan:ImageSet is: its own file
+#   VideoSet/<id>.nq, membership as pan:relatedToId <pan/VideoSet/id> on the
+#   clip, videos only (checked at every door: the videoset commands, the set
+#   route's relatedToId, and a file that arrives naming the set). Nothing new
+#   is declared; the class comment stops saying nothing writes one.
+#   NOT done: pan:AudioSet stays a stub (no pan:Audio). No ordering of a
+#   film's clips (the film file holds the order), as 0.4.22 said. A clip's
+#   link to the still it was made from is pan:relatedToId <pan/Image/id>,
+#   the universal, not a new property.
 # v0.4.25 (2026-11-12, ruled by goodlux): WHEN IT WAS ASKED FOR.
 #   pan:renderRequestDate: when the render of this media was requested. The
 #   one fact that joins a generated image or clip back to the conversational
@@ -1097,6 +1110,8 @@ pan:isRejected a owl:DatatypeProperty ;
 # their own set classes (UI handlers differ per kind).
 #
 # An ImageSet is a pan:MediaSet holding only pan:Image. IRI <pan/ImageSet/<id>>.
+# A VideoSet is the same shape for pan:Video, IRI <pan/VideoSet/<id>>, file
+# VideoSet/<id>.nq (written since 0.4.26). What follows holds for both.
 # It is not a fact about any one image, so it has its own file on disk,
 # ImageSet/<id>.nq, in the store; the graph is rebuilt from that file.
 # Membership is written once, on the image, with the universal: each image
@@ -1118,11 +1133,11 @@ pan:ImageSet a owl:Class ;
     rdfs:label "ImageSet" ;
     rdfs:comment "An unordered set of Pan media holding only pan:Image; its own file ImageSet/<id>.nq on disk, from which the graph is rebuilt. Do not put an ordering on it." .
 
-# pan:Video exists since 0.4.22; nothing writes a Video or a VideoSet yet.
+# pan:Video exists since 0.4.22; VideoSets are written since 0.4.26.
 pan:VideoSet a owl:Class ;
     rdfs:subClassOf pan:MediaSet ;
     rdfs:label "VideoSet" ;
-    rdfs:comment "An unordered set of Pan media holding only pan:Video. Nothing writes one yet. Do not put an ordering on it." .
+    rdfs:comment "An unordered set of Pan media holding only pan:Video; its own file VideoSet/<id>.nq on disk, from which the graph is rebuilt. Do not put an ordering on it." .
 
 # Stub: not yet implemented — no pan:Audio media class exists yet and nothing writes one.
 pan:AudioSet a owl:Class ;

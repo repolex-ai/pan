@@ -439,6 +439,8 @@ pub struct AddedXmp {
     pub inserted: usize,
     pub descriptions: usize,
     pub imagesets_made: Vec<String>,
+    /// VideoSets the file named that did not exist and were made for it.
+    pub videosets_made: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -463,6 +465,8 @@ pub struct PutResult {
     /// not exist and were made for it (issue #69). Empty when every named
     /// set already existed or none was named.
     pub imagesets_made: Vec<String>,
+    /// VideoSets the file named that did not exist and were made for it.
+    pub videosets_made: Vec<String>,
 }
 
 /// How much of each kind a store holds, read from the graph alone: the
@@ -769,7 +773,7 @@ fn link_node(text: &str) -> Result<NamedNode> {
     } else {
         iri_from_bracket(text).ok_or_else(|| {
             anyhow!(
-                "relatedToId={text} is not a reference; write it as <pan/ImageSet/id>, <pan/Image/id> or <pan/Video/id>. Nothing was changed."
+                "relatedToId={text} is not a reference; write it as <pan/ImageSet/id>, <pan/VideoSet/id>, <pan/Image/id> or <pan/Video/id>. Nothing was changed."
             )
         })?
     };
@@ -1563,36 +1567,20 @@ impl Pan {
 
         // Sets the file names that do not exist yet: `pan:relatedToId
         // <pan/ImageSet/id>` on an arriving image makes the set (goodlux,
-        // 2026-09-22, issue #69). Made before the image lands, and unmade if
-        // it does not.
-        let named_sets: Vec<String> = {
-            let prefix = format!("{PAN_MEDIA_NS}{}/", imageset::IMAGESET_CLASS);
-            let mut ids: Vec<String> = arrived_statements
-                .iter()
-                .filter(|q| q.predicate.as_str() == format!("{PAN_NS}relatedToId"))
-                .filter_map(|q| match &q.object {
-                    Term::NamedNode(n) => n.as_str().strip_prefix(&prefix).map(str::to_string),
-                    _ => None,
-                })
-                .collect();
-            ids.sort();
-            ids.dedup();
-            ids
+        // 2026-09-22, issue #69), and `<pan/VideoSet/id>` on an arriving
+        // video likewise (pan.ttl 0.4.26). A file naming a set of the wrong
+        // kind for what it is — an image naming a VideoSet — is refused
+        // whole, the rule every other door applies. Made before the media
+        // lands, and unmade if it does not.
+        let (made_sets, made_video_sets) = match self.make_named_sets(
+            &arrived_statements,
+            media_class(&media_type),
+            "the file",
+            "Nothing was stored.",
+        ) {
+            Ok(made) => made,
+            Err(e) => return Err(e),
         };
-        let mut made_sets: Vec<String> = Vec::new();
-        for sid in &named_sets {
-            if self.imageset_subject(sid)?.is_none() {
-                if let Err(e) = self.imageset_create_with(sid, None) {
-                    for made in &made_sets {
-                        let _ = self.imageset_unmake(made);
-                    }
-                    return Err(e.context(format!(
-                        "the file names the set <pan/ImageSet/{sid}>, which could not be made. Nothing was stored."
-                    )));
-                }
-                made_sets.push(sid.clone());
-            }
-        }
 
         // The call that made the image, when the file carries one. A
         // diffusion user interface writes the whole request into a PNG text
@@ -1755,6 +1743,9 @@ impl Pan {
             for made in &made_sets {
                 let _ = self.imageset_unmake(made);
             }
+            for made in &made_video_sets {
+                let _ = self.mediaset_unmake(&imageset::VIDEOSET, made);
+            }
             let _ = fs::remove_file(&abs_path);
             if let Some(xmp::ThumbRef { path: rel, .. }) = &thumb {
                 let _ = fs::remove_file(self.layout.abs(rel));
@@ -1776,6 +1767,7 @@ impl Pan {
             thumbnail: thumb.is_some(),
             statements: arrived_statements.len(),
             imagesets_made: made_sets,
+            videosets_made: made_video_sets,
         })
     }
 
@@ -2560,15 +2552,68 @@ impl Pan {
     /// not the media itself. A thing in another namespace (a copia Moment)
     /// is the producer's to say, in the file's XMP or through
     /// POST /media/{id}/xmp, so it is refused here.
+    /// Make every set of every kind that `statements` name on `pan:relatedToId`
+    /// and that does not exist yet, refusing a set whose kind does not hold
+    /// `media_class` (an image naming a VideoSet). Returns the ids made, by
+    /// kind (ImageSets, VideoSets); on any failure everything made here is
+    /// unmade and the error says `who` named it and `outcome`.
+    fn make_named_sets(
+        &self,
+        statements: &[Quad],
+        media_class: &str,
+        who: &str,
+        outcome: &str,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let related = format!("{PAN_NS}relatedToId");
+        let mut named: Vec<(&'static imageset::SetKind, String)> = statements
+            .iter()
+            .filter(|q| q.predicate.as_str() == related)
+            .filter_map(|q| match &q.object {
+                Term::NamedNode(n) => imageset::set_kind_of_iri(n.as_str()),
+                _ => None,
+            })
+            .collect();
+        named.sort_by(|a, b| a.0.class.cmp(b.0.class).then(a.1.cmp(&b.1)));
+        named.dedup();
+        for (kind, sid) in &named {
+            if kind.member != media_class {
+                return Err(anyhow!(
+                    "{who} names the set <pan/{}/{sid}>, but this is a pan:{media_class}; a {} takes {}s only. {outcome}",
+                    kind.class,
+                    kind.class,
+                    kind.member.to_ascii_lowercase()
+                ));
+            }
+        }
+        let mut made: Vec<(&'static imageset::SetKind, String)> = Vec::new();
+        for (kind, sid) in &named {
+            if self.mediaset_subject(kind, sid)?.is_none() {
+                if let Err(e) = self.mediaset_create_with(kind, sid, None) {
+                    for (k, m) in &made {
+                        let _ = self.mediaset_unmake(k, m);
+                    }
+                    return Err(e.context(format!(
+                        "{who} names the set <pan/{}/{sid}>, which could not be made. {outcome}",
+                        kind.class
+                    )));
+                }
+                made.push((kind, sid.clone()));
+            }
+        }
+        let images = made.iter().filter(|(k, _)| k.class == "ImageSet").map(|(_, id)| id.clone()).collect();
+        let videos = made.iter().filter(|(k, _)| k.class == "VideoSet").map(|(_, id)| id.clone()).collect();
+        Ok((images, videos))
+    }
+
     fn link_edge(&self, id: &str, subject: &NamedNode, target: &str) -> Result<Quad> {
         let node = link_node(target)?;
-        let Some(tail) = node.as_str().strip_prefix(PAN_MEDIA_NS) else {
+        if node.as_str().strip_prefix(PAN_MEDIA_NS).is_none() {
             return Err(anyhow!(
                 "relatedToId={target} names something outside Pan; that link is the producer's to write, in the file's XMP or with POST /media/{{id}}/xmp. Nothing was changed."
             ));
-        };
-        if let Some(set_id) = tail.strip_prefix(&format!("{}/", imageset::IMAGESET_CLASS)) {
-            return self.imageset_edge(set_id, id);
+        }
+        if let Some((kind, set_id)) = imageset::set_kind_of_iri(node.as_str()) {
+            return self.mediaset_edge(kind, &set_id, id);
         }
         if &node == subject {
             return Err(anyhow!(
@@ -2622,7 +2667,7 @@ impl Pan {
                 ));
             } else if local == "relatedToId" {
                 return Err(anyhow!(
-                    "relatedToId holds several links; say which one comes off, as relatedToId=<pan/ImageSet/id> (or an image or video id). Nothing was changed."
+                    "relatedToId holds several links; say which one comes off, as relatedToId=<pan/ImageSet/id> or <pan/VideoSet/id> (or an image or video id). Nothing was changed."
                 ));
             } else if settable.iter().any(|f| &f.local == local) {
                 plain.push(local);
@@ -3597,35 +3642,20 @@ impl Pan {
         }
 
         // A set named by pan:relatedToId that does not exist yet is made,
-        // as on arrival, and unmade if the statements do not land.
-        let named_sets: Vec<String> = {
-            let prefix = format!("{PAN_MEDIA_NS}{}/", imageset::IMAGESET_CLASS);
-            let mut ids: Vec<String> = quads
-                .iter()
-                .filter(|q| q.predicate.as_str() == format!("{PAN_NS}relatedToId"))
-                .filter_map(|q| match &q.object {
-                    Term::NamedNode(n) => n.as_str().strip_prefix(&prefix).map(str::to_string),
-                    _ => None,
-                })
-                .collect();
-            ids.sort();
-            ids.dedup();
-            ids
-        };
-        let mut made_sets: Vec<String> = Vec::new();
-        for sid in &named_sets {
-            if self.imageset_subject(sid)?.is_none() {
-                if let Err(e) = self.imageset_create_with(sid, None) {
-                    for made in &made_sets {
-                        let _ = self.imageset_unmake(made);
-                    }
-                    return Err(e.context(format!(
-                        "the XMP names the set <pan/ImageSet/{sid}>, which could not be made. Nothing was added."
-                    )));
-                }
-                made_sets.push(sid.clone());
-            }
-        }
+        // as on arrival, and unmade if the statements do not land. A set of
+        // the wrong kind for this media is refused, as at every door.
+        let subject_class = facts
+            .iter()
+            .find(|(p, _)| p == rdf_type().as_str())
+            .and_then(|(_, v)| v.iter().find_map(|c| c.strip_prefix(PAN_NS)))
+            .unwrap_or("Image")
+            .to_string();
+        let (made_sets, made_video_sets) = self.make_named_sets(
+            &quads,
+            &subject_class,
+            "the XMP",
+            "Nothing was added.",
+        )?;
 
         // Graph: only what is new is inserted, so an undo removes exactly that.
         let fresh: Vec<Quad> = quads
@@ -3647,6 +3677,9 @@ impl Pan {
             }
             for made in &made_sets {
                 let _ = self.imageset_unmake(made);
+            }
+            for made in &made_video_sets {
+                let _ = self.mediaset_unmake(&imageset::VIDEOSET, made);
             }
             why
         };
@@ -3698,6 +3731,7 @@ impl Pan {
             inserted: fresh.len(),
             descriptions: descriptions.len(),
             imagesets_made: made_sets,
+            videosets_made: made_video_sets,
         })
     }
 

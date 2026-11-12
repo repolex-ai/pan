@@ -471,6 +471,16 @@ asks. Adding an image to a set rewrites the image's file, so membership
 changes appear here as rows for the image; a set's own `updated_date` is on
 `GET /imagesets`.
 
+Videos have their own sets, `pan:VideoSet`, since pan.ttl 0.4.26
+(2026-11-12): the clips of one film, say. `pan videoset create|list|show|
+add|remove|delete` are the same six commands as `pan imageset`, over
+`/videosets` instead of `/imagesets`, and a clip's membership is
+`pan:relatedToId <pan/VideoSet/id>` on the clip, written into its file. A
+VideoSet takes videos only and an ImageSet images only; every door checks,
+including `relatedToId=` on `pan set` and a file that arrives naming the
+set. A clip's link to the still it was made from is a plain
+`relatedToId='<pan/Image/id>'`, set the same way.
+
 A set is destroyed with `pan imageset delete '<pan/ImageSet/id>'`, or
 `DELETE /imagesets/{id}` over HTTP. Every member's link to the set is
 removed, in the graph and in the member's file, and the set's node and file

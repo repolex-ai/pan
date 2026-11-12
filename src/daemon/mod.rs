@@ -171,12 +171,12 @@ impl Daemon {
         }
     }
 
-    /// Find which store holds a imageset id — the same rule as `locate`:
-    /// one hit, or an error naming how many.
-    pub fn locate_imageset(&self, set_id: &str) -> Result<Option<Arc<StoreHandle>>> {
+    /// Find which store holds a set id of this kind — the same rule as
+    /// `locate`: one hit, or an error naming how many.
+    pub fn locate_mediaset(&self, kind: &crate::imageset::SetKind, set_id: &str) -> Result<Option<Arc<StoreHandle>>> {
         let mut found: Vec<Arc<StoreHandle>> = Vec::new();
         for s in &self.stores {
-            if s.pan.imageset_subject(set_id)?.is_some() {
+            if s.pan.mediaset_subject(kind, set_id)?.is_some() {
                 found.push(s.clone());
             }
         }
@@ -184,9 +184,13 @@ impl Daemon {
             0 => Ok(None),
             1 => Ok(found.pop()),
             n => Err(anyhow!(
-                "imageset {set_id} exists in {n} stores — ambiguous"
+                "{} {set_id} exists in {n} stores — ambiguous", kind.noun
             )),
         }
+    }
+
+    pub fn locate_imageset(&self, set_id: &str) -> Result<Option<Arc<StoreHandle>>> {
+        self.locate_mediaset(&crate::imageset::IMAGESET, set_id)
     }
 
     /// Find which store holds a media id (ids are random per store; a hit in

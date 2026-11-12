@@ -89,6 +89,7 @@ pub struct XmpAdded {
     pub descriptions: usize,
     /// Sets made because the body named them.
     pub imagesets_made: Vec<String>,
+    pub videosets_made: Vec<String>,
 }
 
 /// The receipt for one stored file.
@@ -210,6 +211,8 @@ pub struct Hit {
 /// One imageset: its three facts and, when asked for by id, its members.
 #[derive(Serialize, ToSchema)]
 pub struct ImageSetResponse {
+    /// The set class: `ImageSet` or `VideoSet`.
+    pub class: String,
     /// `<pan/ImageSet/abcd2345>` — the identity, bracket form.
     pub id: String,
     pub iri: String,
@@ -358,7 +361,9 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("is not a stage reference")
         || msg.contains("nothing to set")
         || msg.contains("nothing to unset")
-        || msg.contains("imageset file")
+        || msg.contains("set file")
+        || msg.contains("takes images only")
+        || msg.contains("takes videos only")
         || msg.contains("not a readable image")
         || msg.contains("pan:mediaCreatedDate")
         || msg.contains("could not be made")
@@ -677,6 +682,7 @@ async fn add_xmp(
         inserted: added.inserted,
         descriptions: added.descriptions,
         imagesets_made: added.imagesets_made,
+        videosets_made: added.videosets_made,
     }))
 }
 
@@ -1466,6 +1472,7 @@ fn imageset_out(
     media: Option<Vec<String>>,
 ) -> ImageSetResponse {
     ImageSetResponse {
+        class: p.class.clone(),
         id: bracket_iri(&p.iri),
         iri: p.iri,
         store: store.entry.id.clone(),
@@ -1649,8 +1656,16 @@ async fn imagesets_in(
     d: &Daemon,
     store_id: Option<&str>,
 ) -> Result<Json<Vec<ImageSetResponse>>, ApiError> {
+    mediasets_in(d, &crate::imageset::IMAGESET, store_id).await
+}
+
+async fn mediasets_in(
+    d: &Daemon,
+    kind: &crate::imageset::SetKind,
+    store_id: Option<&str>,
+) -> Result<Json<Vec<ImageSetResponse>>, ApiError> {
     let store = d.store_for(store_id).map_err(map_err)?;
-    let sets = store.pan.imageset_list().map_err(map_err)?;
+    let sets = store.pan.mediaset_list(kind).map_err(map_err)?;
     Ok(Json(
         sets.into_iter()
             .map(|p| imageset_out(&store, p, None))
@@ -1684,10 +1699,19 @@ async fn create_imageset_in(
     store_id: Option<&str>,
     body: ImageSetCreateBody,
 ) -> Result<(StatusCode, Json<ImageSetResponse>), ApiError> {
+    create_mediaset_in(d, &crate::imageset::IMAGESET, store_id, body).await
+}
+
+async fn create_mediaset_in(
+    d: &Daemon,
+    kind: &'static crate::imageset::SetKind,
+    store_id: Option<&str>,
+    body: ImageSetCreateBody,
+) -> Result<(StatusCode, Json<ImageSetResponse>), ApiError> {
     let store = d.store_for(store_id).map_err(map_err)?;
     let s2 = store.clone();
     let p =
-        tokio::task::spawn_blocking(move || s2.pan.imageset_create(body.description.as_deref()))
+        tokio::task::spawn_blocking(move || s2.pan.mediaset_create(kind, body.description.as_deref()))
             .await
             .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .map_err(map_err)?;
@@ -1752,11 +1776,15 @@ async fn rebuild_index(
 }
 
 fn locate_imageset(d: &Daemon, given: &str) -> Result<(Arc<super::StoreHandle>, String), ApiError> {
+    locate_mediaset(d, &crate::imageset::IMAGESET, given)
+}
+
+fn locate_mediaset(d: &Daemon, kind: &crate::imageset::SetKind, given: &str) -> Result<(Arc<super::StoreHandle>, String), ApiError> {
     let id = bare_id(given);
-    let store = d.locate_imageset(&id).map_err(map_err)?.ok_or_else(|| {
+    let store = d.locate_mediaset(kind, &id).map_err(map_err)?.ok_or_else(|| {
         ApiError(
             StatusCode::NOT_FOUND,
-            format!("imageset not found: {given}"),
+            format!("{} not found: {given}", kind.noun),
         )
     })?;
     Ok((store, id))
@@ -1766,14 +1794,22 @@ fn imageset_response(
     store: &Arc<super::StoreHandle>,
     id: &str,
 ) -> Result<ImageSetResponse, ApiError> {
+    mediaset_response(store, &crate::imageset::IMAGESET, id)
+}
+
+fn mediaset_response(
+    store: &Arc<super::StoreHandle>,
+    kind: &crate::imageset::SetKind,
+    id: &str,
+) -> Result<ImageSetResponse, ApiError> {
     let p = store
         .pan
-        .imageset_get(id)
+        .mediaset_get(kind, id)
         .map_err(map_err)?
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("imageset not found: {id}")))?;
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("{} not found: {id}", kind.noun)))?;
     let media = store
         .pan
-        .imageset_members(id)
+        .mediaset_members(kind, id)
         .map_err(map_err)?
         .iter()
         .map(|iri| bracket_iri(iri))
@@ -1797,15 +1833,23 @@ async fn delete_imageset(
     State(d): State<Shared>,
     AxPath(given): AxPath<String>,
 ) -> Result<Json<ImageSetDeleted>, ApiError> {
-    let (store, id) = locate_imageset(&d, &given)?;
+    delete_mediaset(&d, &crate::imageset::IMAGESET, &given).await
+}
+
+async fn delete_mediaset(
+    d: &Daemon,
+    kind: &'static crate::imageset::SetKind,
+    given: &str,
+) -> Result<Json<ImageSetDeleted>, ApiError> {
+    let (store, id) = locate_mediaset(d, kind, given)?;
     let s2 = store.clone();
     let sid = id.clone();
-    let unlinked = tokio::task::spawn_blocking(move || s2.pan.imageset_delete(&sid))
+    let unlinked = tokio::task::spawn_blocking(move || s2.pan.mediaset_delete(kind, &sid))
         .await
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(map_err)?;
     Ok(Json(ImageSetDeleted {
-        id: format!("<pan/ImageSet/{id}>"),
+        id: format!("<pan/{}/{id}>", kind.class),
         store: store.entry.id.clone(),
         unlinked: unlinked.iter().map(|iri| bracket_iri(iri)).collect(),
     }))
@@ -1839,7 +1883,17 @@ async fn imageset_member(
     media: &str,
     add: bool,
 ) -> Result<Json<ImageSetResponse>, ApiError> {
-    let (store, set_id) = locate_imageset(d, given)?;
+    mediaset_member(d, &crate::imageset::IMAGESET, given, media, add).await
+}
+
+async fn mediaset_member(
+    d: &Daemon,
+    kind: &'static crate::imageset::SetKind,
+    given: &str,
+    media: &str,
+    add: bool,
+) -> Result<Json<ImageSetResponse>, ApiError> {
+    let (store, set_id) = locate_mediaset(d, kind, given)?;
     let media_id = bare_id(media);
     // The image must be in the SAME store as the set: a set never reaches
     // across stores.
@@ -1853,15 +1907,94 @@ async fn imageset_member(
     let sid = set_id.clone();
     tokio::task::spawn_blocking(move || {
         if add {
-            s2.pan.imageset_add(&sid, &media_id)
+            s2.pan.mediaset_add(kind, &sid, &media_id)
         } else {
-            s2.pan.imageset_remove(&sid, &media_id)
+            s2.pan.mediaset_remove(kind, &sid, &media_id)
         }
     })
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(map_err)?;
-    imageset_response(&store, &set_id).map(Json)
+    mediaset_response(&store, kind, &set_id).map(Json)
+}
+
+// ── VideoSets (pan.ttl 0.4.26, goodlux 2026-11-12): the same doors, for clips ──
+
+#[utoipa::path(get, path = "/videosets", tag = "imageset",
+    responses((status = 200, body = Vec<ImageSetResponse>)))]
+async fn videosets(State(d): State<Shared>) -> Result<Json<Vec<ImageSetResponse>>, ApiError> {
+    mediasets_in(&d, &crate::imageset::VIDEOSET, None).await
+}
+
+#[utoipa::path(get, path = "/stores/{id}/videosets", tag = "imageset", params(("id" = String, Path, description = "Store id")),
+    responses((status = 200, body = Vec<ImageSetResponse>), (status = 404, body = ErrorBody)))]
+async fn store_videosets(
+    State(d): State<Shared>,
+    AxPath(store_id): AxPath<String>,
+) -> Result<Json<Vec<ImageSetResponse>>, ApiError> {
+    mediasets_in(&d, &crate::imageset::VIDEOSET, Some(&store_id)).await
+}
+
+#[utoipa::path(post, path = "/videosets", tag = "imageset",
+    request_body(content = ImageSetCreateBody, description = "The set's description; nothing else is on a set"),
+    responses((status = 201, body = ImageSetResponse), (status = 400, body = ErrorBody)))]
+async fn create_videoset(
+    State(d): State<Shared>,
+    Json(body): Json<ImageSetCreateBody>,
+) -> Result<(StatusCode, Json<ImageSetResponse>), ApiError> {
+    create_mediaset_in(&d, &crate::imageset::VIDEOSET, None, body).await
+}
+
+#[utoipa::path(post, path = "/stores/{id}/videosets", tag = "imageset", params(("id" = String, Path, description = "Store id")),
+    request_body(content = ImageSetCreateBody),
+    responses((status = 201, body = ImageSetResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
+async fn create_store_videoset(
+    State(d): State<Shared>,
+    AxPath(store_id): AxPath<String>,
+    Json(body): Json<ImageSetCreateBody>,
+) -> Result<(StatusCode, Json<ImageSetResponse>), ApiError> {
+    create_mediaset_in(&d, &crate::imageset::VIDEOSET, Some(&store_id), body).await
+}
+
+#[utoipa::path(get, path = "/videosets/{id}", tag = "imageset", params(("id" = String, Path, description = "<pan/VideoSet/x>, full IRI, or bare id")),
+    responses((status = 200, body = ImageSetResponse), (status = 404, body = ErrorBody)))]
+async fn get_videoset(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+) -> Result<Json<ImageSetResponse>, ApiError> {
+    let (store, id) = locate_mediaset(&d, &crate::imageset::VIDEOSET, &given)?;
+    mediaset_response(&store, &crate::imageset::VIDEOSET, &id).map(Json)
+}
+
+#[utoipa::path(delete, path = "/videosets/{id}", tag = "imageset", params(("id" = String, Path, description = "<pan/VideoSet/x>, full IRI, or bare id")),
+    responses((status = 200, body = ImageSetDeleted, description = "The set is gone: every member's pan:relatedToId to it removed from the graph and from the member's file, the set's node and file deleted. There is no undo."), (status = 404, body = ErrorBody)))]
+async fn delete_videoset(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+) -> Result<Json<ImageSetDeleted>, ApiError> {
+    delete_mediaset(&d, &crate::imageset::VIDEOSET, &given).await
+}
+
+#[utoipa::path(post, path = "/videosets/{id}/add", tag = "imageset", params(("id" = String, Path)),
+    request_body(content = ImageSetMemberBody, description = "The video to put in the set; an image is refused"),
+    responses((status = 200, body = ImageSetResponse), (status = 404, body = ErrorBody)))]
+async fn videoset_add(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+    Json(body): Json<ImageSetMemberBody>,
+) -> Result<Json<ImageSetResponse>, ApiError> {
+    mediaset_member(&d, &crate::imageset::VIDEOSET, &given, &body.media, true).await
+}
+
+#[utoipa::path(post, path = "/videosets/{id}/remove", tag = "imageset", params(("id" = String, Path)),
+    request_body(content = ImageSetMemberBody, description = "The video to take out of the set"),
+    responses((status = 200, body = ImageSetResponse), (status = 404, body = ErrorBody)))]
+async fn videoset_remove(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+    Json(body): Json<ImageSetMemberBody>,
+) -> Result<Json<ImageSetResponse>, ApiError> {
+    mediaset_member(&d, &crate::imageset::VIDEOSET, &given, &body.media, false).await
 }
 
 // ── Router ──────────────────────────────────────────────────────────────────
@@ -1870,13 +2003,14 @@ async fn imageset_member(
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
     paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, get_embedding, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, similar_faces, rebuild_index, store_embeddings, store_images_changed, store_sparql_get, store_sparql_post,
-          imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, delete_imageset, imageset_add, imageset_remove, rename_namespace, redo, add_xmp),
+          imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, delete_imageset, imageset_add, imageset_remove,
+          videosets, store_videosets, create_videoset, create_store_videoset, get_videoset, delete_videoset, videoset_add, videoset_remove, rename_namespace, redo, add_xmp),
     components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, FaceHit, SimilarFacesResponse, IndexRebuildResponse, ErrorBody,
                        ImageSetResponse, ImageSetDeleted, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse, RedoBody, RedoResponse)),
     tags(
         (name = "meta", description = "Daemon + store status"),
         (name = "media", description = "Deliver, read, describe, delete"),
-        (name = "imageset", description = "Sets a person curates; membership is pan:relatedToId on the image"),
+        (name = "imageset", description = "Sets a person curates, ImageSets of images and VideoSets of videos; membership is pan:relatedToId on the member"),
         (name = "query", description = "SPARQL and SPARQL+vector fusion, per store")
     )
 )]
@@ -1903,9 +2037,17 @@ pub fn router(d: Shared) -> Router {
         .route("/imagesets/{id}", get(get_imageset).delete(delete_imageset))
         .route("/imagesets/{id}/add", post(imageset_add))
         .route("/imagesets/{id}/remove", post(imageset_remove))
+        .route("/videosets", get(videosets).post(create_videoset))
+        .route("/videosets/{id}", get(get_videoset).delete(delete_videoset))
+        .route("/videosets/{id}/add", post(videoset_add))
+        .route("/videosets/{id}/remove", post(videoset_remove))
         .route(
             "/stores/{id}/imagesets",
             get(store_imagesets).post(create_store_imageset),
+        )
+        .route(
+            "/stores/{id}/videosets",
+            get(store_videosets).post(create_store_videoset),
         )
         .route(
             "/stores/{id}/embeddings",
