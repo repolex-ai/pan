@@ -688,12 +688,21 @@ fn literal_for(
             Ok(_) => Ok(typed(as_text(), "decimal")),
             Err(_) => Err(format!("{} expects a number, got {value}", field.local)),
         },
+        // The same check an arriving file meets: a date the graph can order,
+        // RFC3339 with its zone. "yesterday" was accepted here until
+        // 2026-11-12; nothing downstream could sort it.
         "xsd:dateTime" => match value {
             serde_json::Value::String(s) if !s.trim().is_empty() => {
-                Ok(typed(s.trim().to_string(), "dateTime"))
+                match chrono::DateTime::parse_from_rfc3339(s.trim()) {
+                    Ok(_) => Ok(typed(s.trim().to_string(), "dateTime")),
+                    Err(e) => Err(format!(
+                        "{} expects an RFC3339 date with a zone, like 2026-11-12T09:14:02-08:00; got {value} ({e})",
+                        field.local
+                    )),
+                }
             }
             _ => Err(format!(
-                "{} expects an RFC3339 date-time string, got {value}",
+                "{} expects an RFC3339 date with a zone, like 2026-11-12T09:14:02-08:00; got {value}",
                 field.local
             )),
         },

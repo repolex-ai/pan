@@ -213,6 +213,19 @@ fn render_request_date_from_the_file_lands_and_is_settable_and_checked_like_medi
         .unwrap();
     assert_eq!(facts(&store, &bare.id)[&format!("{P}renderRequestDate")], vec!["2026-11-12T08:00:00-08:00".to_string()]);
 
+    // Not a zoned date on set: refused, nothing changed. The same rule as
+    // the file, for both producer dates.
+    for local in ["renderRequestDate", "mediaCreatedDate"] {
+        for bad in ["yesterday", "2026-11-12", "2026-11-12T09:14:02"] {
+            let e = store
+                .set_fields(&bare.id, &[(local.into(), serde_json::json!(bad))])
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("RFC3339"), "{local}={bad}: {e}");
+        }
+    }
+    assert_eq!(facts(&store, &bare.id)[&format!("{P}renderRequestDate")], vec!["2026-11-12T08:00:00-08:00".to_string()]);
+
     // Not a zoned date: the file is refused whole.
     let bad = png_with(7, "<pan:renderRequestDate>yesterday</pan:renderRequestDate>");
     let e = store.put(&bad, Some("image/png")).unwrap_err().to_string();
