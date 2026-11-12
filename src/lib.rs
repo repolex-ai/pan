@@ -755,11 +755,12 @@ fn link_node(text: &str) -> Result<NamedNode> {
     } else {
         iri_from_bracket(text).ok_or_else(|| {
             anyhow!(
-                "{text} is not a reference; write it as <pan/ImageSet/id>, <pan/Image/id> or <pan/Video/id>"
+                "relatedToId={text} is not a reference; write it as <pan/ImageSet/id>, <pan/Image/id> or <pan/Video/id>. Nothing was changed."
             )
         })?
     };
-    NamedNode::new(iri).map_err(|e| anyhow!("{text} is not a valid IRI: {e}"))
+    NamedNode::new(iri)
+        .map_err(|e| anyhow!("relatedToId={text} is not a valid IRI ({e}). Nothing was changed."))
 }
 
 /// What the caption stage learned about one object: the model's JSON answer,
