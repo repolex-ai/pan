@@ -33,7 +33,9 @@ fn usage() -> ! {
                sets one field on the new media once it is in, the same as\n      \
                `pan set`: the keys are the properties pan.ttl declares on an\n      \
                image or on any media (rating, description, renderPrompt,\n      \
-               mediaCreatedDate, isPicked, …). A key it does not declare is\n      \
+               mediaCreatedDate, isPicked, …), plus relatedToId='<pan/ImageSet/id>'\n      \
+               to put it in a set or relatedToId='<pan/Image/id>' to link it to\n      \
+               the image it was made from. A key it does not declare is\n      \
                refused, and the refusal lists every key it does.\n  \
            pan info  <pan/Image/id>\n      \
                Every fact pand holds about one image or video (<pan/Video/id>\n      \
@@ -47,9 +49,12 @@ fn usage() -> ! {
                List the stores pand serves, with the default marked.\n  \
            pan set   <pan/Image/id> rating=4 isPicked=true isRejected=false\n      \
                Set fields on media already in the Pan; same keys as `pan put`.\n      \
-               Numbers and true/false are typed, everything else is text.\n  \
-           pan unset <pan/Image/id> rating\n      \
-               Remove a field you set.\n  \
+               Numbers and true/false are typed, everything else is text. A\n      \
+               value replaces the old one; relatedToId='<pan/ImageSet/id>' ADDS\n      \
+               a link (to a set, an image or a video in the same store) and\n      \
+               leaves the links already there.\n  \
+           pan unset <pan/Image/id> rating relatedToId='<pan/ImageSet/id>'\n      \
+               Remove a field you set. A link comes off one at a time, named.\n  \
            pan redo  <pan/Image/id> embed\n      \
                Run one stage again: caption, embed, segment, pose, depth or face.\n      \
                Images only; videos do not go through the stages.\n  \

@@ -723,9 +723,43 @@ fn literal_for(
 fn not_settable(local: &str) -> anyhow::Error {
     let names: Vec<String> = settable_fields().into_iter().map(|f| f.local).collect();
     anyhow!(
-        "{local} is not a property pan.ttl declares on an image; declared: {}",
+        "{local} is not a property pan.ttl declares on an image; declared: {}; and relatedToId=<pan/ImageSet/id> (or an image or video id) to link it to another thing in the same store",
         names.join(", ")
     )
+}
+
+/// The link targets a `relatedToId` value names: one string, or a JSON list
+/// of strings, each `<pan/Class/id>` or the full IRI.
+fn link_values(value: &serde_json::Value) -> Result<Vec<String>> {
+    match value {
+        serde_json::Value::String(s) => Ok(vec![s.trim().to_string()]),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(|v| match v {
+                serde_json::Value::String(s) => Ok(s.trim().to_string()),
+                other => Err(anyhow!(
+                    "relatedToId expects <pan/Class/id> values, got {other}"
+                )),
+            })
+            .collect(),
+        other => Err(anyhow!(
+            "relatedToId expects a reference like <pan/ImageSet/id>, got {other}"
+        )),
+    }
+}
+
+/// `<pan/Class/id>` or the full IRI as a node, without looking it up.
+fn link_node(text: &str) -> Result<NamedNode> {
+    let iri = if text.starts_with("https://") || text.starts_with("http://") {
+        text.trim().to_string()
+    } else {
+        iri_from_bracket(text).ok_or_else(|| {
+            anyhow!(
+                "{text} is not a reference; write it as <pan/ImageSet/id>, <pan/Image/id> or <pan/Video/id>"
+            )
+        })?
+    };
+    NamedNode::new(iri).map_err(|e| anyhow!("{text} is not a valid IRI: {e}"))
 }
 
 /// What the caption stage learned about one object: the model's JSON answer,
@@ -2423,7 +2457,24 @@ impl Pan {
         }
         let settable = settable_fields();
         let mut literals: Vec<(String, Literal)> = Vec::with_capacity(fields.len());
+        // relatedToId is a link, not a value, and an image holds several (one
+        // per set it is in, one per image it was made from). Setting it ADDS
+        // a link; the ones already there stay (goodlux, 2026-11-12: putting
+        // media in a set and linking a render to its source must be one
+        // key=value, never an XMP upload). A link already present is no
+        // change, so it is not in `written` and a failed rewrite cannot
+        // remove it.
+        let mut links: Vec<Quad> = Vec::new();
         for (local, value) in fields {
+            if local == "relatedToId" {
+                for target in link_values(value)? {
+                    let edge = self.link_edge(id, &subject, &target)?;
+                    if !self.store.contains(edge.as_ref()).context("check link")? && !links.contains(&edge) {
+                        links.push(edge);
+                    }
+                }
+                continue;
+            }
             let Some(f) = settable.iter().find(|f| &f.local == local) else {
                 return Err(not_settable(local));
             };
@@ -2435,7 +2486,11 @@ impl Pan {
             .start_transaction()
             .context("start transaction")?;
         let mut previous: Vec<Quad> = Vec::new();
-        let mut written: Vec<Quad> = Vec::with_capacity(literals.len());
+        let mut written: Vec<Quad> = Vec::with_capacity(literals.len() + links.len());
+        for edge in links {
+            t.insert(edge.as_ref());
+            written.push(edge);
+        }
         for (local, lit) in &literals {
             let old: Vec<Quad> = self
                 .store
@@ -2481,6 +2536,41 @@ impl Pan {
         Ok(())
     }
 
+    /// The edge a `relatedToId=<pan/Class/id>` asks for, checked: the target
+    /// is a thing in THIS store — a set (then the ImageSet rules apply: it
+    /// must exist and the media must be an image), an image or a video — and
+    /// not the media itself. A thing in another namespace (a copia Moment)
+    /// is the producer's to say, in the file's XMP or through
+    /// POST /media/{id}/xmp, so it is refused here.
+    fn link_edge(&self, id: &str, subject: &NamedNode, target: &str) -> Result<Quad> {
+        let node = link_node(target)?;
+        let Some(tail) = node.as_str().strip_prefix(PAN_MEDIA_NS) else {
+            return Err(anyhow!(
+                "relatedToId={target} names something outside Pan; that link is the producer's to write, in the file's XMP or with POST /media/{{id}}/xmp. Nothing was changed."
+            ));
+        };
+        if let Some(set_id) = tail.strip_prefix(&format!("{}/", imageset::IMAGESET_CLASS)) {
+            return self.imageset_edge(set_id, id);
+        }
+        if &node == subject {
+            return Err(anyhow!(
+                "relatedToId={target} is the media itself; a thing is not related to itself. Nothing was changed."
+            ));
+        }
+        let target_id = bare_id(target);
+        match self.subject_for(&target_id)? {
+            Some(found) if found == node => Ok(Quad::new(
+                subject.clone(),
+                pan_iri("relatedToId"),
+                node,
+                crate::config::pan_graph(),
+            )),
+            _ => Err(anyhow!(
+                "relatedToId={target} is not an image, video or set in this store. Nothing was changed."
+            )),
+        }
+    }
+
     /// Remove facts from a media object. Any property pan.ttl declares on an
     /// image may be unset, the same set `set` accepts. Unsetting a field
     /// that has no value is not an error.
@@ -2498,8 +2588,27 @@ impl Pan {
             return Err(anyhow!("nothing to unset; give at least one property name"));
         }
         let settable = settable_fields();
+        // A link comes off one at a time: `relatedToId=<pan/ImageSet/id>`
+        // names which. Bare `relatedToId` would take the image out of every
+        // set and away from every source at once, so it is refused.
+        let mut link_removals: Vec<Quad> = Vec::new();
+        let mut plain: Vec<&String> = Vec::new();
         for local in locals {
-            if !settable.iter().any(|f| &f.local == local) {
+            if let Some(target) = local.strip_prefix("relatedToId=") {
+                let node = link_node(target)?;
+                link_removals.push(Quad::new(
+                    subject.clone(),
+                    pan_iri("relatedToId"),
+                    node,
+                    crate::config::pan_graph(),
+                ));
+            } else if local == "relatedToId" {
+                return Err(anyhow!(
+                    "relatedToId holds several links; say which one comes off, as relatedToId=<pan/ImageSet/id> (or an image or video id). Nothing was changed."
+                ));
+            } else if settable.iter().any(|f| &f.local == local) {
+                plain.push(local);
+            } else {
                 return Err(not_settable(local));
             }
         }
@@ -2507,7 +2616,10 @@ impl Pan {
             .store
             .start_transaction()
             .context("start transaction")?;
-        for local in locals {
+        for q in &link_removals {
+            t.remove(q.as_ref());
+        }
+        for local in plain {
             let old: Vec<Quad> = self
                 .store
                 .quads_for_pattern(

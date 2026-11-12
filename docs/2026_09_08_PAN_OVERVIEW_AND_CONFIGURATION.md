@@ -253,6 +253,27 @@ range (a rating of 6, a pick of `yes`) is refused naming the expected type.
 A new field is declared in pan.ttl first; the command reads the list from
 the ontology.
 
+One key on these commands is a link rather than a value: `relatedToId`.
+Its value is a reference to another thing in the same store, written the
+way a file writes it, `<pan/ImageSet/id>`, `<pan/Image/id>` or
+`<pan/Video/id>`. Setting it adds the link and leaves the links already
+there, because an image holds several: one per set it is in, one per image
+it was made from. A link to a set is set membership, the same edge
+`pan imageset add` writes, with the same rules (the set exists, the media is
+an image). Unsetting names the one link to drop; bare `relatedToId` is
+refused, since it would take the image out of every set at once (goodlux,
+2026-11-12).
+
+```sh
+pan set   '<pan/Image/k7m2p9x4>' relatedToId='<pan/ImageSet/4f0a9e2c>'
+pan set   '<pan/Image/k7m2p9x4>' relatedToId='<pan/Image/b3d81c0e>'   # made from this one
+pan unset '<pan/Image/k7m2p9x4>' relatedToId='<pan/Image/b3d81c0e>'
+```
+
+A reference outside Pan, such as Horae's `<copia/Moment/id>`, is the
+producer's to write: in the file's XMP before delivery, or afterwards with
+`POST /media/{id}/xmp`. The set route refuses it and says so.
+
 Since pan.ttl 0.4.24 (2026-11-11) the prompt that asked for a generated
 image or clip has its own field, `pan:renderPrompt`, set like any other and
 written into the file. It is for the prompt as a person or agent gave it;

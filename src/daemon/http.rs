@@ -352,6 +352,9 @@ fn map_err(e: anyhow::Error) -> ApiError {
         || msg.contains("not a readable image")
         || msg.contains("pan:mediaCreatedDate")
         || msg.contains("could not be made")
+        // Every relatedToId refusal on set/unset is the caller's to fix.
+        || msg.contains("relatedToId")
+        || msg.contains("Nothing was changed")
     {
         ApiError(StatusCode::BAD_REQUEST, msg)
     } else {
@@ -577,7 +580,7 @@ async fn ingest(
 }
 
 #[utoipa::path(post, path = "/media/{id}/set", tag = "media", params(("id" = String, Path)),
-    request_body(content = HashMap<String, serde_json::Value>, description = "One JSON object keyed by property local name: any datatype property pan.ttl declares on an image (rating, isPicked, isRejected, the caption fields, the ingest fields); the value is checked against the declared type"),
+    request_body(content = HashMap<String, serde_json::Value>, description = "One JSON object keyed by property local name: any datatype property pan.ttl declares on an image (rating, isPicked, isRejected, the caption fields, the ingest fields); the value is checked against the declared type and replaces the old one. relatedToId is the one link: its value (a string or a list of strings) is <pan/ImageSet/id>, <pan/Image/id> or <pan/Video/id> in the same store, and it is ADDED to the links already there (a set link follows the ImageSet rules: the set exists, the media is an image). A reference outside Pan, such as <copia/Moment/id>, is refused here; it is written with POST /media/{id}/xmp."),
     responses((status = 200, body = FactsResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
 async fn set_fields(
     State(d): State<Shared>,
@@ -597,7 +600,7 @@ async fn set_fields(
 }
 
 #[utoipa::path(post, path = "/media/{id}/unset", tag = "media", params(("id" = String, Path)),
-    request_body(content = Vec<String>, description = "The property local names to remove"),
+    request_body(content = Vec<String>, description = "The property local names to remove. A link comes off one at a time, named: relatedToId=<pan/ImageSet/id>; bare relatedToId is refused."),
     responses((status = 200, body = FactsResponse), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
 async fn unset_fields(
     State(d): State<Shared>,

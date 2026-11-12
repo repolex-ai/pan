@@ -173,3 +173,79 @@ fn refusals_name_the_problem_and_write_nothing() {
         .to_string();
     assert!(e.contains("vibe"), "{e}");
 }
+
+#[test]
+fn related_to_id_adds_links_one_at_a_time_and_unset_names_the_one_to_drop() {
+    // goodlux, 2026-11-12: putting media in a set and linking a render to the
+    // image it was made from must be one key=value on set or put, never an
+    // XMP upload. relatedToId ADDS a link; the links already there stay.
+    let (_dir, store) = open();
+    let a = store.put(&make_png(8, 8, 11), Some("image/png")).unwrap().id;
+    let b = store.put(&make_png(8, 8, 12), Some("image/png")).unwrap().id;
+    let set = store.imageset_create(Some("test set")).unwrap().id;
+    let a_bracket = format!("<pan/Image/{}>", pan::bare_id(&a));
+    let b_bracket = format!("<pan/Image/{}>", pan::bare_id(&b));
+    let set_bracket = format!("<pan/ImageSet/{set}>");
+
+    // One call, two links: the set and the source image.
+    store
+        .set_fields(
+            &a,
+            &[(
+                "relatedToId".into(),
+                serde_json::json!([set_bracket, b_bracket]),
+            )],
+        )
+        .unwrap();
+    let links = pan_fact(&store, &a, "relatedToId");
+    assert_eq!(links.len(), 2, "{links:?}");
+    assert!(links.iter().any(|l| l.ends_with(&format!("/ImageSet/{set}"))));
+    assert!(links.iter().any(|l| l == &format!("https://repolex.ai/pan/Image/{}", pan::bare_id(&b))));
+    assert_eq!(store.imageset_members(&set).unwrap().len(), 1, "the set door sees the link");
+    let xmp = xmp_of(&store, &a);
+    assert!(xmp.contains(&format!("<pan:relatedToId>&lt;pan/ImageSet/{set}&gt;</pan:relatedToId>")), "{xmp}");
+    assert!(xmp.contains(&format!("<pan:relatedToId>{}</pan:relatedToId>", b_bracket.replace('<', "&lt;").replace('>', "&gt;"))), "{xmp}");
+
+    // Setting another link alongside a value keeps the first two.
+    store
+        .set_fields(&a, &[("rating".into(), serde_json::json!(3)), ("relatedToId".into(), serde_json::json!(set_bracket.clone()))])
+        .unwrap();
+    assert_eq!(pan_fact(&store, &a, "relatedToId").len(), 2, "already linked = no change");
+    assert_eq!(pan_fact(&store, &a, "rating"), vec!["3"]);
+
+    // Unset takes one link off, named; the other stays.
+    store.unset_fields(&a, &[format!("relatedToId={b_bracket}")]).unwrap();
+    let links = pan_fact(&store, &a, "relatedToId");
+    assert_eq!(links.len(), 1, "{links:?}");
+    assert!(links[0].ends_with(&format!("/ImageSet/{set}")));
+    assert!(!xmp_of(&store, &a).contains(&b_bracket.replace('<', "&lt;").replace('>', "&gt;")));
+
+    // Bare relatedToId on unset is refused; the set link is untouched.
+    let e = store.unset_fields(&a, &["relatedToId".into()]).unwrap_err().to_string();
+    assert!(e.contains("say which one"), "{e}");
+    assert_eq!(pan_fact(&store, &a, "relatedToId").len(), 1);
+
+    // Refusals: the media itself, a thing that is not here, a thing outside
+    // Pan (the producer's to write), a set that does not exist, and a value
+    // that is not a reference at all. Nothing is written by any of them.
+    for (value, expect) in [
+        (a_bracket.as_str(), "the media itself"),
+        ("<pan/Image/nope1234>", "not an image, video or set in this store"),
+        ("<copia/Moment/abc-1-2>", "outside Pan"),
+        ("<pan/ImageSet/nosuchset>", "imageset not found"),
+        ("just-text", "not a reference"),
+    ] {
+        let e = store
+            .set_fields(&a, &[("relatedToId".into(), serde_json::json!(value))])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains(expect), "{value}: {e}");
+        assert_eq!(pan_fact(&store, &a, "relatedToId").len(), 1, "{value} wrote something");
+    }
+    // The refused-key message points at relatedToId.
+    let e = store
+        .set_fields(&a, &[("bogus".into(), serde_json::json!(1))])
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("relatedToId=<pan/ImageSet/id>"), "{e}");
+}

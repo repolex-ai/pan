@@ -408,6 +408,22 @@ impl Pan {
     /// a `pan:Image`: an ImageSet holds images only, so anything else is
     /// refused before anything is written.
     pub fn imageset_add(&self, set_id: &str, media_id: &str) -> Result<()> {
+        let edge = self.imageset_edge(set_id, media_id)?;
+        if self
+            .store
+            .contains(edge.as_ref())
+            .context("check membership")?
+        {
+            return Ok(());
+        }
+        self.insert_quads(&[edge])?;
+        self.restamp(media_id)
+    }
+
+    /// The membership edge, checked but not written: the set exists, the
+    /// media exists, and the media is a `pan:Image`. Shared with
+    /// `set relatedToId=<pan/ImageSet/id>`, so both doors apply one rule.
+    pub(crate) fn imageset_edge(&self, set_id: &str, media_id: &str) -> Result<Quad> {
         let Some(set) = self.imageset_subject(set_id)? else {
             return Err(anyhow!("imageset not found: {set_id}"));
         };
@@ -445,21 +461,12 @@ impl Pan {
                 "{media_id} is a pan:{class}, not a pan:Image; an ImageSet takes images only. A set for that media kind is not declared yet."
             ));
         }
-        let edge = Quad::new(
+        Ok(Quad::new(
             media,
             pan_iri("relatedToId"),
             set,
             crate::config::pan_graph(),
-        );
-        if self
-            .store
-            .contains(edge.as_ref())
-            .context("check membership")?
-        {
-            return Ok(());
-        }
-        self.insert_quads(&[edge])?;
-        self.restamp(media_id)
+        ))
     }
 
     /// Take a media object out of a set. Not a member = no change.
