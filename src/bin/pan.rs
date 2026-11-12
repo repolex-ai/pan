@@ -26,19 +26,42 @@ fn usage() -> ! {
     eprintln!(
         "pan {} — talks to pand\n\n\
          USAGE:\n  \
-           pan put   [<user-id>] <file> [key=value …]\n  \
-           pan info  <pan/Image/id>\n  \
-           pan state <pan/Image/id>\n  \
-           pan query [<user-id>] \"<sparql>\"\n  \
-           pan stores\n  \
-           pan set   <pan/Image/id> rating=4 isPicked=true isRejected=false\n  \
-           pan unset <pan/Image/id> rating\n  \
-           pan redo  <pan/Image/id> embed\n  \
-           pan imageset create [<user-id>] \"<description>\"\n  \
-           pan imageset list   [<user-id>]\n  \
-           pan imageset show   <pan/ImageSet/id>\n  \
+           pan put   [<user-id>] <file> [key=value …]\n      \
+               Put an image or a video in the Pan. The file is sent as it is;\n      \
+               <user-id> is the six-character store id from `pan stores`, and\n      \
+               without it the file lands in pand's default store. Each key=value\n      \
+               sets one field on the new media once it is in, the same as\n      \
+               `pan set`: the keys are the properties pan.ttl declares on an\n      \
+               image or on any media (rating, description, renderPrompt,\n      \
+               mediaCreatedDate, isPicked, …). A key it does not declare is\n      \
+               refused, and the refusal lists every key it does.\n  \
+           pan info  <pan/Image/id>\n      \
+               Every fact pand holds about one image or video (<pan/Video/id>\n      \
+               works wherever <pan/Image/id> does).\n  \
+           pan state <pan/Image/id>\n      \
+               Which stages have run for it and which are still queued.\n  \
+           pan query [<user-id>] \"<sparql>\"\n      \
+               Run a SPARQL query against one store's graph; the default store\n      \
+               when no store is named.\n  \
+           pan stores\n      \
+               List the stores pand serves, with the default marked.\n  \
+           pan set   <pan/Image/id> rating=4 isPicked=true isRejected=false\n      \
+               Set fields on media already in the Pan; same keys as `pan put`.\n      \
+               Numbers and true/false are typed, everything else is text.\n  \
+           pan unset <pan/Image/id> rating\n      \
+               Remove a field you set.\n  \
+           pan redo  <pan/Image/id> embed\n      \
+               Run one stage again: caption, embed, segment, pose, depth or face.\n      \
+               Images only; videos do not go through the stages.\n  \
+           pan imageset create [<user-id>] \"<description>\"\n      \
+               Start a named set of images in a store.\n  \
+           pan imageset list   [<user-id>]\n      \
+               The sets in one store; the default store when none is named.\n  \
+           pan imageset show   <pan/ImageSet/id>\n      \
+               The images in a set.\n  \
            pan imageset add    <pan/ImageSet/id> <pan/Image/id>\n  \
-           pan imageset remove <pan/ImageSet/id> <pan/Image/id>\n\n\
+           pan imageset remove <pan/ImageSet/id> <pan/Image/id>\n      \
+               Put an image in a set, or take it out.\n\n\
          pand must be running (start it with: pand). Config: {}",
         env!("CARGO_PKG_VERSION"),
         pan::daemon::config::config_dir()
