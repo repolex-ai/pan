@@ -154,6 +154,11 @@ pub fn iri_from_bracket(text: &str) -> Option<String> {
     Some(format!("https://repolex.ai/{inner}"))
 }
 
+/// The dates a producer may write in Pan's namespace, each at most one and
+/// RFC3339 with a zone: when the media was made, and when its render was
+/// asked for (pan.ttl 0.4.19 and 0.4.25).
+pub const PRODUCER_DATES: [&str; 2] = ["mediaCreatedDate", "renderRequestDate"];
+
 /// Accept an identity in any form a caller hands over — `<pan/Image/x>`, the
 /// full IRI, or the bare id — and return the bare id.
 pub fn bare_id(given: &str) -> String {
@@ -1522,26 +1527,29 @@ impl Pan {
         };
         quads.extend(arrived_statements.iter().cloned());
 
-        // pan:mediaCreatedDate from the file: at most one (pan.ttl 0.4.19),
-        // and a date the graph can order, RFC3339 with its zone. A file that
+        // The producer's dates from the file — pan:mediaCreatedDate (pan.ttl
+        // 0.4.19) and pan:renderRequestDate (0.4.25): at most one each, and
+        // a date the graph can order, RFC3339 with its zone. A file that
         // says otherwise is refused whole; nothing is stored.
-        let media_created: Vec<&Quad> = arrived_statements
-            .iter()
-            .filter(|q| q.predicate.as_str() == format!("{PAN_NS}mediaCreatedDate"))
-            .collect();
-        if media_created.len() > 1 {
-            return Err(anyhow!(
-                "the file's XMP carries {} pan:mediaCreatedDate values; at most one is declared. Nothing was stored.",
-                media_created.len()
-            ));
-        }
-        if let Some(q) = media_created.first() {
-            let v = term_str(&q.object);
-            chrono::DateTime::parse_from_rfc3339(&v).map_err(|e| {
-                anyhow!(
-                    "the file's XMP pan:mediaCreatedDate {v:?} is not an RFC3339 date with a zone ({e}). Nothing was stored."
-                )
-            })?;
+        for local in PRODUCER_DATES {
+            let found: Vec<&Quad> = arrived_statements
+                .iter()
+                .filter(|q| q.predicate.as_str() == format!("{PAN_NS}{local}"))
+                .collect();
+            if found.len() > 1 {
+                return Err(anyhow!(
+                    "the file's XMP carries {} pan:{local} values; at most one is declared. Nothing was stored.",
+                    found.len()
+                ));
+            }
+            if let Some(q) = found.first() {
+                let v = term_str(&q.object);
+                chrono::DateTime::parse_from_rfc3339(&v).map_err(|e| {
+                    anyhow!(
+                        "the file's XMP pan:{local} {v:?} is not an RFC3339 date with a zone ({e}). Nothing was stored."
+                    )
+                })?;
+            }
         }
 
         // Sets the file names that do not exist yet: `pan:relatedToId
@@ -3508,8 +3516,9 @@ impl Pan {
     /// have written into the file before delivery, arriving later. One or
     /// more `<rdf:Description>` elements, read with the same rules as an
     /// arriving file (`rdf:about=""` is this image; named subjects stay
-    /// themselves; pan:relatedToId and pan:mediaCreatedDate are the only
-    /// pan: fields a producer may write; a bracket reference becomes an
+    /// themselves; pan:relatedToId, pan:mediaCreatedDate and
+    /// pan:renderRequestDate are the only pan: fields a producer may write;
+    /// a bracket reference becomes an
     /// edge). The elements are appended to the file's XMP as written, beside
     /// whatever Descriptions are already there — Pan edits no producer's
     /// block, it adds the new one — and the statements land in the graph.
@@ -3544,35 +3553,38 @@ impl Pan {
         }
         let (quads, descriptions) = xmp::load_fragment_statements(fragment, subject.as_str())?;
 
-        // pan:mediaCreatedDate: at most one on the image, counting what the
-        // graph already says, and a date the graph can order (pan.ttl
-        // 0.4.19) — the same rule an arriving file meets.
-        let pred_media_created = format!("{PAN_NS}mediaCreatedDate");
-        let mut dates: Vec<String> = facts
-            .iter()
-            .filter(|(p, _)| p == &pred_media_created)
-            .flat_map(|(_, v)| v.iter().cloned())
-            .collect();
-        for q in quads
-            .iter()
-            .filter(|q| q.predicate.as_str() == pred_media_created && q.subject == subject.clone().into())
-        {
-            let v = term_str(&q.object);
-            chrono::DateTime::parse_from_rfc3339(&v).map_err(|e| {
-                anyhow!(
-                    "XMP to add: pan:mediaCreatedDate {v:?} is not an RFC3339 date with a zone ({e}). Nothing was added."
-                )
-            })?;
-            dates.push(v);
-        }
-        dates.sort();
-        dates.dedup();
-        if dates.len() > 1 {
-            return Err(anyhow!(
-                "XMP to add would leave {id} with {} pan:mediaCreatedDate values ({}); at most one is declared. Nothing was added.",
-                dates.len(),
-                dates.join(", ")
-            ));
+        // The producer's dates — pan:mediaCreatedDate and
+        // pan:renderRequestDate: at most one each on the image, counting what
+        // the graph already says, and a date the graph can order — the same
+        // rule an arriving file meets.
+        for local in PRODUCER_DATES {
+            let pred = format!("{PAN_NS}{local}");
+            let mut dates: Vec<String> = facts
+                .iter()
+                .filter(|(p, _)| p == &pred)
+                .flat_map(|(_, v)| v.iter().cloned())
+                .collect();
+            for q in quads
+                .iter()
+                .filter(|q| q.predicate.as_str() == pred && q.subject == subject.clone().into())
+            {
+                let v = term_str(&q.object);
+                chrono::DateTime::parse_from_rfc3339(&v).map_err(|e| {
+                    anyhow!(
+                        "XMP to add: pan:{local} {v:?} is not an RFC3339 date with a zone ({e}). Nothing was added."
+                    )
+                })?;
+                dates.push(v);
+            }
+            dates.sort();
+            dates.dedup();
+            if dates.len() > 1 {
+                return Err(anyhow!(
+                    "XMP to add would leave {id} with {} pan:{local} values ({}); at most one is declared. Nothing was added.",
+                    dates.len(),
+                    dates.join(", ")
+                ));
+            }
         }
 
         // A set named by pan:relatedToId that does not exist yet is made,

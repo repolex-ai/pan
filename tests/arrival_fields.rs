@@ -176,3 +176,54 @@ fn a_set_name_pand_cannot_use_refuses_the_file_and_leaves_nothing() {
     assert_eq!(store.counts().unwrap().images, 0);
     assert!(store.imageset_list().unwrap().is_empty());
 }
+
+#[test]
+fn render_request_date_from_the_file_lands_and_is_settable_and_checked_like_media_created_date() {
+    // pan.ttl 0.4.25 (goodlux, 2026-11-12): when the render was asked for is
+    // the producer's to say, in the file or as a field on put/set, and it is
+    // the join back to the conversation that asked. Checked like
+    // mediaCreatedDate: RFC3339 with a zone, at most one.
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_at(dir.path());
+    let png = png_with(
+        5,
+        "<pan:renderRequestDate>2026-11-12T09:14:02-08:00</pan:renderRequestDate>\n\
+         <pan:mediaCreatedDate>2026-11-12T09:20:40-08:00</pan:mediaCreatedDate>",
+    );
+    let put = store.put(&png, Some("image/png")).unwrap();
+    let f = facts(&store, &put.id);
+    assert_eq!(f[&format!("{P}renderRequestDate")], vec!["2026-11-12T09:14:02-08:00".to_string()]);
+    assert_eq!(f[&format!("{P}mediaCreatedDate")], vec!["2026-11-12T09:20:40-08:00".to_string()]);
+
+    // Settable, and one value: set replaces, in the graph and in the file.
+    assert!(pan::settable_fields().iter().any(|x| x.local == "renderRequestDate"));
+    store
+        .set_fields(&put.id, &[("renderRequestDate".into(), serde_json::json!("2026-11-12T09:15:00-08:00"))])
+        .unwrap();
+    let f = facts(&store, &put.id);
+    assert_eq!(f[&format!("{P}renderRequestDate")], vec!["2026-11-12T09:15:00-08:00".to_string()]);
+    let (bytes, _) = store.get(&put.id).unwrap();
+    let packet = pan::xmp::read_xmp_packet_from_bytes(&bytes).unwrap().unwrap();
+    assert_eq!(packet.matches("<pan:renderRequestDate>2026-11-12T09:15:00-08:00</pan:renderRequestDate>").count(), 1, "{packet}");
+
+    // A bare file with the date as a field: the Kira path.
+    let bare = store.put(&make_png(8, 8, 6), Some("image/png")).unwrap();
+    store
+        .set_fields(&bare.id, &[("renderRequestDate".into(), serde_json::json!("2026-11-12T08:00:00-08:00")), ("renderPrompt".into(), serde_json::json!("a cat"))])
+        .unwrap();
+    assert_eq!(facts(&store, &bare.id)[&format!("{P}renderRequestDate")], vec!["2026-11-12T08:00:00-08:00".to_string()]);
+
+    // Not a zoned date: the file is refused whole.
+    let bad = png_with(7, "<pan:renderRequestDate>yesterday</pan:renderRequestDate>");
+    let e = store.put(&bad, Some("image/png")).unwrap_err().to_string();
+    assert!(e.contains("pan:renderRequestDate") && e.contains("RFC3339"), "{e}");
+    // Two of them: refused whole.
+    let two = png_with(
+        8,
+        "<pan:renderRequestDate>2026-11-12T09:14:02-08:00</pan:renderRequestDate>\n\
+         <pan:renderRequestDate>2026-11-12T09:14:03-08:00</pan:renderRequestDate>",
+    );
+    let e = store.put(&two, Some("image/png")).unwrap_err().to_string();
+    assert!(e.contains("2 pan:renderRequestDate values"), "{e}");
+    assert_eq!(store.counts().unwrap().images, 2, "the refused files stored nothing");
+}

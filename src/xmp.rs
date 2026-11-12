@@ -422,7 +422,7 @@ pub fn load_fragment_statements(
     refused.dedup();
     if !refused.is_empty() {
         return Err(anyhow!(
-            "XMP to add carries {} that a producer may not write (pan: fields other than pan:relatedToId and pan:mediaCreatedDate are Pan's own); nothing was added",
+            "XMP to add carries {} that a producer may not write (pan: fields other than pan:relatedToId, pan:mediaCreatedDate and pan:renderRequestDate are Pan's own); nothing was added",
             refused.join(", ")
         ));
     }
@@ -489,8 +489,11 @@ fn parse_producer_quads(packet: &str, media_iri: &str) -> Result<Vec<oxigraph::m
 /// so does a git-lex:id (identity of that store, never this object's).
 fn producer_predicate_allowed(p: &str) -> bool {
     let git_lex_id = format!("{}id", crate::config::GIT_LEX_NS);
+    // pan:renderRequestDate joined them in pan.ttl 0.4.25 (goodlux,
+    // 2026-11-12): when the render was asked for is the producer's to say.
     p == format!("{PAN_NS}relatedToId")
         || p == format!("{PAN_NS}mediaCreatedDate")
+        || p == format!("{PAN_NS}renderRequestDate")
         || !(p.starts_with(PAN_NS) || p == git_lex_id)
 }
 

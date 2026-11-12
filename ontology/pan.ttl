@@ -44,11 +44,27 @@
 <https://repolex.ai/ontology/pan> a owl:Ontology ;
     rdfs:label "Pan media store ontology" ;
     rdfs:comment "Identity, location, timing and model-derived enrichment facts Pan records for stored media." ;
-    owl:versionInfo "0.4.24" .
+    owl:versionInfo "0.4.25" .
 
 # -----------------------------------------------------------------------------
 # CHANGELOG
 # -----------------------------------------------------------------------------
+# v0.4.25 (2026-11-12, ruled by goodlux): WHEN IT WAS ASKED FOR.
+#   pan:renderRequestDate: when the render of this media was requested. The
+#   one fact that joins a generated image or clip back to the conversational
+#   moment that asked for it, and the lag between asking, rendering and
+#   arriving in Pan can be long, so neither pan:mediaCreatedDate (when the
+#   file was made) nor pan:createdDate (when it reached Pan) stands in for
+#   it. This is information about the image and lives with the image; with
+#   it, no separate moments graph is needed to make the join. Declared on
+#   pan:Media, so a clip has it too; at most one; RFC3339 with a zone, like
+#   the other dates. Settable like every Media field (`pan put … 
+#   renderRequestDate=…`), and the THIRD pan: field a producer may write in
+#   an arriving file or through POST /media/{id}/xmp, beside pan:relatedToId
+#   and pan:mediaCreatedDate, checked the same way.
+#   NOT done: no renderCompleteDate (that is pan:mediaCreatedDate for a
+#   render), and still none of the wider render fields (model, seed,
+#   reference images, aspect ratio); that project stands as in 0.4.24.
 # v0.4.24 (2026-11-11, ruled by goodlux): THE PROMPT, ON ITS OWN.
 #   pan:renderPrompt: the prompt that asked for the media, as the person or
 #   agent gave it to the generator. Needed because a generator that is not
@@ -807,6 +823,12 @@ pan:renderPrompt a owl:DatatypeProperty ;
     rdfs:domain pan:Media ;
     rdfs:range xsd:string .
 
+pan:renderRequestDate a owl:DatatypeProperty ;
+    rdfs:label "render request date" ;
+    rdfs:comment "When the render of this media was asked for, RFC3339 with a zone. One value; overwrite it, do not repeat the key. Not when the file was made (pan:mediaCreatedDate) and not when it reached Pan (pan:createdDate)." ;
+    rdfs:domain pan:Media ;
+    rdfs:range xsd:dateTime .
+
 pan:enrichmentCompleteDate a owl:DatatypeProperty ;
     rdfs:label "enrichment complete date" ;
     rdfs:comment "When every configured enrichment stage had recorded a result for this object, RFC3339 local time. Absent means a stage is still owed. Written once by pand, never by hand." ;
@@ -1468,6 +1490,7 @@ pan:Media rdfs:subClassOf
     [ a owl:Restriction ; owl:onProperty pan:imageSha256Hash ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:renderRequestInformation ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:renderPrompt ; owl:maxCardinality 1 ] ,
+    [ a owl:Restriction ; owl:onProperty pan:renderRequestDate ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:imageTechnicalScore ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:imageTechnicalCritique ; owl:maxCardinality 1 ] ,
     [ a owl:Restriction ; owl:onProperty pan:imageAestheticScore ; owl:maxCardinality 1 ] ,
