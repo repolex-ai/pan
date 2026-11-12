@@ -363,3 +363,44 @@ fn deleting_a_member_leaves_the_set_and_takes_every_stage_file() {
     };
     assert_eq!(records, 0, "its references and records went with it");
 }
+
+#[test]
+fn deleting_a_set_unlinks_every_member_and_removes_the_set_file_and_node() {
+    // goodlux, 2026-11-12: a set can be destroyed. Every member loses its link
+    // (graph and file); the set's node and file go; other sets are untouched.
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_at(dir.path());
+    let a = store.put(&make_png(8, 8, 31), Some("image/png")).unwrap().id;
+    let b = store.put(&make_png(8, 8, 32), Some("image/png")).unwrap().id;
+    let doomed = store.imageset_create(Some("doomed")).unwrap().id;
+    let keeper = store.imageset_create(Some("keeper")).unwrap().id;
+    store.imageset_add(&doomed, &a).unwrap();
+    store.imageset_add(&doomed, &b).unwrap();
+    store.imageset_add(&keeper, &a).unwrap();
+    assert!(xmp_of(&store, &a).contains(&format!("ImageSet/{doomed}")));
+
+    let gone = store.imageset_delete(&doomed).unwrap();
+    assert_eq!(gone.len(), 2, "{gone:?}");
+    assert!(store.imageset_get(&doomed).unwrap().is_none());
+    assert!(!dir.path().join("ImageSet").join(format!("{doomed}.nq")).exists());
+    let a_links = related_to(&store, &a);
+    assert_eq!(a_links.len(), 1, "{a_links:?}");
+    assert!(a_links[0].ends_with(&format!("/ImageSet/{keeper}")));
+    assert!(related_to(&store, &b).is_empty());
+    let xmp = xmp_of(&store, &a);
+    assert!(!xmp.contains(&format!("ImageSet/{doomed}")), "{xmp}");
+    assert!(xmp.contains(&format!("ImageSet/{keeper}")), "{xmp}");
+    assert_eq!(store.imageset_members(&keeper).unwrap().len(), 1);
+    assert_eq!(store.imageset_list().unwrap().len(), 1);
+
+    // Gone is gone.
+    let e = store.imageset_delete(&doomed).unwrap_err().to_string();
+    assert!(e.contains("imageset not found"), "{e}");
+
+    // The graph is rebuilt from the set files on open: the deleted set stays
+    // deleted, the keeper comes back.
+    drop(store);
+    let store = open_at(dir.path());
+    assert!(store.imageset_get(&doomed).unwrap().is_none());
+    assert_eq!(store.imageset_members(&keeper).unwrap().len(), 1);
+}

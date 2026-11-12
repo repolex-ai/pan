@@ -74,13 +74,16 @@ descriptions, the scene objects, the scene fields, the thumbnail, and one
 reference per model run. What a producer wrote into the file before it
 arrived is kept untouched, and its statements load into the graph as written.
 
-Two `pan` fields a producer may write are honoured on arrival; every other
+Three `pan` fields a producer may write are honoured on arrival; every other
 `pan` statement in an arriving file belongs to a previous store and stays
 out. `pan:relatedToId` names what the image belongs to, a Moment or a set.
-`pan:mediaCreatedDate` says when the media itself was made, as an RFC3339
-date with its zone; a file whose value is not one is refused whole. A
-`pan:relatedToId` naming `<pan/ImageSet/id>` that does not exist yet makes
-the set, with that id, as the image lands.
+`pan:mediaCreatedDate` says when the media itself was made, and
+`pan:renderRequestDate` (pan.ttl 0.4.25, 2026-11-12) when its render was
+asked for, the fact that joins a generated image back to the conversation
+that requested it however long the render took; each is an RFC3339 date
+with its zone, at most one, and a file whose value is not one is refused
+whole. A `pan:relatedToId` naming `<pan/ImageSet/id>` that does not exist
+yet makes the set, with that id, as the image lands.
 
 A producer can also add statements to an image that is already stored, the
 same RDF/XML it would have written into the file before delivery:
@@ -282,8 +285,16 @@ verbatim, when the file carries one. A producer that hands over a bare file
 sets both the file and its fields in one command:
 
 ```
-pan put photo.jpg renderPrompt="a 50mm medium shot of ..." description="..."
+pan put photo.jpg renderPrompt="a 50mm medium shot of ..." renderRequestDate=2026-11-12T09:14:02-08:00 description="..."
 ```
+
+`renderRequestDate` (pan.ttl 0.4.25) is when the render was asked for, as
+an RFC3339 date with its zone. It is the fact that maps a generated image
+or clip back to the conversational moment that requested it, and it is
+distinct from `mediaCreatedDate` (when the file was made) and
+`createdDate` (when it reached Pan), because the lag between asking,
+rendering and delivery can be long. A producer may also write it into the
+file's XMP, like `mediaCreatedDate`.
 
 The file goes in first, then the fields; a JPEG's own XMP is not read on
 the way in (the file is converted to PNG and only a PNG's packet is
@@ -459,6 +470,15 @@ newest state it has seen per image. `gzip` and `zstd` when `Accept-Encoding`
 asks. Adding an image to a set rewrites the image's file, so membership
 changes appear here as rows for the image; a set's own `updated_date` is on
 `GET /imagesets`.
+
+A set is destroyed with `pan imageset delete '<pan/ImageSet/id>'`, or
+`DELETE /imagesets/{id}` over HTTP. Every member's link to the set is
+removed, in the graph and in the member's file, and the set's node and file
+are deleted; the answer lists the members that were unlinked. There is no
+undo, so the command says what it is about to do and asks for the set id
+to be typed back before it does it (goodlux, 2026-11-12). Each unlinked
+member rewrites its file, so a deletion shows up in the change feed above
+as one row per member.
 
 ### Moving facts from one namespace to another
 

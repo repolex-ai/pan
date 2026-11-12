@@ -227,6 +227,16 @@ pub struct ImageSetResponse {
     pub media: Option<Vec<String>>,
 }
 
+/// What `DELETE /imagesets/{id}` destroyed.
+#[derive(Serialize, ToSchema)]
+pub struct ImageSetDeleted {
+    /// `<pan/ImageSet/abcd2345>`, the set that no longer exists.
+    pub id: String,
+    pub store: String,
+    /// The members whose link to the set was removed, bracket form.
+    pub unlinked: Vec<String>,
+}
+
 #[derive(Deserialize, ToSchema)]
 pub struct ImageSetCreateBody {
     #[serde(default)]
@@ -622,7 +632,7 @@ async fn unset_fields(
 /// written into the file before delivery. They are appended to the file's
 /// XMP as written and loaded into the graph with an arriving file's rules.
 #[utoipa::path(post, path = "/media/{id}/xmp", tag = "media", params(("id" = String, Path)),
-    request_body(content = String, content_type = "application/rdf+xml", description = "One or more rdf:Description elements (or a whole rdf:RDF), the producer's own namespaces declared on them; rdf:about=\"\" is this image. The only pan: fields a producer may write are pan:relatedToId and pan:mediaCreatedDate."),
+    request_body(content = String, content_type = "application/rdf+xml", description = "One or more rdf:Description elements (or a whole rdf:RDF), the producer's own namespaces declared on them; rdf:about=\"\" is this image. The only pan: fields a producer may write are pan:relatedToId, pan:mediaCreatedDate and pan:renderRequestDate."),
     responses((status = 200, body = XmpAdded), (status = 400, body = ErrorBody), (status = 404, body = ErrorBody)))]
 async fn add_xmp(
     State(d): State<Shared>,
@@ -1781,6 +1791,26 @@ async fn get_imageset(
     imageset_response(&store, &id).map(Json)
 }
 
+#[utoipa::path(delete, path = "/imagesets/{id}", tag = "imageset", params(("id" = String, Path, description = "<pan/ImageSet/x>, full IRI, or bare id")),
+    responses((status = 200, body = ImageSetDeleted, description = "The set is gone: every member's pan:relatedToId to it removed from the graph and from the member's file, the set's node and file deleted. There is no undo."), (status = 404, body = ErrorBody)))]
+async fn delete_imageset(
+    State(d): State<Shared>,
+    AxPath(given): AxPath<String>,
+) -> Result<Json<ImageSetDeleted>, ApiError> {
+    let (store, id) = locate_imageset(&d, &given)?;
+    let s2 = store.clone();
+    let sid = id.clone();
+    let unlinked = tokio::task::spawn_blocking(move || s2.pan.imageset_delete(&sid))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(map_err)?;
+    Ok(Json(ImageSetDeleted {
+        id: format!("<pan/ImageSet/{id}>"),
+        store: store.entry.id.clone(),
+        unlinked: unlinked.iter().map(|iri| bracket_iri(iri)).collect(),
+    }))
+}
+
 #[utoipa::path(post, path = "/imagesets/{id}/add", tag = "imageset", params(("id" = String, Path)),
     request_body(content = ImageSetMemberBody, description = "The media to put in the set"),
     responses((status = 200, body = ImageSetResponse), (status = 404, body = ErrorBody)))]
@@ -1840,9 +1870,9 @@ async fn imageset_member(
 #[openapi(
     info(title = "pand", description = "The Pan daemon: every media store on this machine, one door. This document IS the interface spec."),
     paths(health, stores, deliver, deliver_to, get_media, get_thumbnail, get_embedding, delete_media, get_facts, get_state, set_fields, unset_fields, query, search, similar_faces, rebuild_index, store_embeddings, store_images_changed, store_sparql_get, store_sparql_post,
-          imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, imageset_add, imageset_remove, rename_namespace, redo, add_xmp),
+          imagesets, store_imagesets, create_imageset, create_store_imageset, get_imageset, delete_imageset, imageset_add, imageset_remove, rename_namespace, redo, add_xmp),
     components(schemas(HealthResponse, StoreInfo, IndexInfo, Delivered, FactsResponse, StageStatus, StateResponse, QueryBody, SearchBody, SearchResponse, Hit, FaceHit, SimilarFacesResponse, IndexRebuildResponse, ErrorBody,
-                       ImageSetResponse, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse, RedoBody, RedoResponse)),
+                       ImageSetResponse, ImageSetDeleted, ImageSetCreateBody, ImageSetMemberBody, RenameNamespaceBody, RenameNamespaceResponse, RedoBody, RedoResponse)),
     tags(
         (name = "meta", description = "Daemon + store status"),
         (name = "media", description = "Deliver, read, describe, delete"),
@@ -1870,7 +1900,7 @@ pub fn router(d: Shared) -> Router {
         .route("/search", post(search))
         .route("/faces/{id}/similar", get(similar_faces))
         .route("/imagesets", get(imagesets).post(create_imageset))
-        .route("/imagesets/{id}", get(get_imageset))
+        .route("/imagesets/{id}", get(get_imageset).delete(delete_imageset))
         .route("/imagesets/{id}/add", post(imageset_add))
         .route("/imagesets/{id}/remove", post(imageset_remove))
         .route(

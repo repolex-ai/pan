@@ -499,6 +499,26 @@ impl Pan {
         self.restamp(media_id)
     }
 
+    /// Destroy a set: every member's `pan:relatedToId` to it comes off, in
+    /// the graph and in each member's file, one member at a time (a member
+    /// whose file will not rewrite stops the deletion there, with the set
+    /// and the members not yet reached still intact); then the set's node
+    /// and file go. Returns the members that were unlinked. Asked by
+    /// goodlux, 2026-11-12.
+    pub fn imageset_delete(&self, id: &str) -> Result<Vec<String>> {
+        if self.imageset_subject(id)?.is_none() {
+            return Err(anyhow!("imageset not found: {id}"));
+        }
+        let members = self.imageset_members(id)?;
+        for m in &members {
+            let media_id = crate::bare_id(m);
+            self.imageset_remove(id, &media_id)
+                .with_context(|| format!("unlink {m} from <pan/ImageSet/{id}>; the set still exists"))?;
+        }
+        self.imageset_unmake(id)?;
+        Ok(members)
+    }
+
     /// Rebuild every set node from `ImageSet/*.nq`. Called at every open,
     /// so the graph never says a set the files do not. A file whose id does
     /// not match its name, or that is not a set at all, is an error: the

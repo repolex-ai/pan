@@ -66,7 +66,11 @@ fn usage() -> ! {
                The images in a set.\n  \
            pan imageset add    <pan/ImageSet/id> <pan/Image/id>\n  \
            pan imageset remove <pan/ImageSet/id> <pan/Image/id>\n      \
-               Put an image in a set, or take it out.\n\n\
+               Put an image in a set, or take it out.\n  \
+           pan imageset delete <pan/ImageSet/id>\n      \
+               Destroy a set: every image loses its link to it and the set is\n      \
+               gone for good. Says what it will do and asks for the set id back\n      \
+               before doing it.\n\n\
          pand must be running (start it with: pand). Config: {}",
         env!("CARGO_PKG_VERSION"),
         pan::daemon::config::config_dir()
@@ -335,6 +339,41 @@ fn main() -> Result<()> {
                 ("show", [id]) => {
                     let v = check(
                         c.get(format!("{base}/imagesets/{}", encode_id(id)))
+                            .send()
+                            .map_err(not_running)?,
+                    )?;
+                    println!("{}", serde_json::to_string_pretty(&v)?);
+                    Ok(())
+                }
+                ("delete", [set]) => {
+                    // Irreversible, so it says what it is about to do and
+                    // asks for the set id back before doing it. Piping the
+                    // id in works the same way (goodlux, 2026-11-12).
+                    let shown = check(
+                        c.get(format!("{base}/imagesets/{}", encode_id(set)))
+                            .send()
+                            .map_err(not_running)?,
+                    )?;
+                    let id = shown.get("id").and_then(|x| x.as_str()).unwrap_or(set).to_string();
+                    let members = shown.get("media").and_then(|m| m.as_array()).map(|m| m.len()).unwrap_or(0);
+                    let description = shown.get("description").and_then(|x| x.as_str()).unwrap_or("");
+                    eprintln!(
+                        "This destroys the set {id}{}.\n\
+                         Its link is removed from {members} image{}, in the graph and in each image's file,\n\
+                         and the set itself is deleted. There is no undo.\n\
+                         Type the set id ({}) to confirm, or anything else to stop:",
+                        if description.is_empty() { String::new() } else { format!(" ({description})") },
+                        if members == 1 { "" } else { "s" },
+                        pan::bare_id(&id),
+                    );
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line).context("read confirmation")?;
+                    if pan::bare_id(line.trim()) != pan::bare_id(&id) || line.trim().is_empty() {
+                        eprintln!("Not deleted; {id} is as it was.");
+                        std::process::exit(1);
+                    }
+                    let v = check(
+                        c.delete(format!("{base}/imagesets/{}", encode_id(&id)))
                             .send()
                             .map_err(not_running)?,
                     )?;
